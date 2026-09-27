@@ -42,15 +42,16 @@ fn documented_payloads_execute_through_both_production_transports() {
 
 #[test]
 fn upstream_tagged_paths_aliases_and_ignored_fields_reach_execution() {
+    let files = tempfile::tempdir().unwrap();
     for path in [
-        json!({"type":"path", "path":"/var/tmp"}),
+        json!({"type":"path", "path":files.path()}),
         json!({"type":"special", "value":{"kind":"minimal"}}),
         json!({"type":"special", "value":{"kind":"project_roots", "subpath":null}}),
         json!({"type":"special", "value":{"kind":"current_working_directory", "subpath":"child"}}),
         json!({"type":"special", "value":{"kind":"tmpdir"}}),
         json!({"type":"special", "value":{"kind":"slash_tmp"}}),
         json!({"type":"special", "value":{"kind":"unknown", "path":":future", "subpath":"child", "future":true}}),
-        json!({"type":"glob_pattern", "pattern":"/var/tmp/reference-absent-*/**/*.secret"}),
+        json!({"type":"glob_pattern", "pattern":format!("{}/reference-absent-*/**/*.secret", files.path().display())}),
     ] {
         let accesses: &[&str] = if path["type"] == "special" && path["value"]["kind"] != "unknown" {
             // Denying cwd or /tmp would also hide the staged native executable.
