@@ -3,6 +3,44 @@ use pretty_assertions::assert_eq;
 use std::io::BufRead;
 use std::io::BufReader;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn explicit_reads_preserve_system_aliases_and_deny_masks() {
+    // An empty filesystem must retain the loader's /lib or /lib64 spelling.
+    // Denying through either spelling must also hide the file through its alias.
+    for denied in ["/bin/uname", "/usr/bin/uname"] {
+        let staging = tempfile::tempdir().unwrap();
+        let command = runner(staging.path());
+        let mut value = request(&[
+            "/bin/sh",
+            "-c",
+            "set -eu; test -L /bin; test ! -r /bin/uname; test ! -r /usr/bin/uname; test ! -r /etc/passwd; printf 'explicit reads\\n'",
+        ]);
+        value["cwd"] = json!("/");
+        let mut entries = [
+            "/bin",
+            "/lib",
+            "/lib64",
+            "/usr/bin",
+            "/usr/lib",
+            "/usr/lib64",
+        ]
+        .into_iter()
+        .map(Path::new)
+        .filter(|path| path.exists())
+        .chain(std::iter::once(Path::new(command.get_program())))
+        .map(|path| json!({"path":{"type":"path","path":path},"access":"read"}))
+        .collect::<Vec<_>>();
+        entries.push(json!({"path":{"type":"path","path":denied},"access":"deny"}));
+        value["filesystem"] = json!({"kind":"restricted","entries":entries});
+        let output = run_command(command, frame(&value), &[]);
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), b"explicit reads\n".to_vec(), vec![])
+        );
+    }
+}
+
 #[test]
 fn unrestricted_filesystem_preserves_independent_network_policy() {
     let outside = tempfile::tempdir().unwrap();
