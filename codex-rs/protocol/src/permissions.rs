@@ -1422,6 +1422,15 @@ impl FileSystemSandboxPolicy {
 
     /// Returns the explicit readable roots resolved against the provided cwd.
     pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        dedup_absolute_paths(
+            self.get_readable_roots_with_cwd_preserving_paths(cwd),
+            /*normalize_effective_paths*/ true,
+        )
+    }
+
+    /// Returns readable roots with their configured spelling, including system
+    /// aliases that an empty mount namespace must reconstruct before execution.
+    pub fn get_readable_roots_with_cwd_preserving_paths(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
         if self.has_full_disk_read_access() {
             return Vec::new();
         }
@@ -1433,7 +1442,7 @@ impl FileSystemSandboxPolicy {
                 .filter(|entry| self.can_read_local_path_with_cwd(entry.path.as_path(), cwd))
                 .map(|entry| entry.path)
                 .collect(),
-            /*normalize_effective_paths*/ true,
+            /*normalize_effective_paths*/ false,
         )
     }
 
