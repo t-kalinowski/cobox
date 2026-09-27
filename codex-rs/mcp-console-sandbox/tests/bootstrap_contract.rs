@@ -71,7 +71,10 @@ fn copy_executable(from: &Path, to: &Path) {
     // A concurrent fork can retain a writable copy descriptor until exec, even
     // with CLOEXEC, and make another launch fail with ETXTBSY. Keep those
     // descriptors in a separate copy process and wait for it to close them.
+    // Bazel artifacts are read-only; replace an earlier staged inode instead
+    // of trying to open it for writing when a case launches the runner again.
     let output = Command::new("cp")
+        .arg("--remove-destination")
         .arg("--")
         .arg(from)
         .arg(to)
