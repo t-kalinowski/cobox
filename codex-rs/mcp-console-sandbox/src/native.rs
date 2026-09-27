@@ -119,8 +119,9 @@ pub fn macos_main() -> Result<()> {
     anyhow::ensure!(fd > 2, "native setup fd must be private");
     let (setup, channel) = accept(unsafe { OwnedFd::from_raw_fd(fd) })?;
     drop(channel);
-    let profile = setup.seatbelt.context("native Seatbelt profile")?;
-    apply_seatbelt(profile)?;
+    if let Some(profile) = setup.seatbelt {
+        apply_seatbelt(profile)?;
+    }
     let mut command = Command::new(&setup.command[0]);
     command
         .args(&setup.command[1..])
