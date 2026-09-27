@@ -521,7 +521,7 @@ fn create_filesystem_args(
                     .filter(|ancestor| ancestor.is_symlink())
                 {
                     let target = alias.canonicalize()?;
-                    let suffix = root.strip_prefix(alias).expect("alias is an ancestor");
+                    let suffix = root.strip_prefix(alias).map_err(io::Error::other)?;
                     aliases.insert(alias.to_path_buf(), target.clone());
                     target.join(suffix)
                 } else {
