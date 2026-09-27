@@ -5,6 +5,50 @@ use std::io::BufReader;
 
 #[cfg(target_os = "linux")]
 #[test]
+fn explicit_reads_execute_nested_alias_with_private_storage_and_proxy() {
+    let staging = tempfile::tempdir().unwrap();
+    let command = runner(staging.path());
+    let selected = staging.path().join("uv");
+    let target = Path::new("/usr/bin/true").canonicalize().unwrap();
+    std::os::unix::fs::symlink(&target, &selected).unwrap();
+    let payload = staging.path().join("payload");
+    std::fs::create_dir(&payload).unwrap();
+    let mut value = request(&[
+        "/bin/sh",
+        "-c",
+        "set -eu; if ! \"$1\"; then ls -ld /tmp \"$1\" >&2; exit 1; fi; printf 'nested alias\\n'",
+        "sh",
+        selected.to_str().unwrap(),
+    ]);
+    value["cwd"] = json!("/");
+    let mut entries = [
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/usr/bin",
+        "/usr/lib",
+        "/usr/lib64",
+    ]
+    .into_iter()
+    .map(Path::new)
+    .filter(|path| path.exists())
+    .chain([Path::new(command.get_program()), &selected, &target])
+    .map(|path| json!({"path":{"type":"path","path":path},"access":"read"}))
+    .collect::<Vec<_>>();
+    entries.push(json!({"path":{"type":"path","path":payload},"access":"write"}));
+    value["filesystem"] = json!({"kind":"restricted","entries":entries});
+    value["proxy"] = proxy_config();
+    value["proxy"]["allowLocalBinding"] = json!(true);
+    value["lifecycle"] = json!({"private_tmp":{"parent":payload,"environment":["TMPDIR"]}});
+    let output = run_command(command, frame(&value), &[]);
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"nested alias\n".to_vec(), vec![])
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn explicit_reads_preserve_system_aliases_and_deny_masks() {
     // An empty filesystem must retain the loader's /lib or /lib64 spelling.
     // Denying through either spelling must also hide the file through its alias.
