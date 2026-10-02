@@ -254,7 +254,7 @@ fn elevated_offline_account_denies_loopback_udp() -> Result<()> {
     std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
     for address in ["127.0.0.1:0", "[::1]:0"] {
         let listener = std::net::UdpSocket::bind(address)?;
-        listener.set_read_timeout(Some(std::time::Duration::from_millis(200)))?;
+        listener.set_read_timeout(Some(std::time::Duration::from_millis(/*millis*/ 200)))?;
         for network in ["enabled", "restricted"] {
             let config = json!({
                 "version":2, "extends":":read-only", "network":network,

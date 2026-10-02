@@ -43,7 +43,7 @@ use windows_sys::core::GUID;
 
 // Low 16 bits identify the first port of a blocked interval. The preceding
 // bytes identify address family and protocol. Keep these identities stable.
-const KEY_PREFIX: GUID = GUID::from_u128(0xe2f397d3_307f_41e8_8b5d_140000000000);
+const KEY_PREFIX: GUID = GUID::from_u128(/*uuid*/ 0xe2f397d3_307f_41e8_8b5d_140000000000);
 
 /// Installs the configured offline account's loopback restrictions atomically.
 /// Called only by the elevated setup helper, alongside the ordinary firewall rules.

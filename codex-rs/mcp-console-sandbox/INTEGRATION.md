@@ -32,6 +32,8 @@ Windows support selects Console's identity once at executable startup. Existing 
 
 All paths below are relative to `codex-rs/windows-sandbox-rs/`.
 
+`src/unified_exec/tests.rs` also corrects native PowerShell fixture lifetimes: ConPTY input stays open during lifecycle checks, and an independent root-exit observer releases the captured descendant without waiting for its inherited output handles to close. The test locator supports PowerShell on PATH. Native runtime behavior is unchanged by these fixture corrections.
+
 `src/wfp/loopback.rs` supplements the native firewall rules with persistent account-scoped ALE filters for offline TCP/UDP loopback. Proxy-port exceptions and `allow_local_binding` retain their existing meanings. Setup version 6 requires an approved refresh and fails if filter installation fails. Reconfiguration and uninstall remove the product's previous filters transactionally. This is a shared native-backend correctness fix, isolated in a new module; it changes no permission profile or core source. Review the stable filter-key namespace, port complements, setup migration, and removal together when rebasing.
 
 | Paths                                                                                                                                                      | Change and upgrade review                                                                                                                                                                                                                                                                               |
