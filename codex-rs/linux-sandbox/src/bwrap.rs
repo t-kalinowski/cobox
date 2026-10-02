@@ -481,7 +481,7 @@ fn create_filesystem_args(
         ];
 
         let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
-            .get_readable_roots_with_cwd(cwd)
+            .get_readable_roots_with_cwd_preserving_paths(cwd)
             .into_iter()
             .map(PathBuf::from)
             .collect();
@@ -506,10 +506,30 @@ fn create_filesystem_args(
                 "/dev".to_string(),
             ];
         } else {
+            let mut aliases = BTreeMap::new();
+            let mut mount_roots = BTreeSet::new();
             for root in readable_roots {
                 if !root.exists() {
                     continue;
                 }
+                // Reconstruct trusted top-level aliases such as /lib64. Bind
+                // their targets once so deny masks also apply through aliases.
+                // Nested, potentially mutable symlinks keep their spelling.
+                let root = if let Some(alias) = root
+                    .ancestors()
+                    .find(|ancestor| ancestor.parent() == Some(Path::new("/")))
+                    .filter(|ancestor| ancestor.is_symlink())
+                {
+                    let target = alias.canonicalize()?;
+                    let suffix = root.strip_prefix(alias).map_err(io::Error::other)?;
+                    aliases.insert(alias.to_path_buf(), target.clone());
+                    target.join(suffix)
+                } else {
+                    root
+                };
+                mount_roots.insert(root);
+            }
+            for root in mount_roots {
                 // Writable roots are rebound by real target below; mirror that
                 // for their restricted-read bootstrap mount. Plain read-only
                 // roots must stay logical because callers may execute those
@@ -525,6 +545,11 @@ fn create_filesystem_args(
                 args.push("--ro-bind".to_string());
                 args.push(path_to_string(&mount_root));
                 args.push(path_to_string(&mount_root));
+            }
+            for (alias, target) in aliases {
+                args.push("--symlink".to_string());
+                args.push(path_to_string(&target));
+                args.push(path_to_string(&alias));
             }
         }
 

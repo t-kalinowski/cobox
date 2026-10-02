@@ -172,6 +172,7 @@ mod upstream {
             seatbelt: None,
         };
 
+        #[cfg(target_os = "linux")]
         if sandbox == SandboxType::None {
             let mut command = Command::new(&setup.command[0]);
             command
@@ -189,58 +190,62 @@ mod upstream {
         #[cfg(target_os = "macos")]
         let (mut command, setup) = {
             let mut setup = setup;
-            use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
-            use codex_sandboxing::seatbelt::create_seatbelt_profile;
-            let mut profile = create_seatbelt_profile(CreateSeatbeltCommandArgsParams {
-                command: Vec::new(),
-                file_system_sandbox_policy: &filesystem,
-                network_sandbox_policy: network,
-                sandbox_policy_cwd: request.cwd.as_path(),
-                enforce_managed_network: proxy.is_some(),
-                managed_network: managed_network.as_ref(),
-                environment_id: None,
-                network: proxy.as_ref(),
-                extra_allow_unix_sockets: &[],
-            })
-            .map_err(anyhow::Error::msg)?;
-            if let Some(extension) = request.macos_seatbelt_profile_extension {
-                profile.policy.push('\n');
-                profile.policy.push_str(&extension);
+            if sandbox != SandboxType::None {
+                use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
+                use codex_sandboxing::seatbelt::create_seatbelt_profile;
+                let mut profile = create_seatbelt_profile(CreateSeatbeltCommandArgsParams {
+                    command: Vec::new(),
+                    file_system_sandbox_policy: &filesystem,
+                    network_sandbox_policy: network,
+                    sandbox_policy_cwd: request.cwd.as_path(),
+                    enforce_managed_network: proxy.is_some(),
+                    managed_network: managed_network.as_ref(),
+                    environment_id: None,
+                    network: proxy.as_ref(),
+                    extra_allow_unix_sockets: &[],
+                })
+                .map_err(anyhow::Error::msg)?;
+                if let Some(extension) = request.macos_seatbelt_profile_extension {
+                    profile.policy.push('\n');
+                    profile.policy.push_str(&extension);
+                }
+                // KERN_PROCARGS2 can expose the host's launch environment despite
+                // deny-default and the ordinary same-sandbox process-info allowance.
+                // Explicitly deny outside-sandbox reads while retaining peer queries.
+                profile.policy.push_str(
+                    "\n(deny process-info-pidinfo (require-not (target same-sandbox)))\n",
+                );
+                if let Some(storage) = storage
+                    && !filesystem.has_full_disk_write_access()
+                {
+                    // Disposable data may replace its own root; unlike an upstream
+                    // writable authority, this path is never reused for another job.
+                    profile
+                        .parameters
+                        .push(("RUNNER_PRIVATE_DATA".to_owned(), storage.data.clone()));
+                    profile
+                        .parameters
+                        .push(("RUNNER_PRIVATE_ROOT".to_owned(), storage.root.clone()));
+                    profile.policy.push_str("\n(allow file-write* (subpath (param \"RUNNER_PRIVATE_DATA\")))\n(deny file-write* (literal (param \"RUNNER_PRIVATE_ROOT\")))\n");
+                }
+                setup.seatbelt = Some(crate::native::Seatbelt {
+                    policy: profile.policy,
+                    parameters: profile
+                        .parameters
+                        .into_iter()
+                        .map(|(key, path)| {
+                            Ok((
+                                key,
+                                path.into_os_string().into_string().map_err(|_| {
+                                    anyhow::anyhow!("Seatbelt parameter must be UTF-8")
+                                })?,
+                            ))
+                        })
+                        .collect::<Result<_>>()?,
+                });
             }
-            // KERN_PROCARGS2 can expose the host's launch environment despite
-            // deny-default and the ordinary same-sandbox process-info allowance.
-            // Explicitly deny outside-sandbox reads while retaining peer queries.
-            profile
-                .policy
-                .push_str("\n(deny process-info-pidinfo (require-not (target same-sandbox)))\n");
-            if let Some(storage) = storage
-                && !filesystem.has_full_disk_write_access()
-            {
-                // Disposable data may replace its own root; unlike an upstream
-                // writable authority, this path is never reused for another job.
-                profile
-                    .parameters
-                    .push(("RUNNER_PRIVATE_DATA".to_owned(), storage.data.clone()));
-                profile
-                    .parameters
-                    .push(("RUNNER_PRIVATE_ROOT".to_owned(), storage.root.clone()));
-                profile.policy.push_str("\n(allow file-write* (subpath (param \"RUNNER_PRIVATE_DATA\")))\n(deny file-write* (literal (param \"RUNNER_PRIVATE_ROOT\")))\n");
-            }
-            setup.seatbelt = Some(crate::native::Seatbelt {
-                policy: profile.policy,
-                parameters: profile
-                    .parameters
-                    .into_iter()
-                    .map(|(key, path)| {
-                        Ok((
-                            key,
-                            path.into_os_string()
-                                .into_string()
-                                .map_err(|_| anyhow::anyhow!("Seatbelt parameter must be UTF-8"))?,
-                        ))
-                    })
-                    .collect::<Result<_>>()?,
-            });
+            // External enforcement still needs the startup gate: target code
+            // must wait for descendant tracking and foreground terminal ownership.
             let mut command = Command::new(std::env::current_exe()?);
             command
                 .args(["--native-macos", &setup_fd.to_string()])
