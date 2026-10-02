@@ -18,6 +18,12 @@ use crate::windows_cli::Action;
 use crate::windows_cli::Cli;
 
 pub(crate) fn run() -> Result<i32> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--config-env")
+    {
+        return crate::windows_console::run();
+    }
     let cli = Cli::parse();
     WindowsSandboxProduct::Console.initialize()?;
     let state_dir = match cli.state_dir {

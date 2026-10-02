@@ -102,7 +102,14 @@ pub unsafe fn create_process_as_user(
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
-    let job = Arc::new(JobObject::create().context("create process job")?);
+    let job = Arc::new(
+        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+            JobObject::create_without_breakaway()
+        } else {
+            JobObject::create()
+        }
+        .context("create process job")?,
+    );
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     let cwd_wide = to_wide(cwd);
     let env_block_len = env_block.len();

@@ -1,218 +1,121 @@
-# Windows build and port assessment
+# Windows native sandbox
 
-The Windows executable reuses the existing Windows sandbox implementation without
-`codex-core` or a running Codex application. `setup` provisions Console sandbox
-accounts, `status` checks setup records and account availability, and `run`
-forwards stdin, stdout, stderr, and the target exit code through the Windows
-session implementation.
+The Windows executable uses the existing Windows sandbox implementation without
+`codex-core` or a running Codex application. It supports explicit `setup` and
+`status`, native `run` options, and Console's versioned environment transport.
 
-The Windows `run` command consumes native Windows options and a serialized
-`PermissionProfile`, not the versioned request in [PROTOCOL.md](PROTOCOL.md).
-`--config-env` and `--bootstrap-fd` remain unsupported.
-
-The Windows CLI uses Clap. Run `--help` or `run --help` for available options.
-`--state-dir` can appear before or after the subcommand.
-Options accept both `--name value` and `--name=value`. The target command must
-follow `--`, and its remaining arguments are passed through unchanged. CLI
-syntax errors exit with code 2 before any setup or launch; help exits with code 0.
-
-## Build
+## Build and distribute
 
 Install Rust 1.95.0 with the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++
 build tools, a Windows SDK, and CMake. From `codex-rs`:
 
 ```powershell
 cargo build --locked --release -p codex-mcp-console-sandbox -p codex-windows-sandbox --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
-just test --release -p codex-mcp-console-sandbox --retries 0
+just test --release -p codex-mcp-console-sandbox --test windows_cli --test windows_console --retries 0
 ```
 
-Distribute these three files from `target/release` together:
+Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and
+`mcp-console-sandbox-runner.exe` together. The helpers reuse the existing setup
+and command-runner implementations with Console's product identity. Only the
+main executable is needed by the restricted-token backend.
 
-- `mcp-console-sandbox.exe`
-- `mcp-console-sandbox-setup.exe`
-- `mcp-console-sandbox-runner.exe`
+## Explicit setup
 
-The two helpers compile the existing setup and command-runner implementations
-through small Console entrypoints. They use the same manifests and security code
-as the original helpers. The restricted-token backend needs only the main
-executable; the elevated backend requires all three.
-
-Bazel targets are `//codex-rs/mcp-console-sandbox:mcp-console-sandbox`,
-`//codex-rs/windows-sandbox-rs:mcp-console-sandbox-setup`, and
-`//codex-rs/windows-sandbox-rs:mcp-console-sandbox-runner`.
-
-## Installation and status
-
-Run from an ordinary, non-administrator PowerShell session:
+Run from an ordinary interactive PowerShell session:
 
 ```powershell
 .\target\release\mcp-console-sandbox.exe setup
 .\target\release\mcp-console-sandbox.exe status
 ```
 
-`setup` requests administrator approval through Windows UAC when provisioning is
-needed. Repeating it reuses current setup records and enabled accounts. `status`
-prints JSON and exits with code 0 when current setup records, enabled accounts,
-and adjacent helpers are present, or 1 when setup is incomplete. This is a
-readiness check, not an audit of all installed firewall rules.
+Setup requests Windows UAC approval when provisioning is needed. Repeating it
+reuses current setup records and enabled accounts. Status prints JSON and exits
+zero when current records, enabled accounts, and adjacent helpers are present.
+It is a readiness check, not an audit of every firewall rule.
 
-State defaults to `%LOCALAPPDATA%\mcp-console`. Each command accepts
-`--state-dir` with an absolute path. Use one stable state directory per Windows
-user; accounts and network policy are machine resources, so separate state
-directories are not independent installations. No provisioning service is needed.
+State defaults to `%LOCALAPPDATA%\mcp-console`; native commands accept an absolute
+`--state-dir`. Use one stable state directory per Windows user. Accounts and
+network policy are machine resources, so separate directories are not independent
+installations. Existing Codex accounts, firewall rules, and WFP identifiers retain
+their names. Another product's account records are rejected.
 
-The display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOnline**.
-Their login names are `McpConsoleSandboxOff` and `McpConsoleSandboxOn` because Windows
-limits local account names to 20 characters. Setup uses `ConsoleSandboxUsers` and
-separate Console firewall rules and WFP identifiers. Existing Codex resources keep
-their names and identifiers. A state directory containing another product's
-account records is rejected. There is no automatic migration of existing state.
+Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOnline**;
+login names are `McpConsoleSandboxOff` and `McpConsoleSandboxOn` to fit Windows'
+20-character limit. Setup also uses `ConsoleSandboxUsers`, protected credentials
+in `.sandbox-secrets`, and versioned records under `.sandbox`.
 
-## Native invocation
+## Versioned Console transport
 
-After setup, this Python example avoids differences in JSON argument quoting between
-Windows PowerShell 5 and PowerShell 7. Run it from `codex-rs` after building:
+`--config-env NAME -- COMMAND ...` consumes protocol version 2 as described in
+[PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
-```python
-import json
-import os
-from pathlib import Path
-import subprocess
+- `windows_sandbox_level` defaults to `elevated`. `restricted-token` is explicit;
+  `disabled` is rejected.
+- `windows_state_dir` optionally selects an absolute persistent state directory.
+- The elevated mode requires prior explicit setup. Ordinary versioned launches
+  fail with setup guidance when accounts are missing.
+- Restricted-token execution requires `network: enabled`, host reads, and no
+  read-deny policies. Its token and ACL restrictions enforce selected writes;
+  it does not provide OS-enforced network isolation or a read allowlist boundary.
+- Profiles use the same native constructors and workspace metadata defaults as
+  Unix. Unsupported policy fails before launching the target.
+- Managed proxy configuration, custom cleanup timeouts, macOS policy extensions,
+  and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
+- The selected configuration and reserved transport variable are removed from
+  the target environment case insensitively. Excluded variables cannot be reused
+  as private temporary environment names.
 
-runner = Path("target/release/mcp-console-sandbox.exe").resolve()
-root = Path("target/windows-sandbox-example").resolve()
-state = Path(os.environ["LOCALAPPDATA"]) / "mcp-console"
-workspace = root / "workspace"
-workspace.mkdir(parents=True, exist_ok=True)
-profile = {
-    "type": "managed",
-    "file_system": {
-        "type": "restricted",
-        "entries": [
-            {"path": {"type": "special", "value": {"kind": "root"}},
-             "access": "read"},
-            {"path": {"type": "path", "path": str(workspace)},
-             "access": "write"},
-        ],
-    },
-    "network": "enabled",
-}
-result = subprocess.run([
-    str(runner), "run",
-    "--state-dir", str(state),
-    "--command-cwd", str(workspace),
-    "--permission-profile", json.dumps(profile),
-    "--env-json", json.dumps({"SystemRoot": os.environ["SystemRoot"]}),
-    "--windows-sandbox-level", "elevated",
-    "--", str(Path(os.environ["SystemRoot"]) / "System32/cmd.exe"),
-    "/d", "/c", "echo sandbox works>result.txt&type result.txt",
-], check=True)
-print("exit:", result.returncode)
-```
+The ordinary command arguments, cwd, and stdio remain the target's inputs.
+Environment inheritance and overrides retain the shared protocol rules. Private
+storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
 
-Omit the write entry for read-only execution. Explicit workspace roots can also
-be passed with repeated `--workspace-root` flags. Clap parses the standalone CLI
-into a typed Windows session request; the shared Windows backend owns permission
-validation and enforcement.
-The default backend is `elevated`. Pass `--windows-sandbox-level restricted-token`
-to use the limited backend without account provisioning. An empty read allowlist,
-external enforcement, and unrestricted managed filesystem policies are not
-supported by the restricted-token path.
+## Native CLI
 
-The example leaves its workspace under `target/windows-sandbox-example` and
-its persistent sandbox state under `%LOCALAPPDATA%\mcp-console`.
-The target still needs host read/traverse
-permission. On the tested machine, Python 3.14's private temporary directory
-granted access only through owner/admin/system ACL entries, and the restricted
-token could not access its workspace. An ordinary directory inheriting the
-current user's access worked; no machine-wide ACL changes were needed.
-Use native Windows executable paths with backslashes for `cmd.exe`; its command
-line parsing does not reliably accept a mixed-separator executable path.
+Run `--help` or `run --help` for the typed native options. `run` consumes a serialized
+`PermissionProfile` and explicit environment map rather than a versioned request.
+The command must follow `--`; target flags pass through unchanged. Clap syntax
+errors exit 2 before setup or launch. Paths and JSON are validated at that boundary.
+The native CLI retains the upstream setup/repair behavior; versioned Console
+launches require explicit initial provisioning.
 
-Targets remain subject to host Application Control policy. On this machine,
-that policy blocked a freshly compiled unsigned fixture with Windows error 4551.
-The executable tests use the signed system `cmd.exe`; no security policy was
-disabled to run them.
+Targets still need host read/traverse permission. In particular, Python 3.14's
+private temporary directories can grant access only through owner/admin/system
+ACL entries that a restricted token cannot use. Ordinary directories inheriting
+the current user's access work without machine-wide ACL changes. Use native
+Windows paths with backslashes for `cmd.exe`. Targets also remain subject to host
+Application Control policy; error 4551 is a host policy rejection.
 
-The restricted-token backend applies write restrictions with Windows tokens and
-ACLs. It does not provide a read allowlist security boundary. Its restricted
-network setting changes proxy and tool environment variables; it is not an
-OS-enforced network isolation boundary. The example uses `"network": "enabled"`, selecting the online account. Use
-`"network": "restricted"` with the elevated backend for the offline account.
+Restricted-token launches create capability SIDs and save mappings in `cap_sid`.
+Capability ACL entries persist on filesystem objects; deleting the state directory
+does not undo them. Elevated launches use provisioned accounts and refresh workspace
+ACLs. Backend upgrades or network-setting changes can require administrator repair.
 
-Lifecycle behavior also comes from the upstream Windows session: Ctrl+C requests
-termination, but normal root-process exit can preserve descendants. The native
-mode does not promise the Unix runner's retire-all-descendants behavior, private
-temporary-directory cleanup, or caller-death monitoring.
+## Lifecycle
 
-## Setup and persistent state
+Console's pipe-launched workloads enter a non-breakaway Job at process creation.
+After normal root exit, timeout, or cancellation, the backend terminates remaining
+members and confirms zero active processes before returning an exit receipt.
+A native Job completion port wakes the waiter; an accounting query confirms the
+barrier, with a five-second cleanup allowance. Failure uses reserved exit code 125.
+Codex's default product continues to preserve descendants after normal root exit.
 
-A SID (security identifier) is the identifier Windows uses in access tokens and
-filesystem permission entries. The restricted-token backend creates capability
-SIDs and saves their workspace/path mappings in `cap_sid`; these identifiers do
-not require new Windows user accounts. It initializes this state and applies
-workspace ACLs during launch, so it needs no separate installation or administrator
-setup step when the caller can modify the relevant permissions. Logs live in
-`.sandbox`. ACL entries also persist on the actual filesystem objects; deleting
-the state directory does not remove them. Reuse the same state directory across
-launches to preserve those mappings.
+The versioned transport watches its direct caller and optional
+`lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C
+requests session termination. It removes private storage only after a confirmed
+receipt; startup errors and unconfirmed retirement retain storage with diagnostics.
+Private storage is not deleted while target descendants are known to remain.
 
-The elevated backend provisions accounts, network restrictions, protected
-credentials in `.sandbox-secrets`, and versioned setup records in `.sandbox`.
-It copies its runner into `.sandbox-bin` as needed. Ordinary launches refresh
-workspace ACLs without elevation. Missing accounts, upgrades, or changed network
-settings can require administrator setup again; the shared backend handles this
-repair path. Managed proxy enforcement still requires correctly prepared proxy
-identity/settings and is not configured by the standalone `setup` command.
+Restricted-token runner loss and elevated helper loss close kill-on-close Jobs.
+Runner loss does not guarantee storage deletion. A forcibly killed waiting Console
+frontend is not evidence of completed native retirement and cannot admit a replacement.
+Windows console signals and desktop behavior are not Unix terminal semantics.
 
-## Work needed for the shared runner contract
+## Validation limits
 
-The original branch already compiled on Windows, but its Windows `main` only
-reported an unsupported platform. Removing the platform gates would not port it:
-
-| Area | Required Windows work |
-| --- | --- |
-| Request transport | Separate request validation from Unix descriptor I/O in `bootstrap.rs`; implement `--config-env` and a bounded inherited-handle or named-pipe transport. Keep configuration and excluded environment values out of the target. |
-| Policy adaptation | Translate `profiles.rs` results into Windows session requests. Explicitly reject unrepresentable filesystem/read-deny policies and choose the backend needed for network enforcement. |
-| Managed proxy | Connect the existing network proxy lifecycle to the elevated Windows backend, provisioning, loopback permissions, and restricting SID. |
-| Launch and lifecycle | Replace Unix sockets, `fcntl`, process groups, signals, `waitpid`, and native setup handshakes with Windows handles, Job Objects, cancellation, and a target-release handshake. Define parent death and runner loss behavior and verify descendant retirement. |
-| Private temporary storage | Use Windows ACLs and reparse-point-safe ownership/cleanup; establish deletion ordering after every target descendant exits. |
-| Packaging | Decide whether provisioned accounts/helpers are acceptable or whether helper dispatch and setup should be embedded. The Windows bundle now has setup/status commands and a default state directory; single-file elevated packaging remains future work. |
-| Validation | Add Windows equivalents of the transport, policy, network, startup, terminal, and lifecycle suites; add a Windows job to the focused release workflow. |
-
-The `windows_native` executable tests cover default state-directory selection
-without creating state and rejection of another product's account records before
-setup or launch. The `windows_cli` tests cover custom path and JSON validation
-before state creation, target argument preservation, and shared backend
-validation. Five additional local prototype tests cover mode selection,
-stdio and exit propagation, write restrictions, and policy rejection. They are
-not included in this change. These checks do not establish parity with the
-Linux/macOS lifecycle contract or validate the elevated backend. A complete
-shared-protocol port is a separate implementation project.
-
-## Local validation
-
-Validated on Windows x64 with Rust 1.95.0:
-
-- All three release executables built successfully.
-- All seven standalone Windows tests (including five local prototypes) passed,
-  covering state-directory selection
-  and rejection of another product's account records before setup or launch.
-- The shared Windows suite initially reported 190 passes, two failures, one
-  timeout, and three skipped tests. Its elevated integration test requires UAC
-  approval to provision **Codex** accounts and was not approved. Its Python
-  descendant-cleanup test passed when the actual Python executable directory was
-  placed before the Windows app alias in PATH. Its batch deletion test supplies
-  no `SystemRoot`; a separate reproduction confirmed that `cmd.exe` silently
-  fails to execute a batch file without it on this machine and succeeds with it.
-- All 19 setup-helper tests passed after the final helper changes.
-- The Console helper rejected a payload naming Codex accounts before creating
-  any setup state. Existing Codex account identifiers, enabled flags, and
-  password timestamps were unchanged.
-- `just bazel-lock-update` succeeded without changing `MODULE.bazel.lock`;
-  `bazel query` resolved both new helper targets. A full Bazel build was not run.
-
-Console account provisioning and elevated execution still require an interactive
-administrator approval and have not been validated here. Linux/macOS tests were
-not run in this local Windows validation. The shared-protocol and lifecycle
-limitations described above still apply.
+The public versioned-transport regression exercises restricted-token policy,
+private storage, and environment exclusion. CLI regressions cover typed validation
+and target argument forwarding. Console integration acceptance covers application
+execution, write denial, and descendant retirement before restart.
+Elevated account provisioning and offline-network enforcement need an interactive
+administrator setup and their own integration run. Linux/macOS lifecycle suites
+remain separate platform coverage.

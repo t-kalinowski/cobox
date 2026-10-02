@@ -1,5 +1,11 @@
 # Bootstrap protocol version 2
 
+Windows implements the environment transport with native Job retirement. Its
+`windows_sandbox_level` and `windows_state_dir` fields, explicit setup requirement,
+unsupported policy features, and owner/storage semantics are specified in
+[Windows support](WINDOWS.md#versioned-console-transport). The descriptor transport
+and Unix-specific signal/terminal behavior below do not apply to Windows.
+
 Two explicit input modes are supported. Both accept one immutable configuration and use the same permission-driven execution selection. Default execution uses the runner's supervisor; explicit Linux Landlock execution has no waiting supervisor, as described below.
 
 ## Environment configuration

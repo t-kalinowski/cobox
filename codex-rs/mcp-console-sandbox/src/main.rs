@@ -1,8 +1,8 @@
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod bootstrap;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod codex;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod config;
 #[cfg(target_os = "linux")]
 mod direct_linux;
@@ -12,7 +12,7 @@ mod launch;
 mod native;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod profiles;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod signals;
@@ -22,6 +22,8 @@ mod storage;
 mod windows;
 #[cfg(windows)]
 mod windows_cli;
+#[cfg(windows)]
+mod windows_console;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {

@@ -671,7 +671,10 @@ pub fn main() -> Result<()> {
             true
         }
     } else {
-        if let Err(err) = job.preserve_descendants() {
+        if codex_windows_sandbox::WindowsSandboxProduct::current()
+            != codex_windows_sandbox::WindowsSandboxProduct::Console
+            && let Err(err) = job.preserve_descendants()
+        {
             log_note(
                 &format!("runner failed to preserve descendants after root exit: {err}"),
                 log_dir,
@@ -680,9 +683,26 @@ pub fn main() -> Result<()> {
         true
     };
 
+    let retirement_failed = if codex_windows_sandbox::WindowsSandboxProduct::current()
+        == codex_windows_sandbox::WindowsSandboxProduct::Console
+    {
+        if let Err(error) = codex_windows_sandbox::retire_console_job(&job) {
+            log_note(
+                &format!("Console Job retirement failed: {error:#}"),
+                log_dir,
+            );
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     let exit_code: i32;
     unsafe {
-        if timed_out {
+        if retirement_failed {
+            exit_code = 125;
+        } else if timed_out {
             exit_code = 128 + 64;
         } else {
             let mut raw_exit: u32 = 1;
@@ -702,7 +722,7 @@ pub fn main() -> Result<()> {
     }
     drop(conpty_owner.take());
 
-    if child_stopped {
+    if child_stopped && !retirement_failed {
         if out_thread.join().is_err() {
             log_note("runner stdout reader thread panicked", log_dir);
         }

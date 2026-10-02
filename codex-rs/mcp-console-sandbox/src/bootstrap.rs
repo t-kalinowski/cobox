@@ -1,16 +1,23 @@
-use crate::codex::AbsolutePathBuf;
-use crate::codex::NetworkSandboxPolicy;
-use crate::codex::RawFileSystemSandboxPolicy;
+#[cfg(unix)]
 use crate::codex::RemoteNetworkProxyConfig;
 use crate::config::Lifecycle;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::RawFileSystemSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+#[cfg(windows)]
+use serde_json::Value as RemoteNetworkProxyConfig;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::fd::FromRawFd;
 
 const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
@@ -37,6 +44,10 @@ pub struct Bootstrap {
     #[serde(default)]
     pub lifecycle: Lifecycle,
     pub linux_backend: Option<crate::config::LinuxBackend>,
+    #[cfg(windows)]
+    pub windows_sandbox_level: Option<codex_protocol::config_types::WindowsSandboxLevel>,
+    #[cfg(windows)]
+    pub windows_state_dir: Option<AbsolutePathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +66,10 @@ struct EnvironmentConfiguration {
     #[serde(default)]
     lifecycle: Lifecycle,
     linux_backend: Option<crate::config::LinuxBackend>,
+    #[cfg(windows)]
+    windows_sandbox_level: Option<codex_protocol::config_types::WindowsSandboxLevel>,
+    #[cfg(windows)]
+    windows_state_dir: Option<AbsolutePathBuf>,
     #[serde(default = "inherit_environment")]
     inherit_environment: bool,
     #[serde(default)]
@@ -75,6 +90,7 @@ fn inherit_environment() -> bool {
 }
 
 pub enum Input {
+    #[cfg(unix)]
     Descriptor(File),
     Environment(Box<Bootstrap>),
 }
@@ -122,7 +138,20 @@ pub fn take_input() -> Result<Input> {
         } else {
             HashMap::new()
         };
+        #[cfg(unix)]
         environment.extend(config.environment);
+        #[cfg(windows)]
+        {
+            let mut names = std::collections::HashSet::new();
+            for (key, value) in config.environment {
+                ensure!(
+                    names.insert(key.to_ascii_uppercase()),
+                    "duplicate Windows environment variable"
+                );
+                environment.retain(|name, _| !name.eq_ignore_ascii_case(&key));
+                environment.insert(key, value);
+            }
+        }
         let mut request = Bootstrap {
             excluded_environment: vec![name.to_owned()],
             version: config.version,
@@ -145,13 +174,23 @@ pub fn take_input() -> Result<Input> {
             macos_seatbelt_profile_extension: config.macos_seatbelt_profile_extension,
             lifecycle: config.lifecycle,
             linux_backend: config.linux_backend,
+            #[cfg(windows)]
+            windows_sandbox_level: config.windows_sandbox_level,
+            #[cfg(windows)]
+            windows_state_dir: config.windows_state_dir,
         };
         validate(&mut request)?;
         return Ok(Input::Environment(Box::new(request)));
     }
-    take_inherited().map(Input::Descriptor)
+    #[cfg(unix)]
+    {
+        take_inherited().map(Input::Descriptor)
+    }
+    #[cfg(windows)]
+    anyhow::bail!("expected --config-env NAME -- command [args...]")
 }
 
+#[cfg(unix)]
 pub fn take_inherited() -> Result<File> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
@@ -187,6 +226,7 @@ pub fn take_inherited() -> Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+#[cfg(unix)]
 pub fn read(mut bootstrap: File, signals: &crate::signals::Signals) -> Result<Bootstrap> {
     // Consume only the declared frame, without waiting for EOF.
     let mut header = [0; 4];
@@ -275,6 +315,7 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn read_cancellable(
     file: &mut File,
     mut bytes: &mut [u8],
