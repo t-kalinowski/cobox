@@ -10,14 +10,18 @@ use tokio::sync::oneshot;
 /// Forwards this process' stdio to a Windows sandbox session and returns the
 /// session exit code.
 pub async fn forward_sandbox_session_stdio(spawned: SpawnedProcess) -> i32 {
-    forward_sandbox_session_stdio_with_cancellation(spawned, std::future::pending()).await
+    forward_sandbox_session_stdio_with_cancellation(spawned, std::future::pending())
+        .await
+        .unwrap_or(-1)
 }
 
 /// Forwards stdio while allowing the host to retire the session on caller death.
+/// Returns `None` if the backend closes without an exit receipt. Every `i32`,
+/// including -1, is a valid Windows process exit code.
 pub async fn forward_sandbox_session_stdio_with_cancellation(
     spawned: SpawnedProcess,
     cancellation: impl std::future::Future<Output = ()>,
-) -> i32 {
+) -> Option<i32> {
     let session = Arc::new(spawned.session);
     let tokio_runtime = tokio::runtime::Handle::current();
     // Give large or slow tail output a better chance to finish draining without
@@ -67,16 +71,16 @@ pub async fn forward_sandbox_session_stdio_with_cancellation(
 
     let mut exit_rx = spawned.exit_rx;
     let exit_code = tokio::select! {
-        res = &mut exit_rx => res.unwrap_or(-1),
+        res = &mut exit_rx => res.ok(),
         () = cancellation => {
             session.request_terminate();
-            exit_rx.await.unwrap_or(-1)
+            exit_rx.await.ok()
         },
         res = tokio::signal::ctrl_c() => {
             if let Ok(()) = res {
                 session.request_terminate();
             }
-            exit_rx.await.unwrap_or(-1)
+            exit_rx.await.ok()
         }
     };
 

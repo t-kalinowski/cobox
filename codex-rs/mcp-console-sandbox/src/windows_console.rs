@@ -39,7 +39,7 @@ pub(crate) fn run() -> Result<i32> {
         .unwrap_or(WindowsSandboxLevel::Elevated);
     ensure!(
         level != WindowsSandboxLevel::Disabled,
-        "disabled Windows enforcement requires --no-sandbox"
+        "windows_sandbox_level: disabled is not supported"
     );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
     ensure!(
@@ -63,7 +63,7 @@ pub(crate) fn run() -> Result<i32> {
     let configured = codex_windows_sandbox::check_sandbox_setup(&state)?;
     ensure!(
         level != WindowsSandboxLevel::Elevated || configured,
-        "Windows sandbox setup is required; run `mcp-console sandbox-setup` from an interactive terminal"
+        "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the same state directory from an interactive terminal"
     );
     let parent = Parent::new(request.lifecycle.parent_pid)?;
     for name in &request.excluded_environment {
@@ -151,9 +151,8 @@ pub(crate) fn run() -> Result<i32> {
                 cancellation,
             )
             .await;
-            // The bridge reserves -1 for a missing native exit receipt. Other
-            // negative i32 values preserve Windows' 32-bit target exit codes.
-            Ok::<_, anyhow::Error>(if result == -1 { 125 } else { result })
+            // A missing receipt is distinct from every 32-bit target exit code.
+            Ok::<_, anyhow::Error>(result.unwrap_or(125))
         });
     if let Some(storage) = storage {
         // Code 125 is reserved for an unconfirmed native retirement.
