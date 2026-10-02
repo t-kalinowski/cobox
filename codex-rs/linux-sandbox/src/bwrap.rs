@@ -1079,10 +1079,11 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if bwrap_args.preserved_files.is_empty() {
-        bwrap_args.preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = bwrap_args.preserved_files[0].as_raw_fd().to_string();
+    // Bubblewrap consumes and closes each --ro-bind-data descriptor. Reusing a
+    // number can read an unrelated descriptor reopened by an earlier mount.
+    let null_file = File::open("/dev/null")?;
+    let null_fd = null_file.as_raw_fd().to_string();
+    bwrap_args.preserved_files.push(null_file);
     bwrap_args.args.push("--ro-bind-data".to_string());
     bwrap_args.args.push(null_fd);
     bwrap_args.args.push(path_to_string(path));

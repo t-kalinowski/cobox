@@ -22,8 +22,13 @@ pub async fn run(request: Bootstrap, stdin: File, signals: Signals) -> anyhow::R
         std::io::Error::last_os_error()
     );
     let mut setup = unsafe { File::from_raw_fd(fd) };
-    let mut native =
-        crate::codex::prepare(request, signals.original, None, setup.as_raw_fd()).await?;
+    let mut native = crate::codex::prepare(
+        request,
+        signals.original,
+        /*storage*/ None,
+        setup.as_raw_fd(),
+    )
+    .await?;
     serde_json::to_writer(&mut setup, &native.setup)?;
     setup.rewind()?;
     if unsafe {

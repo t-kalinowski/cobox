@@ -24,8 +24,6 @@ mod upstream {
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
-    pub use codex_protocol::permissions::NetworkSandboxPolicy;
-    pub use codex_protocol::permissions::RawFileSystemSandboxPolicy;
     use codex_sandboxing::SandboxManager;
     use codex_sandboxing::SandboxType;
     use codex_sandboxing::SandboxablePreference;

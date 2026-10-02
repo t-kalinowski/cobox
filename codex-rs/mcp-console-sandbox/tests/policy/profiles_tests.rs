@@ -230,6 +230,41 @@ if touch .git/blocked 2>/dev/null; then exit 1; fi
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn multiple_file_denials_work_with_system_and_bundled_helpers() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let entries: Vec<_> = ["first", "second"]
+        .into_iter()
+        .map(|name| {
+            let path = root.join(name);
+            std::fs::write(&path, "secret").unwrap();
+            json!({"path":{"type":"path","path":path},"access":"deny"})
+        })
+        .collect();
+    let mut value = selected(
+        &root,
+        ":read-only",
+        &[
+            "/bin/sh",
+            "-c",
+            "for file in first second; do if /bin/cat \"$file\" 2>/dev/null; then exit 1; fi; done",
+        ],
+    );
+    value["filesystem"] = json!({"kind":"restricted","entries":entries});
+    for path in [String::new(), std::env::var("PATH").unwrap()] {
+        let staging = tempfile::tempdir().unwrap();
+        let mut command = runner(staging.path());
+        command.env("PATH", path);
+        let output = run_command(command, frame(&value), &[]);
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), vec![], vec![])
+        );
+    }
+}
+
 #[test]
 fn materialized_workspace_stays_fixed_and_protects_missing_metadata() {
     let workspace = tempfile::tempdir().unwrap();
@@ -338,7 +373,10 @@ fn read_grants_beneath_denials_retain_native_backend_behavior_for_raw_and_select
                         "{stderr}"
                     );
                 } else {
-                    assert_eq!(stderr, "/bin/cat: .git/keep: No such file or directory\n");
+                    assert_eq!(
+                        stderr.strip_prefix("/bin/").unwrap_or(&stderr),
+                        "cat: .git/keep: No such file or directory\n"
+                    );
                 }
             }
         }

@@ -5,7 +5,8 @@ use pretty_assertions::assert_eq;
 fn documented_payloads_execute_through_both_production_transports() {
     let reference =
         std::fs::read_to_string(codex_utils_cargo_bin::find_resource!("PROTOCOL.md").unwrap())
-            .unwrap();
+            .unwrap()
+            .replace("\r\n", "\n");
     let mut count = 0;
     for block in reference.split("```json\n").skip(1) {
         let payload = block.split("```").next().unwrap();
@@ -42,6 +43,12 @@ fn documented_payloads_execute_through_both_production_transports() {
 
 #[test]
 fn upstream_tagged_paths_aliases_and_ignored_fields_reach_execution() {
+    // /var/tmp can contain inaccessible service directories on an ordinary host.
+    let scan_root = tempfile::tempdir().unwrap();
+    let pattern = format!(
+        "{}/reference-absent-*/**/*.secret",
+        scan_root.path().display()
+    );
     for path in [
         json!({"type":"path", "path":"/var/tmp"}),
         json!({"type":"special", "value":{"kind":"minimal"}}),
@@ -50,7 +57,7 @@ fn upstream_tagged_paths_aliases_and_ignored_fields_reach_execution() {
         json!({"type":"special", "value":{"kind":"tmpdir"}}),
         json!({"type":"special", "value":{"kind":"slash_tmp"}}),
         json!({"type":"special", "value":{"kind":"unknown", "path":":future", "subpath":"child", "future":true}}),
-        json!({"type":"glob_pattern", "pattern":"/var/tmp/reference-absent-*/**/*.secret"}),
+        json!({"type":"glob_pattern", "pattern":pattern}),
     ] {
         let accesses: &[&str] = if path["type"] == "special" && path["value"]["kind"] != "unknown" {
             // Denying cwd or /tmp would also hide the staged native executable.
