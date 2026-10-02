@@ -71,6 +71,10 @@ pub(crate) fn run() -> Result<i32> {
             );
         }
         if !configured {
+            // Create the helper directory as the caller, before UAC. Its owner
+            // must be able to refresh the protected DACL on ordinary launches.
+            std::fs::create_dir_all(codex_windows_sandbox::sandbox_bin_dir(state_dir.as_path()))
+                .context("create caller-owned sandbox helper directory")?;
             let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
                 &PermissionProfile::read_only(),
             )?;

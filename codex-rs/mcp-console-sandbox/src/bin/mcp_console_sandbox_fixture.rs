@@ -297,7 +297,15 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+#[path = "fixtures/windows.rs"]
+mod windows;
+#[cfg(windows)]
+fn main() -> anyhow::Result<()> {
+    windows::run()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn main() {}
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "fixtures/environment_copy.rs"]
