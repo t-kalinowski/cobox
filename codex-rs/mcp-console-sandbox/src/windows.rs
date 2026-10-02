@@ -119,7 +119,7 @@ pub(crate) fn run() -> Result<i32> {
                     command: args.command,
                     cwd: args.command_cwd.as_path(),
                     env_map: args.env_json.0,
-                    windows_sandbox_level: args.windows_sandbox_level,
+                    windows_sandbox_level: args.windows_sandbox_level.into(),
                     proxy_enforced: args.proxy_enforced,
                     network_proxy_restricting_sid: args.network_proxy_restricting_sid,
                     proxy_settings_mode,

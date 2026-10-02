@@ -1,12 +1,11 @@
 //! Public Windows CLI. The shared sandbox crate owns launch and policy enforcement.
 
+use crate::config::WindowsSandboxMode;
 use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use clap::builder::PathBufValueParser;
-use clap::builder::PossibleValuesParser;
 use clap::builder::TypedValueParser;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
@@ -56,8 +55,8 @@ pub(crate) struct RunArgs {
     #[arg(long, value_name = "JSON")]
     pub env_json: Json<HashMap<String, String>>,
     /// Windows sandbox backend.
-    #[arg(long, default_value = "elevated", value_parser = PossibleValuesParser::new(["disabled", "restricted-token", "elevated"]).try_map(|value| serde_json::from_value::<WindowsSandboxLevel>(value.into())))]
-    pub windows_sandbox_level: WindowsSandboxLevel,
+    #[arg(long, value_enum, default_value = "elevated")]
+    pub windows_sandbox_level: WindowsSandboxMode,
     /// Run on a private Windows desktop (use =false to opt out).
     #[arg(long, default_value_t = true, num_args = 0..=1, require_equals = true, default_missing_value = "true", action = clap::ArgAction::Set)]
     pub windows_sandbox_private_desktop: bool,

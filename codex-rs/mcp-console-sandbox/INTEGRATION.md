@@ -28,7 +28,7 @@ The following tables inventory changed paths outside `codex-rs/mcp-console-sandb
 
 ### Windows integration
 
-Windows support selects Console's identity once at executable startup. Existing Codex callers default to their original identity and retain their descendant-preservation behavior. Resource naming and Job retirement live in small modules in the existing Windows backend; the runner owns transport validation, built-in profile selection, owner monitoring, and private storage. The loopback correction below repairs enforcement of an existing native network policy. See the [Windows validation limits](WINDOWS.md#validation-limits), including the unresolved restricted-token deletion boundary.
+Windows support selects Console's identity once at executable startup. Existing Codex callers default to their original identity and retain their descendant-preservation behavior. Resource naming and Job retirement live in small modules in the existing Windows backend; the runner owns transport validation, built-in profile selection, owner monitoring, and private storage. The loopback correction below repairs enforcement of an existing native network policy. See the [Windows validation limits](WINDOWS.md#validation-limits), including the unresolved unelevated deletion boundary.
 
 All paths below are relative to `codex-rs/windows-sandbox-rs/`.
 

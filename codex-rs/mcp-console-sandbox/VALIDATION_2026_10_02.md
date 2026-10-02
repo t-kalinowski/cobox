@@ -111,7 +111,7 @@ Architecture references: [OpenAI's Windows sandbox design, May 13, 2026](https:/
 
 ## Upstream issue and newer release check
 
-The deletion failure that persists under the controlled ACL belongs to the unelevated fallback, called `restricted-token` by Console and `legacy` in native test names. Console's native CLI and versioned transport both default to `elevated`; the newer-release probe explicitly selected `unelevated`. Both elevated implementations denied deletion in the controlled test. Their separate Public-directory failure depended on broad inherited host permissions and must not be conflated with the fallback's failure under restrictive ACLs.
+The deletion failure that persists under the controlled ACL belongs to the unelevated fallback, then called `restricted-token` by Console and `legacy` in native test names. Console's native CLI and versioned transport both default to `elevated`; the newer-release probe explicitly selected `unelevated`. Both elevated implementations denied deletion in the controlled test. Their separate Public-directory failure depended on broad inherited host permissions and must not be conflated with the fallback's failure under restrictive ACLs. Console's public spelling is now `unelevated`.
 
 [OpenAI Codex issue #32915](https://github.com/openai/codex/issues/32915), filed July 14, 2026, reports the same legacy deletion-boundary failure, including the native `legacy_workspace_write_delete_is_limited_to_writable_roots` regression. As checked October 2, it remains open with no comments or linked upstream fix. This establishes a public report, not a maintainer acknowledgment or remediation commitment.
 

@@ -51,7 +51,7 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
     ] {
         let mut config = json!({
             "version":2, "extends":":read-only", "network":"enabled",
-            "windows_sandbox_level":"restricted-token",
+            "windows_sandbox_level":"unelevated",
             "windows_state_dir":root.path().join("state"),
         });
         if let (Some(config), Some(overrides)) = (config.as_object_mut(), overrides.as_object()) {
@@ -87,7 +87,7 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let config = json!({
         "version": 2, "extends": ":read-only", "network": "enabled",
-        "windows_sandbox_level": "restricted-token",
+        "windows_sandbox_level": "unelevated",
         "windows_state_dir": root.path().join("state"),
         "lifecycle": {"private_tmp": {"parent": root.path(), "environment": ["TMPDIR"]}},
     });
@@ -133,7 +133,7 @@ fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
         "version": 2,
         "extends": ":read-only",
         "network": "enabled",
-        "windows_sandbox_level": "restricted-token",
+        "windows_sandbox_level": "unelevated",
         "windows_state_dir": root.path().join("state"),
         "environment": { "test_case_value": "target" },
         "lifecycle": { "private_tmp": { "parent": root.path(), "environment": ["TMPDIR", "TEMP", "TMP"] } },

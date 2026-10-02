@@ -36,6 +36,7 @@ pub(crate) fn run() -> Result<i32> {
     );
     let level = request
         .windows_sandbox_level
+        .map(WindowsSandboxLevel::from)
         .unwrap_or(WindowsSandboxLevel::Elevated);
     ensure!(
         level != WindowsSandboxLevel::Disabled,
@@ -44,13 +45,13 @@ pub(crate) fn run() -> Result<i32> {
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
     ensure!(
         level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
-        "restricted networking requires the elevated Windows sandbox; restricted-token requires network: enabled"
+        "restricted networking requires the elevated Windows sandbox; unelevated requires network: enabled"
     );
     ensure!(
         level != WindowsSandboxLevel::RestrictedToken
             || (filesystem.has_full_disk_read_access()
                 && !filesystem.has_denied_read_restrictions()),
-        "restricted-token requires host reads and cannot enforce read restrictions"
+        "unelevated requires host reads and cannot enforce read restrictions"
     );
     let state = match request.windows_state_dir.take() {
         Some(state) => state.into_path_buf(),

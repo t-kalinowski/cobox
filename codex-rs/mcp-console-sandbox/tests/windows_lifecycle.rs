@@ -25,7 +25,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 fn configuration(root: &Path) -> Value {
     json!({
         "version": 2, "extends": ":read-only", "network": "enabled",
-        "windows_sandbox_level": "restricted-token",
+        "windows_sandbox_level": "unelevated",
         "windows_state_dir": root.join("state"),
         "lifecycle": {"private_tmp": {"parent": root, "environment": ["TMPDIR"]}},
     })

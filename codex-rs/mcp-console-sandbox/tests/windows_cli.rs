@@ -78,7 +78,7 @@ fn run_preserves_target_flags_and_repeated_workspace_roots() {
             "--env-json={}",
             json!({ "SystemRoot": system_root })
         ))
-        .args(["--windows-sandbox-level=restricted-token", "--"])
+        .args(["--windows-sandbox-level=unelevated", "--"])
         .arg(Path::new(&system_root).join("System32").join("cmd.exe"))
         .args([
             "/d",
@@ -116,11 +116,7 @@ fn native_desktop_defaults_to_private_with_explicit_opt_out() -> anyhow::Result<
             .arg("--command-cwd")
             .arg(root.path())
             .arg(format!("--permission-profile={profile}"))
-            .args([
-                "--env-json",
-                "{}",
-                "--windows-sandbox-level=restricted-token",
-            ])
+            .args(["--env-json", "{}", "--windows-sandbox-level=unelevated"])
             .args(&options)
             .arg("--")
             .arg(cargo_bin("mcp-console-sandbox-fixture")?)
@@ -151,12 +147,7 @@ fn typed_options_reach_shared_backend_validation() {
         .arg(root.path())
         .arg("--permission-profile")
         .arg(serde_json::to_string(&PermissionProfile::read_only()).expect("profile"))
-        .args([
-            "--env-json",
-            "{}",
-            "--windows-sandbox-level",
-            "restricted-token",
-        ])
+        .args(["--env-json", "{}", "--windows-sandbox-level", "unelevated"])
         .args([
             "--read-roots-json",
             &paths,

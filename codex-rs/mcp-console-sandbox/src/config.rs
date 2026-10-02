@@ -1,6 +1,28 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowsSandboxMode {
+    Disabled,
+    /// Administrator-approved setup with dedicated sandbox accounts.
+    Elevated,
+    /// No administrator setup; restricted token under the current user.
+    Unelevated,
+}
+
+#[cfg(windows)]
+impl From<WindowsSandboxMode> for codex_protocol::config_types::WindowsSandboxLevel {
+    fn from(mode: WindowsSandboxMode) -> Self {
+        match mode {
+            WindowsSandboxMode::Disabled => Self::Disabled,
+            WindowsSandboxMode::Elevated => Self::Elevated,
+            WindowsSandboxMode::Unelevated => Self::RestrictedToken,
+        }
+    }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Lifecycle {
