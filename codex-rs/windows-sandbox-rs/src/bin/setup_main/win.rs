@@ -770,6 +770,23 @@ fn configure_offline_sandbox_network(
             format!("ensure offline outbound block failed: {err}"),
         )));
     }
+    let count = codex_windows_sandbox::install_loopback_filters_for_account(
+        &payload.offline_username,
+        &codex_windows_sandbox::WindowsSandboxProvisioningSettings {
+            proxy_ports: payload.proxy_ports.clone(),
+            allow_local_binding: payload.allow_local_binding,
+        },
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+            format!("install offline loopback filters failed: {err}"),
+        ))
+    })?;
+    log_line(
+        log,
+        &format!("installed {count} offline loopback WFP filters"),
+    )?;
     Ok(())
 }
 

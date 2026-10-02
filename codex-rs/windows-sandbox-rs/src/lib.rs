@@ -404,6 +404,8 @@ pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
 pub use uninstall_windows::clean_up_packaged_windows_sandbox;
 #[cfg(target_os = "windows")]
+pub use wfp::install_loopback_filters_for_account;
+#[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
 #[cfg(target_os = "windows")]
 pub use wfp_setup::install_wfp_filters;

@@ -221,25 +221,76 @@ fn elevated_offline_account_denies_loopback_tcp() -> Result<()> {
     // The separate account needs ordinary host read access to its executable.
     let fixture = root.path().join("fixture.exe");
     std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    for (network, expected) in [("enabled", "connected\n"), ("restricted", "blocked\n")] {
-        let config = json!({
-            "version":2, "extends":":read-only", "network":network,
-            "windows_sandbox_level":"elevated",
-        });
-        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-            .current_dir(root.path())
-            .env("CONSOLE_POLICY", config.to_string())
-            .args(["--config-env", "CONSOLE_POLICY", "--"])
-            .arg(&fixture)
-            .arg("connect")
-            .arg(listener.local_addr()?.to_string())
-            .output()?;
-        assert_eq!(
-            (output.status.code(), output.stdout, output.stderr),
-            (Some(0), expected.as_bytes().to_vec(), vec![]),
-            "{network}"
-        );
+    for address in ["127.0.0.1:0", "[::1]:0"] {
+        let listener = std::net::TcpListener::bind(address)?;
+        for (network, expected) in [("enabled", "connected\n"), ("restricted", "blocked\n")] {
+            let config = json!({
+                "version":2, "extends":":read-only", "network":network,
+                "windows_sandbox_level":"elevated",
+            });
+            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+                .current_dir(root.path())
+                .env("CONSOLE_POLICY", config.to_string())
+                .args(["--config-env", "CONSOLE_POLICY", "--"])
+                .arg(&fixture)
+                .arg("connect")
+                .arg(listener.local_addr()?.to_string())
+                .output()?;
+            assert_eq!(
+                (output.status.code(), output.stdout, output.stderr),
+                (Some(0), expected.as_bytes().to_vec(), vec![]),
+                "{network}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires explicit elevated Console setup and access to the Public directory"]
+fn elevated_offline_account_denies_loopback_udp() -> Result<()> {
+    let root = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
+    let fixture = root.path().join("fixture.exe");
+    std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
+    for address in ["127.0.0.1:0", "[::1]:0"] {
+        let listener = std::net::UdpSocket::bind(address)?;
+        listener.set_read_timeout(Some(std::time::Duration::from_millis(200)))?;
+        for network in ["enabled", "restricted"] {
+            let config = json!({
+                "version":2, "extends":":read-only", "network":network,
+                "windows_sandbox_level":"elevated",
+            });
+            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+                .current_dir(root.path())
+                .env("CONSOLE_POLICY", config.to_string())
+                .args(["--config-env", "CONSOLE_POLICY", "--"])
+                .arg(&fixture)
+                .arg("datagram")
+                .arg(listener.local_addr()?.to_string())
+                .output()?;
+            assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+            // UDP sends can succeed locally even when the firewall drops the packet.
+            // The host's receipt, with an online positive control, is the boundary.
+            assert!(matches!(output.stdout.as_slice(), b"sent\n" | b"blocked\n"));
+            let mut buffer = [0; 8];
+            let received = match listener.recv(&mut buffer) {
+                Ok(length) => Some(buffer[..length].to_vec()),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            };
+            assert_eq!(
+                received,
+                (network == "enabled").then(|| b"probe".to_vec()),
+                "{network} {address}"
+            );
+        }
     }
     Ok(())
 }

@@ -50,6 +50,22 @@ pub(super) fn run() -> Result<()> {
             .is_ok();
             println!("{}", if connected { "connected" } else { "blocked" });
         }
+        "datagram" => {
+            let address = args.next().context("socket address")?;
+            let address: std::net::SocketAddr =
+                address.to_str().context("UTF-8 socket address")?.parse()?;
+            let local = if address.is_ipv4() {
+                "0.0.0.0:0"
+            } else {
+                "[::]:0"
+            };
+            let socket = std::net::UdpSocket::bind(local)?;
+            let sent = socket
+                .connect(address)
+                .and_then(|()| socket.send(b"probe"))
+                .is_ok();
+            println!("{}", if sent { "sent" } else { "blocked" });
+        }
         "probe-write" => {
             let path = args.next().context("probe path")?;
             let error = std::fs::write(path, b"escaped")
