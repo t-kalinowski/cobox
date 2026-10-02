@@ -13,9 +13,21 @@ pub(super) fn run() -> Result<()> {
         "copy-stdin" => {
             std::io::copy(&mut std::io::stdin().lock(), &mut std::io::stdout().lock())?;
         }
+        "connect" => {
+            let address = args.next().context("socket address")?;
+            let address = address.to_str().context("UTF-8 socket address")?.parse()?;
+            let connected = std::net::TcpStream::connect_timeout(
+                &address,
+                std::time::Duration::from_secs(/*secs*/ 2),
+            )
+            .is_ok();
+            println!("{}", if connected { "connected" } else { "blocked" });
+        }
         "probe-write" => {
             let path = args.next().context("probe path")?;
-            let error = std::fs::write(path, b"escaped").expect_err("write must be denied");
+            let error = std::fs::write(path, b"escaped")
+                .err()
+                .context("write must be denied")?;
             anyhow::ensure!(
                 error.kind() == std::io::ErrorKind::PermissionDenied,
                 "{error}"

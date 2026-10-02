@@ -8,6 +8,6 @@ cobox extracts the native sandbox from [OpenAI's Codex](https://github.com/opena
 
 The fork reuses upstream enforcement and keeps application policy in MCP Console. We maintain a focused patch set against a pinned upstream release, reapply it to selected newer releases, and validate the executable's behavior before updating MCP Console's source pin. Keeping the upstream source tree makes those integration changes reviewable and lets us build against matching native backends and dependencies. The [integration inventory](codex-rs/mcp-console-sandbox/INTEGRATION.md) and [upgrade procedure](codex-rs/mcp-console-sandbox/REBASE.md) describe this process.
 
-For direct integration or development, see the [runner's build instructions](codex-rs/mcp-console-sandbox/README.md), [configuration protocol](codex-rs/mcp-console-sandbox/PROTOCOL.md), and [lifecycle contract](codex-rs/mcp-console-sandbox/LIFECYCLE.md). macOS and Linux support the JSON interface; [Windows currently has a separate CLI](codex-rs/mcp-console-sandbox/WINDOWS.md).
+For direct integration or development, see the [runner's build instructions](codex-rs/mcp-console-sandbox/README.md), [configuration protocol](codex-rs/mcp-console-sandbox/PROTOCOL.md), and [lifecycle contract](codex-rs/mcp-console-sandbox/LIFECYCLE.md). Windows, macOS, and Linux support the environment JSON interface. [Windows support](codex-rs/mcp-console-sandbox/WINDOWS.md) also describes its native CLI, explicit setup, and validation limits.
 
 Licensed under [Apache-2.0](LICENSE).

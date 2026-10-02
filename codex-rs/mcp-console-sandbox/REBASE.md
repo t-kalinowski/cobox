@@ -34,6 +34,8 @@ The workflow currently excludes `create_seatbelt_args_with_read_only_git_and_cod
 
 ## Validation of the 0.154.0 reapplication
 
+The later [Windows and WSL audit on 2026-10-02](VALIDATION_2026_10_02.md) reviews the Windows commits through `6a18b21c2e`, records follow-up fixes, and distinguishes passing Ubuntu/Fedora contracts from unresolved Windows enforcement failures.
+
 On 2026-09-10, the net patch from `mcp-console/sandbox-runner/rust-v0.150.1` at `561883728ee639c846b80280fa4ed3ff41d12d69` was reapplied to `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, on `mcp-console/sandbox-runner/rust-v0.154.0`. The original patch branch and its history were preserved. The reapplied runtime and contracts are recorded at `e46a1567910094edc526095b778993b1b3ab67c0`.
 
 Workspace registration adds the standalone runner to the current release's members. The shared Seatbelt profile builder propagates the release's new symlink option. Linux supervision retains both upstream's proxy-control descriptor cleanup and the patch's stdin cleanup. Runner runtime files are unchanged from the source patch. The caller-death cleanup assertion now includes captured runner stderr when private storage remains.

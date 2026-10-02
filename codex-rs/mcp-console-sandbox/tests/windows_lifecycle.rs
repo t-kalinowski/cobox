@@ -49,7 +49,13 @@ struct Process(OwnedHandle);
 
 impl Process {
     fn open(pid: u32) -> Result<Self> {
-        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                /*binherithandle*/ 0,
+                pid,
+            )
+        };
         anyhow::ensure!(
             !handle.is_null(),
             "open fixture {pid}: {}",
@@ -60,7 +66,9 @@ impl Process {
 
     fn wait(&self) {
         assert_eq!(
-            unsafe { WaitForSingleObject(self.0.as_raw_handle(), 10_000) },
+            unsafe {
+                WaitForSingleObject(self.0.as_raw_handle(), /*dwmilliseconds*/ 10_000)
+            },
             WAIT_OBJECT_0,
             "fixture process survived retirement"
         );
@@ -70,8 +78,8 @@ impl Process {
 impl Drop for Process {
     fn drop(&mut self) {
         unsafe {
-            TerminateProcess(self.0.as_raw_handle(), 1);
-            WaitForSingleObject(self.0.as_raw_handle(), 5_000);
+            TerminateProcess(self.0.as_raw_handle(), /*uexitcode*/ 1);
+            WaitForSingleObject(self.0.as_raw_handle(), /*dwmilliseconds*/ 5_000);
         }
     }
 }
@@ -193,5 +201,35 @@ fn runner_loss_retires_descendants_and_retains_storage() -> Result<()> {
     descendant.wait();
     child.wait()?;
     assert!(Path::new(receipt["temporary"].as_str().context("private storage")?).is_dir());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires explicit elevated Console setup and access to the Public directory"]
+fn elevated_offline_account_denies_loopback_tcp() -> Result<()> {
+    let root = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
+    // The separate account needs ordinary host read access to its executable.
+    let fixture = root.path().join("fixture.exe");
+    std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    for (network, expected) in [("enabled", "connected\n"), ("restricted", "blocked\n")] {
+        let config = json!({
+            "version":2, "extends":":read-only", "network":network,
+            "windows_sandbox_level":"elevated",
+        });
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(root.path())
+            .env("CONSOLE_POLICY", config.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(&fixture)
+            .arg("connect")
+            .arg(listener.local_addr()?.to_string())
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), expected.as_bytes().to_vec(), vec![]),
+            "{network}"
+        );
+    }
     Ok(())
 }
