@@ -35,6 +35,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 `--config-env NAME -- COMMAND ...` consumes protocol version 2 as described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
 - `windows_sandbox_level` defaults to `elevated`. `restricted-token` is explicit; `disabled` is rejected.
+- Targets run on a private Windows desktop, matching Codex's default. Native `run` also defaults to a private desktop; `--windows-sandbox-private-desktop=false` explicitly opts out.
 - `windows_state_dir` optionally selects an absolute persistent state directory.
 - The elevated mode requires prior explicit setup. Ordinary versioned launches fail with setup guidance when accounts are missing.
 - Restricted-token execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
@@ -73,5 +74,7 @@ It uses a listener on the host and a compiled target fixture, verifies online co
 On the Windows host tested on 2026-10-02, the restricted-token backend allowed deletion outside the writable roots, including with the `:read-only` profile. The upstream `legacy_workspace_write_delete_is_limited_to_writable_roots` test also failed at the unmodified `rust-v0.154.0` release. Successful file-creation denial does not establish deletion isolation. This is an unresolved native enforcement limitation, not a passing security gate; this branch does not replace the upstream token/ACL model to conceal the failure.
 
 The elevated offline account also connected to a loopback TCP listener on this host despite enabled firewall profiles and installed Console rules. Both the compiled fixture regression above and an independent PowerShell probe reproduced it. Elevated stdio, exit codes, denied file creation, descendant retirement, caller death, and private cleanup passed. Offline network isolation remains a failed gate. The [dated audit](VALIDATION_2026_10_02.md) records the complete scope.
+
+Direct comparison with the installed official `codex-cli 0.160.0` reproduced the loopback connection and restricted-token deletion failures. Both elevated implementations denied external TCP connections and protected files in a directory whose ACL gave sandbox accounts read/execute access. Both allowed deletion in the Public directory's broadly writable inherited ACLs. These results distinguish native backend and host-ACL limits from extraction differences; they do not certify those failing boundaries. The extraction's disabled private-desktop default was a separate defect and is corrected with executable desktop-identity tests.
 
 The upstream control-pipe regression invokes `python` by name. On this host the Windows app execution alias started a descendant outside the tested Job; placing the actual Python installation on the test process's `PATH` made the same test pass. The standalone lifecycle contracts use the compiled fixture directly.

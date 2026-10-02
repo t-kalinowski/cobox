@@ -13,6 +13,33 @@ pub(super) fn run() -> Result<()> {
         "copy-stdin" => {
             std::io::copy(&mut std::io::stdin().lock(), &mut std::io::stdout().lock())?;
         }
+        "desktop" => {
+            // Query the target's actual desktop without launching a shell.
+            #[link(name = "user32")]
+            unsafe extern "system" {
+                fn GetThreadDesktop(thread_id: u32) -> *mut std::ffi::c_void;
+                fn GetUserObjectInformationW(
+                    object: *mut std::ffi::c_void,
+                    index: i32,
+                    info: *mut std::ffi::c_void,
+                    length: u32,
+                    needed: *mut u32,
+                ) -> i32;
+            }
+            let mut name = [0_u16; 256];
+            let mut needed = 0;
+            let success = unsafe {
+                GetUserObjectInformationW(
+                    GetThreadDesktop(windows_sys::Win32::System::Threading::GetCurrentThreadId()),
+                    /*index*/ 2,
+                    name.as_mut_ptr().cast(),
+                    std::mem::size_of_val(&name) as u32,
+                    &mut needed,
+                )
+            };
+            anyhow::ensure!(success != 0, "{}", std::io::Error::last_os_error());
+            println!("{}", String::from_utf16(&name[..needed as usize / 2 - 1])?);
+        }
         "connect" => {
             let address = args.next().context("socket address")?;
             let address = address.to_str().context("UTF-8 socket address")?.parse()?;

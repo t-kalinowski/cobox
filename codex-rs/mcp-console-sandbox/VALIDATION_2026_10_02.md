@@ -58,3 +58,25 @@ The five PowerShell-dependent native tests were then exercised using the bundled
 Windows Bazel reached third-party compilation but failed in `ctor 1.0.6` with `E0463: can't find crate for linktime_proc_macro`; no Bazel runtime tests executed. This is recorded as a failed build gate. Cargo debug/release builds succeeded. Linux Bazel, macOS, ARM, musl artifacts, hosted CI, and downstream adoption were not exercised in this audit.
 
 Scoped `just fix` passed for the runner and Windows sandbox on Windows and for the runner and Linux sandbox on Ubuntu. The argument-comment lint passed on Ubuntu after fixing the leaf comment. Its packaged driver emitted dependency warnings. The Linux copies have no VCS metadata, so Clippy fixes used `--allow-no-vcs`. Windows runner Clippy with `--all-targets -- -D warnings`, `just fmt`, Markdown formatting, Actionlint, and `git diff --check` passed.
+
+## Direct official-release comparison
+
+The installed npm distribution of official `codex-cli 0.160.0` was exercised directly through `codex sandbox`. Explicit `windows.sandbox` and a command-line permissions profile selected each backend, filesystem profile, and network setting. `whoami /user` confirmed Codex's online/offline accounts and Console's separate accounts. The comparison did not build a replacement Codex CLI or change the user's configuration.
+
+| Probe                                                             | Official 0.160.0   | Extracted runner   |
+| ----------------------------------------------------------------- | ------------------ | ------------------ |
+| Elevated online TCP to live IPv4 loopback listener                | Connected          | Connected          |
+| Elevated offline TCP to the same listener                         | Connected, failure | Connected, failure |
+| Elevated online TCP to `1.1.1.1:443`                              | Connected          | Connected          |
+| Elevated offline TCP to `1.1.1.1:443`                             | Blocked            | Blocked            |
+| Elevated deletion outside workspace and of `.git`, controlled ACL | Denied             | Denied             |
+| Same elevated deletion under inherited Public ACLs                | Allowed            | Allowed            |
+| Same deletion with restricted-token backend, controlled ACL       | Allowed, failure   | Allowed, failure   |
+
+The controlled directory was a new test-owned directory with inherited permissions disabled, full control for its owner/SYSTEM/Administrators, and read/execute for Authenticated Users. No existing user directory ACL was changed. Public's default inherited ACL grants interactive/batch/service users broader deletion rights. Windows permits deletion using parent-directory delete-child permission. Thus the elevated filesystem result depends on host ACLs, while the legacy backend's same-user deletion failure survives the controlled comparison. The external-network positive control narrows the network failure to loopback; the offline account's external TCP block is functioning.
+
+The versioned runner had hardcoded `use_private_desktop: false`, and native `run` defaulted its desktop flag to false. Both now default to private desktops, matching the official default; the native CLI preserves an explicit opt-out. Compiled fixture tests inspect the target's actual desktop name. All 15 ordinary Windows executable contracts passed after this correction.
+
+Repeating the native PowerShell tests in the small controlled workspace made the cancellation test pass (9.6 seconds) without changing its ten-second assertion. The prior comparison included different workspace ACL traversal costs. Normal-exit capture preservation and the ConPTY descendant-start test still failed. An experimental backport of upstream `50d9c5deac` (piped processes without a console) did not repair capture preservation and was reverted. Temporary test locators and diagnostics were also restored.
+
+Architecture references: [OpenAI's Windows sandbox design, May 13, 2026](https://openai.com/index/building-codex-windows-sandbox/), [current Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox), and Microsoft's [restricted-token API](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken) and [file access rights](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights). The blog does not pin its architecture to a release version; direct execution above establishes the observed release behavior on this host.

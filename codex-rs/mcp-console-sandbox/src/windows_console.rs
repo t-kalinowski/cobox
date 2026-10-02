@@ -138,7 +138,7 @@ pub(crate) fn run() -> Result<i32> {
                     deny_write_paths_override: &[],
                     tty: false,
                     stdin_open: true,
-                    use_private_desktop: false,
+                    use_private_desktop: true,
                 },
             )
             .await?;

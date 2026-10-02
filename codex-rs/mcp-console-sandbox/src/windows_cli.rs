@@ -58,8 +58,8 @@ pub(crate) struct RunArgs {
     /// Windows sandbox backend.
     #[arg(long, default_value = "elevated", value_parser = PossibleValuesParser::new(["disabled", "restricted-token", "elevated"]).try_map(|value| serde_json::from_value::<WindowsSandboxLevel>(value.into())))]
     pub windows_sandbox_level: WindowsSandboxLevel,
-    /// Run on a private Windows desktop.
-    #[arg(long)]
+    /// Run on a private Windows desktop (use =false to opt out).
+    #[arg(long, default_value_t = true, num_args = 0..=1, require_equals = true, default_missing_value = "true", action = clap::ArgAction::Set)]
     pub windows_sandbox_private_desktop: bool,
     /// Keep existing proxy settings instead of reconciling them.
     #[arg(long)]

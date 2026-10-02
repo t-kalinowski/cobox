@@ -105,6 +105,39 @@ fn run_preserves_target_flags_and_repeated_workspace_roots() {
 }
 
 #[test]
+fn native_desktop_defaults_to_private_with_explicit_opt_out() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let profile = serde_json::to_string(&PermissionProfile::read_only())?;
+    for options in [vec![], vec!["--windows-sandbox-private-desktop=false"]] {
+        let output = runner()?
+            .arg("run")
+            .arg("--state-dir")
+            .arg(root.path().join("state"))
+            .arg("--command-cwd")
+            .arg(root.path())
+            .arg(format!("--permission-profile={profile}"))
+            .args([
+                "--env-json",
+                "{}",
+                "--windows-sandbox-level=restricted-token",
+            ])
+            .args(&options)
+            .arg("--")
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("desktop")
+            .output()?;
+        assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+        let desktop = String::from_utf8(output.stdout)?;
+        if options.is_empty() {
+            assert!(desktop.starts_with("ConsoleSandboxDesktop-"), "{desktop:?}");
+        } else {
+            assert_eq!(desktop, "Default\n");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn typed_options_reach_shared_backend_validation() {
     let root = tempfile::tempdir().expect("tempdir");
     let state = root.path().join("state");

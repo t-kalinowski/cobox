@@ -131,6 +131,16 @@ fn read_only_policy_denies_target_writes() -> Result<()> {
 }
 
 #[test]
+fn target_uses_a_private_desktop() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let output = runner(root.path(), "desktop")?.output()?;
+    assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+    let desktop = String::from_utf8(output.stdout)?;
+    assert!(desktop.starts_with("ConsoleSandboxDesktop-"), "{desktop:?}");
+    Ok(())
+}
+
+#[test]
 fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut child = runner(root.path(), "tree")?.spawn()?;
