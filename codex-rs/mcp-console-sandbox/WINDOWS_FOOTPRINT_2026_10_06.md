@@ -1,6 +1,19 @@
 # Windows patch reduction, 2026-10-06
 
-Started from `mcp-console/sandbox-runner/rust-v0.160.1` at `6237b02627c57df8627b6646f8504a1513ee6b55`. The recorded upstream base is `rust-v0.160.1`, `d27764b82f7118f674371e6d6e76271d9d606edb`. The two implementation changes are separate commits: environment-only execution, then additive companion registration; follow-ups finish private-desktop restoration and record host validation. Validation ran on Windows x64 with the repository's Rust 1.95.0 MSVC toolchain.
+Started from `mcp-console/sandbox-runner/rust-v0.160.1` at `6237b02627c57df8627b6646f8504a1513ee6b55`. The recorded upstream base is `rust-v0.160.1`, `d27764b82f7118f674371e6d6e76271d9d606edb`. Validation ran on Windows x64 with the repository's Rust 1.95.0 MSVC toolchain.
+
+## Landed history and review staging
+
+[PR #3](https://github.com/t-kalinowski/cobox/pull/3) was squash-merged as [`999c1a418621f590de136cff99100fcaa55399d4`](https://github.com/t-kalinowski/cobox/commit/999c1a418621f590de136cff99100fcaa55399d4), with `6237b02627c57df8627b6646f8504a1513ee6b55` as its sole parent. `git diff --numstat 6237b02627 999c1a4186` records 528 additions and 486 deletions across 30 files: 1,014 changed lines in one non-mechanical commit. The earlier claim that the implementation changes are separate landed commits was incorrect. The PR's original development commits do not establish compliance with the repository's 800-line review limit for the landed squash.
+
+For a future reapplication, the smallest coherent stage to land first is companion registration. Split the actual patch into independently reviewed and landed stages:
+
+1. Extract the setup and command-runner entry points into `mcp-console-sandbox-windows`, including its manifest/build rules, workspace and lockfile registration, Cargo/Bazel/CI helper wiring, and adjacent-packaging documentation. Restore the upstream Windows package's build files in this stage while preserving execution behavior.
+2. Remove the Windows `run` interface and Console `Default` desktop exception, with the retained-interface tests, desktop restoration, and invocation documentation. This behavior change can follow the extraction without mixing its implementation into the build-wiring stage.
+3. Rename the cross-platform package, keeping its lockfile, Cargo/Bazel/CI selectors, and documentation references together after the structural and behavior changes.
+4. Repair `scripts/format.py` separately; workspace formatting does not depend on the sandbox changes.
+
+Measure each stage's full diff against its immediate parent, keep non-mechanical stages within 800 changed lines (complex logic under 500), and validate each intermediate build before landing it. Keep validation reports with the stage they describe or in separate documentation commits. This is staging guidance, not a claim that the already-merged patch was split. The post-merge documentation correction preserves the published branch history; it cannot retroactively split the squash commit.
 
 ## Changes
 
