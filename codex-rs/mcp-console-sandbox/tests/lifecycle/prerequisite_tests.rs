@@ -2,37 +2,6 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn removed_backend_is_rejected_before_native_setup_in_both_transports() {
-    let mut request = request(&["/bin/echo", "must not run"]);
-    request["linux_backend"] = json!("landlock");
-    let descriptor = run(frame(&request), &[]);
-    for name in ["command", "cwd", "environment"] {
-        request.as_object_mut().unwrap().remove(name);
-    }
-    let directory = tempfile::tempdir().unwrap();
-    let environment = runner(directory.path())
-        .args([
-            "--config-env",
-            "SANDBOX_REQUEST",
-            "--",
-            "/bin/echo",
-            "must not run",
-        ])
-        .env("SANDBOX_REQUEST", request.to_string())
-        .output()
-        .unwrap();
-    for output in [descriptor, environment] {
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
-        assert!(output.stdout.is_empty(), "{output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("linux_backend landlock has been removed"),
-            "{output:?}"
-        );
-    }
-}
-
-#[test]
 fn ordinary_native_entry_keeps_app_server_socket_isolation_guard() {
     let directory = tempfile::tempdir().unwrap();
     // Native invocations without trusted standalone setup retain upstream's

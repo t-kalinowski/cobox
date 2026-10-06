@@ -42,7 +42,7 @@ Validation used x86_64 Linux 6.8.0-146-generic, Ubuntu 24.04 userspace, Rust 1.9
 
 Before implementation, the debug build and all 97 standalone contracts passed. The initial native run passed 279 tests and failed 14 because the container UID did not own the host-mounted fixture cwd; metadata placeholder creation failed before workloads ran. With a root-owned copy of the native test crate bind-mounted only inside the container, all 293 native tests passed. No test assertions, enforcement rules or host sysctls were changed for that correction. Three ignored native tests are internal subprocess fixtures exercised by their enclosing tests.
 
-The new backend-rejection test first failed because the target ran successfully. The ordinary-entry SIGPIPE regression first failed with 141 instead of 23. Both passed after their respective changes.
+The ordinary-entry SIGPIPE regression first failed with 141 instead of 23 and passed after restoring upstream fork/exec. Landlock removal was checked through both transports during development; its dedicated negative test was subsequently removed under repository guidance. The explicit rejection and shared security/policy coverage remain.
 
 | Hook revision (`dbaca54d4`) check                                         | Result                                                                               |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
