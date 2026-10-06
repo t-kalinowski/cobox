@@ -10,6 +10,18 @@ use tokio::sync::oneshot;
 /// Forwards this process' stdio to a Windows sandbox session and returns the
 /// session exit code.
 pub async fn forward_sandbox_session_stdio(spawned: SpawnedProcess) -> i32 {
+    forward_sandbox_session_stdio_with_cancellation(spawned, std::future::pending())
+        .await
+        .unwrap_or(-1)
+}
+
+/// Forwards stdio while allowing the host to retire the session on caller death.
+/// Returns `None` if the backend closes without an exit receipt. Every `i32`,
+/// including -1, is a valid Windows process exit code.
+pub async fn forward_sandbox_session_stdio_with_cancellation(
+    spawned: SpawnedProcess,
+    cancellation: impl std::future::Future<Output = ()>,
+) -> Option<i32> {
     let session = Arc::new(spawned.session);
     let tokio_runtime = tokio::runtime::Handle::current();
     // Give large or slow tail output a better chance to finish draining without
@@ -23,11 +35,25 @@ pub async fn forward_sandbox_session_stdio(spawned: SpawnedProcess) -> i32 {
     // Start background threads that copy stdin/stdout/stderr. We intentionally
     // do not keep their JoinHandles; dropping the handle does not stop the
     // thread, it just means we are not going to wait on it later.
+    // The blocking reader can outlive the workload when the caller keeps stdin
+    // open. It must not retain a native writer sender: that would strand the
+    // driver's blocking writer and prevent Tokio runtime shutdown after exit.
+    let (input_tx, mut input_rx) = mpsc::channel(1);
     drop(spawn_input_forwarder(
         std::io::stdin(),
-        session.writer_sender(),
+        input_tx,
         stdin_eof_tx,
     ));
+    let input_task = tokio::spawn({
+        let writer = session.writer_sender();
+        async move {
+            while let Some(bytes) = input_rx.recv().await {
+                if writer.send(bytes).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
     let (stdout_forwarder, stdout_forwarder_done_rx) =
         spawn_output_forwarder(tokio_runtime.clone(), spawned.stdout_rx, std::io::stdout());
     drop(stdout_forwarder);
@@ -45,16 +71,24 @@ pub async fn forward_sandbox_session_stdio(spawned: SpawnedProcess) -> i32 {
 
     let mut exit_rx = spawned.exit_rx;
     let exit_code = tokio::select! {
-        res = &mut exit_rx => res.unwrap_or(-1),
+        res = &mut exit_rx => res.ok(),
+        () = cancellation => {
+            session.request_terminate();
+            exit_rx.await.ok()
+        },
         res = tokio::signal::ctrl_c() => {
             if let Ok(()) = res {
                 session.request_terminate();
             }
-            exit_rx.await.unwrap_or(-1)
+            exit_rx.await.ok()
         }
     };
 
+    input_task.abort();
     stdin_close_task.abort();
+    let _ = input_task.await;
+    let _ = stdin_close_task.await;
+    session.close_stdin();
     let _ = tokio::time::timeout(output_drain_timeout, async {
         let _ = stdout_forwarder_done_rx.await;
         let _ = stderr_forwarder_done_rx.await;

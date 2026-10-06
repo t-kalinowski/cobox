@@ -66,9 +66,15 @@ fn current_thread_runtime() -> tokio::runtime::Runtime {
 }
 
 fn pwsh_path() -> Option<PathBuf> {
-    let program_files = std::env::var_os("ProgramFiles")?;
-    let path = PathBuf::from(program_files).join("PowerShell\\7\\pwsh.exe");
-    path.is_file().then_some(path)
+    std::env::var_os("ProgramFiles")
+        .map(|directory| PathBuf::from(directory).join("PowerShell\\7\\pwsh.exe"))
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            let paths = std::env::var_os("PATH")?;
+            std::env::split_paths(&paths)
+                .map(|directory| directory.join("pwsh.exe"))
+                .find(|path| path.is_file())
+        })
 }
 
 fn sandbox_cwd() -> PathBuf {
@@ -672,6 +678,8 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     let ready_marker = codex_home.path().join("descendant-started");
     let release_marker = codex_home.path().join("release-descendant");
     let survival_marker = codex_home.path().join("descendant-survived");
+    let parent_marker = codex_home.path().join("parent-started");
+    let watched_marker = codex_home.path().join("parent-watched");
     let descendant_command = format!(
         "$deadline=(Get-Date).AddSeconds(30); Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
         powershell_literal(&ready_marker),
@@ -683,9 +691,37 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
         powershell_literal(&ready_marker),
     );
     let parent_command = format!(
-        "{ASSERT_NO_CONSOLE} Write-Output LEGACY-CAPTURE-DIRECT; {}",
+        "{ASSERT_NO_CONSOLE} Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}; Write-Output LEGACY-CAPTURE-DIRECT; {}",
+        powershell_literal(&parent_marker),
+        powershell_literal(&watched_marker),
         start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail,),
     );
+    // Capture drains inherited pipe handles before returning. Observe the root's
+    // exit independently so the child can demonstrate survival and close them.
+    let observer = std::thread::spawn(move || {
+        assert!(wait_for_path(
+            &parent_marker,
+            Duration::from_secs(/*secs*/ 30)
+        ));
+        let parent_pid = fs::read_to_string(&parent_marker)
+            .expect("read root pid")
+            .trim()
+            .parse()
+            .expect("parse root pid");
+        let parent_process = open_process_for_wait(parent_pid).expect("retain root process");
+        fs::write(&watched_marker, "watched").expect("acknowledge root handle");
+        wait_for_process_exit(&parent_process, Duration::from_secs(/*secs*/ 15))
+            .expect("root process did not exit");
+        let descendant_pid = fs::read_to_string(&ready_marker)
+            .expect("read descendant pid")
+            .trim()
+            .parse()
+            .expect("parse descendant pid");
+        let descendant_process =
+            open_process_for_wait(descendant_pid).expect("retain descendant after root exit");
+        fs::write(&release_marker, "release").expect("release descendant after root exit");
+        descendant_process
+    });
     let permission_profile = PermissionProfile::workspace_write();
     let result = run_windows_sandbox_capture(
         &permission_profile,
@@ -703,14 +739,7 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
         /*cancellation*/ None,
     )
     .expect("run legacy capture powershell");
-    let descendant_pid = fs::read_to_string(&ready_marker)
-        .expect("read descendant pid")
-        .trim()
-        .parse()
-        .expect("parse descendant pid");
-    let descendant_process = open_process_for_wait(descendant_pid);
-    fs::write(&release_marker, "release").expect("release descendant after root exit");
-    let descendant_process = descendant_process.expect("open descendant after normal capture exit");
+    let descendant_process = observer.join().expect("root-exit observer");
 
     println!("capture pwsh exit_code={}", result.exit_code);
     println!("capture pwsh timed_out={}", result.timed_out);
@@ -977,7 +1006,9 @@ async fn assert_legacy_tty_descendant_lifecycle(
         &[],
         &[],
         /*tty*/ true,
-        /*stdin_open*/ false,
+        // Closing ConPTY input immediately hangs up PowerShell before child startup.
+        /*stdin_open*/
+        true,
     )
     .await
     .expect("spawn legacy sandbox ConPTY lifecycle test");

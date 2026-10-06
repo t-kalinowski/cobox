@@ -104,9 +104,13 @@ mod process;
 #[cfg(target_os = "windows")]
 mod product;
 #[cfg(target_os = "windows")]
+mod retirement;
+#[cfg(target_os = "windows")]
 pub use product::WindowsSandboxProduct;
 #[cfg(target_os = "windows")]
 pub use product::sandbox_name;
+#[cfg(target_os = "windows")]
+pub use retirement::retire_console_job;
 #[cfg(target_os = "windows")]
 mod provisioning_client;
 #[cfg(target_os = "windows")]
@@ -457,6 +461,8 @@ pub use setup_error::write_setup_error_report;
 pub use setup_mutex::acquire_sandbox_setup_lock;
 #[cfg(target_os = "windows")]
 pub use stdio_bridge::forward_sandbox_session_stdio;
+#[cfg(target_os = "windows")]
+pub use stdio_bridge::forward_sandbox_session_stdio_with_cancellation;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use token::LocalSid;
