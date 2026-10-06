@@ -1,0 +1,28 @@
+[package]
+name = "mcp-console-sandbox-windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "mcp-console-sandbox-setup"
+path = "src/setup.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "mcp-console-sandbox-runner"
+path = "src/runner.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+anyhow = { workspace = true }
+codex-utils-process = { workspace = true }
+codex-utils-pty = { workspace = true }
+codex-windows-sandbox = { workspace = true }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Threading"] }

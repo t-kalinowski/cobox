@@ -1,6 +1,6 @@
 # Standalone native sandbox executable
 
-`mcp-console-sandbox` exposes this release's native sandbox without application sessions, application configuration files, or a Rust API dependency. It runs an opaque command with inherited stdin, stdout, and stderr. Linux uses the native bubblewrap, seccomp, and proxy paths; macOS uses the native process Seatbelt profile. Windows provides `setup`, `status`, and `run` commands with two companion helpers for its elevated backend, described in [Windows support and port assessment](WINDOWS.md); the environment JSON transport supports Console policy and Job retirement, with the platform limits documented there. Other platforms report unsupported on stderr and exit 1 without launching the target.
+`mcp-console-sandbox` exposes this release's native sandbox without application sessions, application configuration files, or a Rust API dependency. It runs an opaque command with inherited stdin, stdout, and stderr. Linux uses the native bubblewrap, seccomp, and proxy paths; macOS uses the native process Seatbelt profile. Windows provides `setup` and `status` commands and executes workloads through `--config-env NAME -- command [args...]`. Its elevated backend uses two companion helpers, described in [Windows support and port assessment](WINDOWS.md); the environment JSON transport supports Console policy and Job retirement, with the platform limits documented there. Other platforms report unsupported on stderr and exit 1 without launching the target.
 
 The default supervisor owns launch, descendant retirement, optional private storage, and the upstream managed proxy. Caller-death and SIGTERM retirement are explicit options. Linux also accepts explicit Landlock execution, which has no supervisor or process isolation. The [lifecycle contract](LIFECYCLE.md) defines cleanup ordering and platform limits, including runner loss; the [Linux compatibility guide](LINUX_COMPATIBILITY.md) defines host requirements.
 
@@ -15,7 +15,7 @@ SANDBOX_CONFIG='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path
   mcp-console-sandbox --config-env SANDBOX_CONFIG -- /bin/cat
 ```
 
-For larger requests, `--bootstrap-fd N` accepts one framed JSON request through an inherited descriptor above stdio. Both modes require UTF-8 arguments, paths, and environment values. Configuration is consumed once; stdout belongs to the target, and launch errors use stderr and a nonzero exit. [PROTOCOL.md](PROTOCOL.md) defines the request, trust boundaries, proxy environment, caller-supplied macOS rules, and a runnable Python caller.
+On Linux and macOS, `--bootstrap-fd N` accepts one framed JSON request through an inherited descriptor above stdio. Both modes require UTF-8 arguments, paths, and environment values. Configuration is consumed once; stdout belongs to the target, and launch errors use stderr and a nonzero exit. [PROTOCOL.md](PROTOCOL.md) defines the request, trust boundaries, proxy environment, caller-supplied macOS rules, and a runnable Python caller.
 
 ## Build and validation
 
@@ -26,13 +26,13 @@ For an ordinary GNU Linux build, install a C toolchain, `pkg-config`, and libcap
 ```console
 cd codex-rs
 cargo build --locked --release \
-  -p codex-mcp-console-sandbox --bin mcp-console-sandbox \
+  -p mcp-console-sandbox --bin mcp-console-sandbox \
   -p codex-bwrap --bin bwrap
 sandbox_target_dir="$(cargo metadata --locked --format-version=1 --no-deps |
   python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
 ```
 
-Stage `$sandbox_target_dir/release/mcp-console-sandbox` and `$sandbox_target_dir/release/bwrap` together when supplying the bundled helper. The ordinary Cargo helper links to system libcap, so the destination needs its runtime library. On macOS, build only the runner with `cargo build --locked -p codex-mcp-console-sandbox --bin mcp-console-sandbox --release`. The fixture binary is a test target, not a runtime companion.
+Stage `$sandbox_target_dir/release/mcp-console-sandbox` and `$sandbox_target_dir/release/bwrap` together when supplying the bundled helper. The ordinary Cargo helper links to system libcap, so the destination needs its runtime library. On macOS, build only the runner with `cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox --release`. The fixture binary is a test target, not a runtime companion.
 
 Linux selects a suitable host `bwrap` from the trusted launch `PATH` first, then the upstream bundled-helper search. An adjacent `bwrap`, the existing `codex-resources` layout, and install-context locations are supported. No patched bubblewrap option or runner-specific adjacent-helper check is required. Packaging should embed the shipped helper's digest through build-time `CODEX_BWRAP_SHA256`; a selected bundled helper is hashed and executed through the same open descriptor. An unused missing or modified bundle does not block a suitable host helper; a selected modified bundle fails verification without fallback.
 
@@ -45,10 +45,10 @@ For Linux Cargo tests, build the ordinary debug helper before running the execut
 ```console
 cargo build --locked -p codex-bwrap --bin bwrap
 env "CARGO_BIN_EXE_bwrap=$sandbox_target_dir/debug/bwrap" \
-  just test -p codex-mcp-console-sandbox --retries 0
+  just test -p mcp-console-sandbox --retries 0
 ```
 
-Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required.
+On Linux and macOS, Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required. For Windows Cargo and Bazel builds, tests, and companion packaging, follow the [Windows build instructions](WINDOWS.md#build-and-distribute).
 
 The [focused workflow](../../.github/workflows/mcp-console-sandbox.yml) runs macOS and GNU Linux executable/native suites and tests both musl architectures' transport and lifecycle contracts. GNU fault-injection tests stay separate because their loader interposers cannot instrument static executables. [REBASE.md](REBASE.md) contains the full upgrade checklist, macOS native-test exclusions, and revision-specific results; workflow definitions alone do not establish that a run passed. [INTEGRATION.md](INTEGRATION.md) inventories the code carried over upstream. [UPSTREAM_CHANGES.md](UPSTREAM_CHANGES.md) records inherited enforcement and compatibility changes by release.
 

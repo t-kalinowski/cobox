@@ -12,6 +12,7 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
@@ -227,6 +228,8 @@ fn elevated_offline_account_denies_loopback_tcp() -> Result<()> {
             let config = json!({
                 "version":2, "extends":":read-only", "network":network,
                 "windows_sandbox_level":"elevated",
+                "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
+                    .map(PathBuf::from),
             });
             let output = Command::new(cargo_bin("mcp-console-sandbox")?)
                 .current_dir(root.path())
@@ -259,6 +262,8 @@ fn elevated_offline_account_denies_loopback_udp() -> Result<()> {
             let config = json!({
                 "version":2, "extends":":read-only", "network":network,
                 "windows_sandbox_level":"elevated",
+                "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
+                    .map(PathBuf::from),
             });
             let output = Command::new(cargo_bin("mcp-console-sandbox")?)
                 .current_dir(root.path())

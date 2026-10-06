@@ -1,5 +1,7 @@
 # Windows and WSL audit, 2026-10-02
 
+Command examples use the current `mcp-console-sandbox` package name; the results below describe the audited revisions.
+
 The fork's default branch is `mcp-console/sandbox-runner/rust-v0.154.0`. This audit starts at `6a18b21c2e75a10229a842424403d71cbd1e60ef`, against upstream `rust-v0.154.0` (`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`). Follow-up commits are on `codex/windows-runner-validation`. The default branch still pointed to the audited commit when checked after validation.
 
 ## Policy review
@@ -33,10 +35,10 @@ Ubuntu's first release run and Fedora's first debug run encountered startup faul
 The core commands were:
 
 ```sh
-cargo build --locked -p codex-mcp-console-sandbox -p codex-bwrap --bins
-just test --locked -p codex-mcp-console-sandbox --retries 0 --test-threads 1
+cargo build --locked -p mcp-console-sandbox -p codex-bwrap --bins
+just test --locked -p mcp-console-sandbox --retries 0 --test-threads 1
 just test --locked -p codex-sandboxing -p codex-linux-sandbox -p codex-bwrap --retries 0
-cargo build --locked --release -p codex-mcp-console-sandbox -p codex-bwrap --bins
+cargo build --locked --release -p mcp-console-sandbox -p codex-bwrap --bins
 ```
 
 Linux contract runs set `CARGO_BIN_EXE_bwrap` to the absolute helper path. Release contracts additionally set `CARGO_BIN_EXE_mcp-console-sandbox` to the release runner, while retaining the debug harness. Native suites used the built helper where needed. Windows release builds included `mcp-console-sandbox-setup` and `mcp-console-sandbox-runner`; contracts used `just test --release`.

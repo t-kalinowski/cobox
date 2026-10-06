@@ -1,19 +1,50 @@
 # Windows native sandbox
 
-The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status`, native `run` options, and Console's versioned environment transport.
+The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's versioned environment transport for all execution.
 
-The public backend names are `elevated` and `unelevated`, for both `--windows-sandbox-level` and the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
+The public backend names are `elevated` and `unelevated`, in the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
 
 ## Build and distribute
 
 Install Rust 1.95.0 with the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++ build tools, a Windows SDK, and CMake. From `codex-rs`:
 
 ```powershell
-cargo build --locked --release -p codex-mcp-console-sandbox -p codex-windows-sandbox --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
-just test --locked --release -p codex-mcp-console-sandbox --retries 0
+cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+just test --locked --release -p mcp-console-sandbox --retries 0
 ```
 
-Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The helpers reuse the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
+Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
+
+For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged.
+
+For local Bazel builds, start an **x64 Visual Studio Developer PowerShell** and run from the repository root. Install Git for Windows and use its Bash executable explicitly (adjust the path if installed elsewhere). Use a short, writable output directory reserved for this checkout. Match upstream CI's MSVC host platform and forward its Windows SDK environment. The existing test toolchain allows GNU LLVM test executables to run on the MSVC host:
+
+```powershell
+$env:BAZEL_SH = "$env:ProgramFiles/Git/bin/bash.exe"
+$windowsBazel = @(
+    '--host_platform=//:local_windows_msvc',
+    '--platforms=//:local_windows',
+    '--workspace_status_command=./scripts/workspace-status.cmd',
+    '--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain',
+    "--shell_executable=$env:BAZEL_SH"
+)
+foreach ($name in @(
+    'INCLUDE', 'LIB', 'LIBPATH', 'PATH', 'UCRTVersion',
+    'UniversalCRTSdkDir', 'VCINSTALLDIR', 'VCToolsInstallDir',
+    'WindowsLibPath', 'WindowsSdkBinPath', 'WindowsSdkDir',
+    'WindowsSDKLibVersion', 'WindowsSDKVersion'
+)) {
+    if ([Environment]::GetEnvironmentVariable($name)) {
+        $windowsBazel += "--action_env=$name", "--host_action_env=$name"
+    }
+}
+bazel --output_base=C:/b/cobox --noexperimental_remote_repo_contents_cache build @windowsBazel //codex-rs/mcp-console-sandbox:mcp-console-sandbox //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-setup //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-runner
+bazel --output_base=C:/b/cobox --noexperimental_remote_repo_contents_cache test @windowsBazel --test_env=PATH --test_arg=--test-threads=1 //codex-rs/mcp-console-sandbox:windows-cli-test //codex-rs/mcp-console-sandbox:windows-console-test //codex-rs/mcp-console-sandbox:windows-native-test //codex-rs/mcp-console-sandbox:windows-lifecycle-test
+```
+
+`local_windows` keeps the GNU LLVM target ABI; `local_windows_msvc` selects the ABI required by the Windows-hosted Rust compiler's proc-macros and build tools. A bare Windows Bazel invocation defaults the host to GNU LLVM, causing Rust to reject proc-macro DLLs such as `time_macros` with `E0463`. This is a build configuration mismatch, not a missing crate or a reason to patch its source. Short output paths also avoid the Windows linker path-length failure. Select the `.cmd` workspace-status script explicitly so `cmd.exe` does not try to open the `.sh` script through Windows file associations. These local settings mirror the existing upstream CI setup without changing shared Bazel defaults. The ordinary Bazel tests skip the two opt-in elevated network cases; run those against explicitly provisioned state using the Cargo recipe below.
+
+Stage the three executables from those targets together under their existing names. The setup manifest retains `asInvoker`; elevation is explicitly requested by the native setup launcher. The command runner retains the Windows GUI subsystem. See [INTEGRATION.md](INTEGRATION.md#windows-integration) for module and resource resolution.
 
 ## Explicit setup
 
@@ -30,7 +61,7 @@ Setup version 6 also installs account-scoped WFP loopback filters. Older install
 
 The launcher creates `.sandbox-bin` as the caller before elevation, so ordinary launches can refresh its protected DACL. An older installation whose helper directory is administrator-owned can fail with `helper_sandbox_lock_failed`; it needs an ownership repair before ordinary launches will work.
 
-State defaults to `%LOCALAPPDATA%\mcp-console`; native commands accept an absolute `--state-dir`. Use one stable state directory per Windows user. Accounts and network policy are machine resources, so separate directories are not independent installations. Existing Codex accounts, firewall rules, and WFP identifiers retain their names. Another product's account records are rejected.
+State defaults to `%LOCALAPPDATA%\mcp-console`; `setup` and `status` accept an absolute `--state-dir`. Use one stable state directory per Windows user. Accounts and network policy are machine resources, so separate directories are not independent installations. Existing Codex accounts, firewall rules, and WFP identifiers retain their names. Another product's account records are rejected.
 
 Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOnline**; login names are `McpConsoleSandboxOff` and `McpConsoleSandboxOn` to fit Windows' 20-character limit. Setup also uses `ConsoleSandboxUsers`, protected credentials in `.sandbox-secrets`, and versioned records under `.sandbox`.
 
@@ -39,7 +70,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 `--config-env NAME -- COMMAND ...` consumes protocol version 2 as described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
 - `windows_sandbox_level` defaults to `elevated`. `unelevated` is explicit; `disabled` is rejected.
-- Targets run on a private Windows desktop, matching Codex's default. Native `run` also defaults to a private desktop; `--windows-sandbox-private-desktop=false` explicitly opts out.
+- Targets run on a private Windows desktop, matching upstream behavior, with Console-specific desktop names.
 - `windows_state_dir` optionally selects an absolute persistent state directory.
 - The elevated mode requires prior explicit setup. Ordinary versioned launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
@@ -49,9 +80,9 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 The ordinary command arguments, cwd, and stdio remain the target's inputs. Environment inheritance and overrides retain the shared protocol rules. Private storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
 
-## Native CLI
+## Command interface
 
-Run `--help` or `run --help` for the typed native options. `run` consumes a serialized `PermissionProfile` and explicit environment map rather than a versioned request. The command must follow `--`; target flags pass through unchanged. Clap syntax errors exit 2 before setup or launch. Paths and JSON are validated at that boundary. The native CLI retains the upstream setup/repair behavior; versioned Console launches require explicit initial provisioning.
+Run `--help` for `setup` and `status`. Execute workloads only with `--config-env NAME -- command [args...]`. The former `run` subcommand and its permission, environment, root-override, proxy, and desktop arguments are removed; they fail with a CLI diagnostic and exit 2. They are not mapped onto JSON fields. Protocol version 2 is unchanged: cwd comes from the caller, environment follows its inheritance/override rules, and policy uses its existing profile and filesystem fields. Target arguments after `--` pass through unchanged, including names that used to be runner options. Ordinary launches require explicit initial provisioning for elevated mode.
 
 Targets still need host read/traverse permission. In particular, Python 3.14's private temporary directories can grant access only through owner/admin/system ACL entries that a restricted token cannot use. Ordinary directories inheriting the current user's access work without machine-wide ACL changes. Use native Windows paths with backslashes for `cmd.exe`. Targets also remain subject to host Application Control policy; error 4551 is a host policy rejection.
 
@@ -67,13 +98,15 @@ Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner
 
 ## Validation limits
 
-The public versioned-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover typed validation and target argument forwarding. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
+The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) records the current builds, runtime checks, restored files, counts, and provisioning/Bazel limits.
+
+The public versioned-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation; transport regressions cover JSON/path validation and exact target argument forwarding. Rejection of the removed CLI was verified separately during the migration, without retaining a test for unsupported options. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
 
 ```powershell
-just test --locked -p codex-mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
+just test --locked -p mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
 ```
 
-The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
+The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. For a nondefault provisioned directory, set `MCP_CONSOLE_SANDBOX_TEST_STATE_DIR` to its absolute path; this supplies `windows_state_dir` without changing the test harness's `LOCALAPPDATA`. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
 
 On the Windows host tested on 2026-10-02, the unelevated backend allowed deletion outside the writable roots, including with the `:read-only` profile. The upstream `legacy_workspace_write_delete_is_limited_to_writable_roots` test also failed at the unmodified `rust-v0.154.0` release. Successful file-creation denial does not establish deletion isolation. This is an unresolved native enforcement limitation, not a passing security gate; this branch does not replace the upstream token/ACL model to conceal the failure.
 
