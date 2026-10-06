@@ -8,7 +8,7 @@ Standalone `linux_backend: "landlock"` is removed. Both transports reject it bef
 
 The native hook is `fn(Vec<String>, OwnedFd) -> !`. Native code finishes namespace setup, mount/capability verification, proxy routing and enforcement before handing over the command and setup descriptor. The standalone package then owns setup acceptance, environment projection, spawning, signal restoration, stdin release and namespace-init control/reaping. It reuses the existing signal utilities and private descriptor I/O; no supervisor, process discovery, policy implementation or generic plugin mechanism was added.
 
-Without a setup descriptor, the upstream fork/exec/wait block is restored byte-for-byte except for the existing stdin-reader release. The SIGPIPE regression demonstrates a behavioral restoration: the former shared `Command::spawn` path reset SIGPIPE and returned 141; ordinary upstream fork/exec preserves the ignored disposition and the fixture reaches exit 23. The standalone target still restores the caller's complete original dispositions and mask after `Command` resets, including SIGCHLD. Init handles direct forwarding signals and SIGCHLD through signalfd, alongside the unchanged control protocol.
+Without a setup descriptor, the upstream fork/exec/wait block is restored byte-for-byte except for the existing stdin-reader release. The SIGPIPE regression demonstrates a behavioral restoration: the former shared `Command::spawn` path reset SIGPIPE and returned 141; ordinary upstream fork/exec preserves the ignored disposition and the fixture reaches exit 23. The standalone target still restores the caller's complete original dispositions and mask after `Command` resets, including SIGCHLD. Init handles direct forwarding signals and SIGCHLD through signalfd, alongside the unchanged control protocol. Direct signals go to the target group once, with PID delivery only when the group does not exist (`ESRCH`); control messages retain their known-PID delivery.
 
 `linux-sandbox/src/target_control.rs` is removed from the native crate and owned by the standalone package. `TargetSetupMode`, `TargetSetupHook`, the signal-mask copy derive and the exported wait-status helper are removed. No upstream file can be restored in full while retaining the requested fixes below.
 
@@ -32,7 +32,7 @@ Counts classify paths present in the upstream tree separately from additive path
 | Modified upstream Linux files                                          |            4 |     190 / 25 |           4 |    109 / 12 |
 | Additive files inside the native Linux crate                           |            1 |       98 / 0 |           0 |       0 / 0 |
 | All modified upstream files, including unchanged Windows consolidation |           31 |    843 / 372 |          31 |   762 / 359 |
-| All additive files                                                     |           69 |    11006 / 0 |          71 |   11082 / 0 |
+| All additive files                                                     |           69 |    11006 / 0 |          71 |   11165 / 0 |
 
 The ordinary native fork/exec/wait and Landlock guard were restored; the remaining native change is 109 additions and 12 deletions, down from 190 and 25. The 98-line Console control implementation no longer lives in the upstream crate.
 
@@ -74,6 +74,16 @@ After unversioning, ordinary host `bazel test` reproduced 92 passes and eight fa
 The development host now sets `kernel.apparmor_restrict_unprivileged_userns = 0` through `/etc/sysctl.d/90-local-userns.conf`, matching the Linux CI setting. This enables unprivileged user namespaces systemwide while AppArmor remains enabled. `unshare --user --map-root-user true` succeeds. The sysctl is local host configuration; runner enforcement sources are unchanged.
 
 With that setting, all 393 Cargo tests passed directly as UID 1000: 293 native Linux/sandboxing/bubblewrap tests and 100 standalone executable contracts, with three internal subprocess fixtures skipped. A fresh host `bazel test` passed all 100 executable contracts. Retries were disabled, and Bazel test-result caching was disabled. These runs used the ordinary host workspace and helpers, without the earlier root/container fixture workaround.
+
+### Review follow-up
+
+The direct-signal regression first observed duplicate HUP, INT, QUIT and TERM deliveries after `setsid`. It now passes with both `setsid` and `setpgid`: descriptor gates separate the first signal's consumption from init's completed forwarding iteration, so standard-signal coalescing cannot hide a second send. The existing non-group fixture still exercises PID fallback. The dedicated removed-Landlock negative test is gone; manual checks through both transports still returned status 1, no target output and the removal diagnostic.
+
+The revised GNU debug and release suites each passed all 100 executable contracts as UID 1000, and a fresh host Bazel run passed all 100 with caching and retries disabled. The rebuilt static x86_64 musl runner passed the same 35 selected runtime contracts and the runner/helper ELF checks. The GNU-only interposer regression is excluded from that static subset. The 293 native tests were not repeated for this standalone-only follow-up.
+
+The downstream procfs fixture passed another eight policy/network launches on the host: four with fresh procfs and four with inherited procfs using bundled bubblewrap. The system helper's nested namespace attempt was denied; the bundled helper passed the same nested-mount fixture. Ordinary system-helper selection remains covered by the complete GNU suites. These checks used the temporary unversioned fixture, without changing the downstream shipping pin or source files.
+
+Hosted CI is not green: the latest published revision has unrelated spelling, manifest and unused-dependency failures, and unavailable macOS/Windows runner jobs. Those checks do not replace the local executable validation above.
 
 ## Downstream consumers
 

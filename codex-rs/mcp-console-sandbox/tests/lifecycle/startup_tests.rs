@@ -40,6 +40,55 @@ pub(super) fn inherit(command: &mut Command, descriptors: &[i32]) {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn direct_init_signals_reach_a_group_leader_once() {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+
+    let directory = tempfile::tempdir().unwrap();
+    let library = interposer(directory.path());
+    for group in ["setsid", "setpgid"] {
+        let (mut gate, native_gate) = UnixStream::pair().unwrap();
+        let mut command = runner(directory.path());
+        preload(&mut command, &library);
+        command
+            .env("SANDBOX_TEST_NATIVE_PRELOAD", &library)
+            .env("SANDBOX_TEST_GATE_GROUP_SIGNAL", "1")
+            .stdin(Stdio::piped())
+            .stderr(Stdio::from(OwnedFd::from(native_gate)));
+        let (mut child, mut bootstrap) = spawn(&mut command);
+        drop(command);
+        let mut stdin = child.stdin.take().unwrap();
+        bootstrap
+            .write_all(&frame(&fixture("signal-init", &[group])))
+            .unwrap();
+        for signal in [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM] {
+            let mut received = [0];
+            child
+                .stdout
+                .as_mut()
+                .unwrap()
+                .read_exact(&mut received)
+                .unwrap();
+            assert_eq!(received, [signal as u8]);
+            gate.write_all(b"x").unwrap();
+            gate.read_exact(&mut received).unwrap();
+            assert_eq!(received, *b"p");
+            stdin.write_all(b"x").unwrap();
+        }
+        drop(stdin);
+        let output = child.wait_with_output().unwrap();
+        let mut stderr = Vec::new();
+        gate.read_to_end(&mut stderr).unwrap();
+        assert_eq!(
+            (output.status.code(), output.stdout, stderr),
+            (Some(42), b"[]".to_vec(), vec![]),
+            "{group}"
+        );
+    }
+}
+
 #[test]
 fn cancellation_after_native_spawn_keeps_target_gated_and_cleans_storage() {
     let directory = tempfile::tempdir().unwrap();

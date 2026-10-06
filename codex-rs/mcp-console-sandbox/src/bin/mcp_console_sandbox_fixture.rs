@@ -181,8 +181,16 @@ fn main() -> anyhow::Result<()> {
         "signal-init" => {
             // Exercise signals delivered to namespace init itself, independently
             // of the runner's control channel. sigwait is the forwarding barrier.
+            let group = args.next();
+            let mut duplicates = Vec::new();
             let forwarded = [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
             unsafe {
+                match group.as_deref() {
+                    Some("setsid") => anyhow::ensure!(libc::setsid() >= 0),
+                    Some("setpgid") => anyhow::ensure!(libc::setpgid(0, 0) == 0),
+                    Some(_) => anyhow::bail!("unknown signal group setup"),
+                    None => {}
+                }
                 let mut mask = std::mem::zeroed();
                 libc::sigemptyset(&mut mask);
                 for signal in forwarded {
@@ -200,7 +208,30 @@ fn main() -> anyhow::Result<()> {
                     let mut received = 0;
                     anyhow::ensure!(libc::sigwait(&mask, &mut received) == 0);
                     anyhow::ensure!(received == signal, "init forwarded the wrong signal");
+                    if group.is_some() {
+                        // The harness holds init after its group send until we
+                        // consume the signal, then waits for init to poll again.
+                        std::io::stdout().write_all(&[signal as u8])?;
+                        std::io::stdout().flush()?;
+                        std::io::stdin().read_exact(&mut [0])?;
+                        let timeout = libc::timespec {
+                            tv_sec: 0,
+                            tv_nsec: 0,
+                        };
+                        let duplicate = libc::sigtimedwait(&mask, std::ptr::null_mut(), &timeout);
+                        if duplicate >= 0 {
+                            duplicates.push(duplicate);
+                        } else {
+                            anyhow::ensure!(
+                                std::io::Error::last_os_error().raw_os_error()
+                                    == Some(libc::EAGAIN)
+                            );
+                        }
+                    }
                 }
+            }
+            if group.is_some() {
+                serde_json::to_writer(std::io::stdout(), &duplicates)?;
             }
             std::process::exit(42);
         }

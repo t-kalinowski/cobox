@@ -75,13 +75,13 @@ pub(crate) fn wait(channel: OwnedFd, command: libc::pid_t, signals: &Signals) ->
                 return Err(io::Error::last_os_error());
             }
             let signal = info.ssi_signo as i32;
-            if FORWARDED.contains(&signal) {
-                // Match native forwarding for signals arriving at init itself.
-                // Runner control messages above address the known target only.
-                unsafe {
-                    libc::kill(-command, signal);
-                    libc::kill(command, signal);
-                }
+            // Group delivery includes its leader. Address the PID only if
+            // the target has not created a group with its own ID.
+            if FORWARDED.contains(&signal)
+                && unsafe { libc::kill(-command, signal) } < 0
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                unsafe { libc::kill(command, signal) };
             }
         }
     }

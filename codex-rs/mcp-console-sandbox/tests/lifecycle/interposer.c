@@ -120,8 +120,16 @@ ssize_t recvmsg(int fd, struct msghdr *message, int flags) {
 }
 #endif
 
+static int group_signal_sent;
+
 static int observed_poll(struct pollfd *fds, nfds_t count, int timeout) {
     int (*real)(struct pollfd *, nfds_t, int) = NEXT(poll);
+    if (group_signal_sent) {
+        // The forwarding iteration is complete; the target can inspect pending
+        // signals once the harness releases its stdin gate.
+        group_signal_sent = 0;
+        if (write(STDERR_FILENO, "p", 1) != 1) _exit(125);
+    }
     static int observed;
     sigset_t mask;
     sigprocmask(SIG_BLOCK, NULL, &mask);
@@ -132,7 +140,15 @@ static int observed_poll(struct pollfd *fds, nfds_t count, int timeout) {
 static int observed_kill(pid_t pid, int number) {
     int (*real)(pid_t, int) = NEXT(kill);
     if (number == SIGKILL && getenv("SANDBOX_TEST_FAIL_KILL")) { errno = EPERM; return -1; }
-    return real(pid, number);
+    int result = real(pid, number);
+    if (result == 0 && pid < 0 && getenv("SANDBOX_TEST_GATE_GROUP_SIGNAL") && getpid() == 1) {
+        // Make a second PID send observable instead of coalescing it with the
+        // first group send: wait until the target consumes the first signal.
+        char byte;
+        if (read(STDERR_FILENO, &byte, 1) != 1) _exit(125);
+        group_signal_sent = 1;
+    }
+    return result;
 }
 
 static int observed_unlinkat(int fd, const char *path, int flags) {
@@ -173,6 +189,14 @@ INTERPOSE(observed_kill, kill)
 INTERPOSE(observed_unlinkat, unlinkat)
 INTERPOSE(observed_children, proc_listchildpids)
 #else
+int execvp(const char *file, char *const argv[]) {
+    int (*real)(const char *, char *const[]) = NEXT(execvp);
+    // Production strips host loader variables before native setup. This test
+    // explicitly instruments init; the target still receives its own clean env.
+    const char *library = getenv("SANDBOX_TEST_NATIVE_PRELOAD");
+    if (library && setenv("LD_PRELOAD", library, 1) < 0) _exit(125);
+    return real(file, argv);
+}
 int waitid(idtype_t type, id_t pid, siginfo_t *info, int options) {
     int (*real)(idtype_t, id_t, siginfo_t *, int) = NEXT(waitid);
     if (getenv("SANDBOX_TEST_FAIL_WAIT")) { errno = EIO; return -1; }
