@@ -12,7 +12,6 @@ The historical comparison table starts at the former downstream pin `d488fc969da
 | Host child lists or namespace PID discovery unavailable   | Cleanup depended on host child lists                      | No child-list or `NSpid` discovery                                              |
 | No native child completion evidence                       | Could mistake a missing child-list file for an empty list | Nonzero failure and retained private storage                                    |
 | Stopped namespace init, pidfds unavailable                | Startup already unsupported                               | Retirement deadline fails explicitly; private storage remains                   |
-| Explicit Landlock filesystem/network backend              | Rejected                                                  | Direct exec, native policy checks, no process isolation or supervised lifecycle |
 | Unavailable namespace operations with bubblewrap selected | Failure                                                   | Failure; no backend switch                                                      |
 
 The comparison's tested baseline is x86_64 Ubuntu with kernel `6.8.0-139-generic`, not a claimed minimum. [REBASE.md](REBASE.md#validation-of-the-01601-reapplication) records the current reapplication's platform results. The constrained-host tests deny pidfd and subreaper syscalls in the runner and helpers; fault fixtures also withhold native wait status and stop namespace init.
@@ -53,6 +52,6 @@ Without a managed proxy, `external-sandbox` uses upstream selection of no native
 
 ## Landlock boundary
 
-Explicit Landlock is a different user-selected backend with native direct-exec semantics. The standalone setup hook preserves this explicit selection and its supported-policy checks; the ordinary native helper requires bubblewrap for restricted filesystems. Landlock does not mask host app-server sockets. Select bubblewrap when that socket isolation is required. The tested kernel allowed same-user host signalling in that mode. It must not substitute for bubblewrap when process isolation or descendant retirement is required. The runner rejects private storage, caller-death observation, retirement SIGTERM, an explicit cleanup deadline, and managed proxy routing with Landlock. Native rejection of restricted-read policies is preserved. Restricted filesystem policies also require the native truncate capability (Landlock ABI 3 or later); older best-effort enforcement would leave file truncation unrestricted. The tested host provides ABI 4. Native device-ioctl restrictions depend on ABI 5 and are not part of this backend's portable contract.
+The standalone `linux_backend: "landlock"` capability has been removed. Requests fail before native setup; omit the field or explicitly select `"bubblewrap"` to use namespace-backed supervision. There is no fallback on hosts that cannot enforce the selected sandbox. The upstream native Landlock backend is retained, including its ordinary filesystem-policy and app-server-socket guard.
 
 Helper selection, verification, and static/GNU packaging are described in [README.md](README.md#build-and-validation).

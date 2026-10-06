@@ -28,7 +28,6 @@ const RESERVED_CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
 pub struct Bootstrap {
     #[serde(skip)]
     pub excluded_environment: Vec<String>,
-    pub version: u32,
     pub command: Vec<String>,
     pub cwd: AbsolutePathBuf,
     pub environment: HashMap<String, String>,
@@ -53,7 +52,6 @@ pub struct Bootstrap {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentConfiguration {
-    version: u32,
     #[serde(default, deserialize_with = "supplied")]
     filesystem: Option<RawFileSystemSandboxPolicy>,
     #[serde(default, deserialize_with = "supplied")]
@@ -154,7 +152,6 @@ pub fn take_input() -> Result<Input> {
         }
         let mut request = Bootstrap {
             excluded_environment: vec![name.to_owned()],
-            version: config.version,
             command: args[3..]
                 .iter()
                 .map(|arg| {
@@ -263,19 +260,10 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
         cfg!(target_os = "linux") || request.linux_backend.is_none(),
         "linux_backend is supported only on Linux"
     );
-    if request.linux_backend == Some(crate::config::LinuxBackend::Landlock) {
-        ensure!(
-            request.proxy.is_none(),
-            "landlock does not support managed proxy routing"
-        );
-        ensure!(
-            request.lifecycle.parent_pid.is_none()
-                && request.lifecycle.private_tmp.is_none()
-                && request.lifecycle.cleanup_timeout_ms.is_none()
-                && request.lifecycle.sigterm == crate::config::Sigterm::Forward,
-            "landlock does not provide supervised lifetime; omit lifecycle options"
-        );
-    }
+    ensure!(
+        request.linux_backend != Some(crate::config::LinuxBackend::RemovedLandlock),
+        "linux_backend landlock has been removed; omit linux_backend or use bubblewrap"
+    );
     request
         .excluded_environment
         .push(RESERVED_CONFIGURATION.to_owned());
@@ -300,11 +288,6 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
             "target environment value contains NUL"
         );
     }
-    ensure!(
-        request.version == 2,
-        "unsupported bootstrap version {}",
-        request.version
-    );
     ensure!(
         request
             .command

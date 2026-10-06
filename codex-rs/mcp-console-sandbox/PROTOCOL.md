@@ -1,12 +1,14 @@
-# Bootstrap protocol version 2
+# Bootstrap protocol
 
-Windows implements the environment transport with native Job retirement. Its `windows_sandbox_level` and `windows_state_dir` fields, explicit setup requirement, unsupported policy features, and owner/storage semantics are specified in [Windows support](WINDOWS.md#versioned-console-transport). The descriptor transport and Unix-specific signal/terminal behavior below do not apply to Windows.
+Windows implements the environment transport with native Job retirement. Its `windows_sandbox_level` and `windows_state_dir` fields, explicit setup requirement, unsupported policy features, and owner/storage semantics are specified in [Windows support](WINDOWS.md#console-transport). The descriptor transport and Unix-specific signal/terminal behavior below do not apply to Windows.
 
-Two explicit input modes are supported. Both accept one immutable configuration and use the same permission-driven execution selection. Default execution uses the runner's supervisor; explicit Linux Landlock execution has no waiting supervisor, as described below.
+This private protocol is unversioned. MCP Console is its single consumer and pins the runner revision; the consumer and runner are updated in lockstep. Do not send a `version` field: unknown top-level fields are rejected. There is no version negotiation or compatibility execution mode.
+
+Two explicit input modes are supported. Both accept one immutable configuration and use the same permission-driven execution selection. Execution uses the runner's supervisor.
 
 ## Environment configuration
 
-Invoke `mcp-console-sandbox --config-env NAME -- command [args...]`. `NAME` selects a UTF-8 JSON value already present in this child's launch environment, never a filename. The JSON requires `version` and either a built-in `extends` selector or explicit `filesystem` and `network` policies from the request below. `command` and `cwd` are rejected: supply the command after `--` and select the working directory when launching the child. The optional `environment` object contains target-only overrides. `inherit_environment` defaults to `true`; set it to `false` to start with an empty target environment. Omitting both fields inherits the ordinary launch environment without requiring its serialization. Private-directory exports and managed proxy values override ordinary target settings. No application policy is merged into an explicit configuration.
+Invoke `mcp-console-sandbox --config-env NAME -- command [args...]`. `NAME` selects a UTF-8 JSON value already present in this child's launch environment, never a filename. The JSON requires either a built-in `extends` selector or explicit `filesystem` and `network` policies from the request below. `command` and `cwd` are rejected: supply the command after `--` and select the working directory when launching the child. The optional `environment` object contains target-only overrides. `inherit_environment` defaults to `true`; set it to `false` to start with an empty target environment. Omitting both fields inherits the ordinary launch environment without requiring its serialization. Private-directory exports and managed proxy values override ordinary target settings. No application policy is merged into an explicit configuration.
 
 The OS copies the launch environment during process creation. The runner reads the selected value once into owned validated state before runtime or native setup. Changing the parent's environment after successful launch, even before the runner parses JSON, cannot alter that copy. There is no file discovery, path reference, include, reload, or overflow file. Both input modes reject conflicting invocation options and duplicate top-level fields.
 
@@ -27,7 +29,7 @@ fd 2: target stderr
 fd N: [4-byte unsigned big-endian JSON length][UTF-8 JSON]
 ```
 
-This is a breaking private protocol change. Only version 2 is accepted. The no-argument invocation is rejected, and stdin is never read to discover configuration or select a protocol. There is no compatibility mode or environment-variable fallback.
+The no-argument invocation is rejected, and stdin is never read to discover configuration or select a protocol. There is no compatibility mode or environment-variable fallback.
 
 The launcher normally creates an anonymous pipe, inherits its read end into the executable, closes its own read end, and retains the writer until it sends configuration. Start the executable before writing a potentially pipe-sized frame. There is no descriptor transfer after process creation.
 
@@ -35,7 +37,7 @@ The JSON payload must contain 1 through 1,048,576 bytes. The executable validate
 
 In this mode configuration becomes fixed at request acceptance, not process creation. The trusted caller must retain exclusive control of the bytes and descriptor writers until the complete frame is accepted. An anonymous pipe does not authenticate a writer, and a mutable descriptor source can change while being read. The caller may prepare the request after spawning the supervisor. The accepted request is owned memory; the descriptor closes before setup, and further writes or changes to its backing resource cannot alter policy. Neither the caller nor the runner spills configuration to mutable files.
 
-The bootstrap descriptor is closed after parsing and validation, before runtime, proxy, or native setup. It is not a persistent control channel. Empty or truncated frames, invalid lengths, malformed requests, unsupported versions, and invalid invocation arguments return a nonzero status and an error on stderr without launching the target. Remaining request fields retain their native validation.
+The bootstrap descriptor is closed after parsing and validation, before runtime, proxy, or native setup. It is not a persistent control channel. Empty or truncated frames, invalid lengths, malformed requests and invalid invocation arguments return a nonzero status and an error on stderr without launching the target. Remaining request fields retain their native validation.
 
 Stdin, stdout, and stderr are attached directly. The target inherits stdin's original open file description, including its offset, seekability, terminal identity, and binary contents. This executable drops its owned stdin from the launch command immediately after spawning, before waiting for the child. Rust startup supplies `/dev/null` when stdin was closed at invocation, matching the existing runtime behavior.
 
@@ -51,7 +53,6 @@ Only Linux and macOS execute this protocol. Other platforms return an unsupporte
 
 | JSON field                         | Type                              | Requiredness, omission and `null`                                                                                            | Meaning and constraints                                                                                                                                                                                                                                                                                                                              |
 | ---------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                          | `u32` integer                     | Required in both modes; no `null`                                                                                            | Must be `2`.                                                                                                                                                                                                                                                                                                                                         |
 | `filesystem`                       | Object below                      | Required without `extends`; omitted with a selector inherits its baseline; no `null`                                         | Filesystem permissions and ownership of enforcement.                                                                                                                                                                                                                                                                                                 |
 | `network`                          | String                            | Required without `extends`; omitted with a selector inherits its baseline; no `null`                                         | Exactly `"restricted"` or `"enabled"`; no aliases. Independent of filesystem access; see the execution matrix below.                                                                                                                                                                                                                                 |
 | `extends`                          | String                            | Optional; omitted or `null` selects no built-in                                                                              | Exactly `":workspace"` or `":read-only"`. Unsupported identifiers produce a native diagnostic.                                                                                                                                                                                                                                                       |
@@ -63,7 +64,7 @@ Only Linux and macOS execute this protocol. Other platforms return an unsupporte
 | `inherit_environment`              | Boolean                           | Environment mode only, default `true`; no `null`; rejected in descriptor mode                                                | `false` starts the target environment empty before applying `environment`. Does not change the trusted environment used to launch the runner or its helpers.                                                                                                                                                                                         |
 | `proxy`                            | Object below                      | Optional; omission or `null` means no proxy                                                                                  | A supplied object must include all seven required fields below, including `enabled: true`. A managed proxy takes precedence over ordinary direct network access.                                                                                                                                                                                     |
 | `lifecycle`                        | Object below                      | Optional, default `{}`; `null` rejected                                                                                      | Supervision, signals, caller-death observation, private storage and retirement deadline.                                                                                                                                                                                                                                                             |
-| `linux_backend`                    | String                            | Optional; omitted or `null` uses upstream's ordinary bubblewrap path when native execution is selected                       | Linux only. `"bubblewrap"` explicitly selects that same path. `"landlock"` requests legacy direct execution; its narrower contract is below. No aliases. Any non-null value is rejected on macOS.                                                                                                                                                    |
+| `linux_backend`                    | String                            | Optional; omitted or `null` uses upstream's ordinary bubblewrap path when native execution is selected                       | Linux only. `"bubblewrap"` explicitly selects that same path. `"landlock"` is a removed capability and is rejected before native setup. No aliases. Any non-null value is rejected on macOS.                                                                                                                                                    |
 | `macos_seatbelt_profile_extension` | String                            | Optional; omitted or `null` adds no SBPL                                                                                     | macOS only, and requires native enforcement. Appended trusted Seatbelt rules may grant permissions as well as deny them, including changing filesystem/network restrictions. Empty string is accepted. Invalid SBPL or embedded NUL fails before target execution. Non-null values are rejected on Linux and for external execution without a proxy. |
 
 There are no other top-level fields. In particular, `excluded_environment` is internal and rejected on input. Environment mode takes the command from arguments after `--`, cwd from process creation, and environment from inheritance/overrides. Descriptor mode takes all three from the JSON. Native OS permissions and the executable's own requirements still apply; parsing a request does not establish that it can launch.
@@ -87,7 +88,6 @@ Private storage is independent of built-in selection: `lifecycle.private_tmp` st
 
 ```json
 {
-  "version": 2,
   "extends": ":workspace",
   "workspace_options": {
     "exclude_tmpdir_env_var": true,
@@ -138,7 +138,7 @@ Concrete entries apply to a path and its descendants. More specific entries over
 
 Missing paths retain native semantics. Linux skips absent writable roots instead of creating them. Read/deny carveouts under writable roots can mask the first missing component and prevent its later creation; native setup may create temporary mount placeholders. macOS can describe permissions for paths that do not exist yet. Neither an ordinary entry nor `missing_path_behavior: "skip"` promises the same missing-path result on every backend.
 
-Globs describe git-style patterns (`*`, `?`, `**`, character classes and supported brace/escape forms); use a directory prefix and conventional `**/*.suffix` patterns. Linux expands existing file matches during setup, includes hidden/ignored files, does not recurse through symlink directories, and masks matches plus resolved symlink targets. It uses upstream ripgrep or its built-in walker when ripgrep is absent; other scan failures remain errors. The expansion is capped at 8,192 paths and requires a non-root static directory prefix and a glob metacharacter recognized by the native splitter (`*`, `?`, `[` or `]`). A literal string in `glob_pattern`, or `/*.secret`, can therefore parse and fail at Linux setup. Future files and matches beyond a selected depth are not dynamically denied by this mount snapshot. macOS translates its supported glob subset into Seatbelt read/write denies, with ancestor unlink protection, and applies it to subsequent accesses without scanning. Unsupported patterns need not have identical results across these native implementations. Landlock cannot enforce deny-read globs or other restricted-read policies; use concrete scoped policies or the default backend for those requirements.
+Globs describe git-style patterns (`*`, `?`, `**`, character classes and supported brace/escape forms); use a directory prefix and conventional `**/*.suffix` patterns. Linux expands existing file matches during setup, includes hidden/ignored files, does not recurse through symlink directories, and masks matches plus resolved symlink targets. It uses upstream ripgrep or its built-in walker when ripgrep is absent; other scan failures remain errors. The expansion is capped at 8,192 paths and requires a non-root static directory prefix and a glob metacharacter recognized by the native splitter (`*`, `?`, `[` or `]`). A literal string in `glob_pattern`, or `/*.secret`, can therefore parse and fail at Linux setup. Future files and matches beyond a selected depth are not dynamically denied by this mount snapshot. macOS translates its supported glob subset into Seatbelt read/write denies, with ancestor unlink protection, and applies it to subsequent accesses without scanning. Unsupported patterns need not have identical results across these native implementations.
 
 ### Network, proxy, and enforcement selection
 
@@ -150,9 +150,11 @@ Globs describe git-style patterns (`*`, `?`, `**`, character classes and support
 
 Managed full access still launches through the native path for lifecycle support: Linux retains bubblewrap namespace init and its setup/control exchange even with full networking; macOS retains its native process profile. It does not mean unrestricted host devices, privileges, or every operating-system operation. Native restrictions, including capabilities and process/session behavior, remain those of the selected backend. Restricted networking is never changed to enabled merely because filesystem access is unrestricted.
 
-External enforcement uses canonical `PermissionProfile::External`. Without a proxy, upstream automatic selection chooses no native sandbox. The runner supplies target environment, stdio, signal restoration/forwarding, ordinary process supervision, caller-death handling and optional private-storage cleanup. It does not create an outer sandbox, verify one exists, or enforce the declared restricted network itself. Linux retires the original process group and waits for its direct child; detached descendants belong to the outer sandbox's lifecycle contract. macOS retains its existing observation of descendants and live group members, with its documented observation limits. A managed proxy makes upstream selection require a native sandbox for routing. An explicit `linux_backend: "bubblewrap"` does not force native enforcement for external execution without a proxy; the legacy `"landlock"` override is rejected with external enforcement.
+External enforcement uses canonical `PermissionProfile::External`. Without a proxy, upstream automatic selection chooses no native sandbox. The runner supplies target environment, stdio, signal restoration/forwarding, ordinary process supervision, caller-death handling and optional private-storage cleanup. It does not create an outer sandbox, verify one exists, or enforce the declared restricted network itself. Linux retires the original process group and waits for its direct child; detached descendants belong to the outer sandbox's lifecycle contract. macOS retains its existing observation of descendants and live group members, with its documented observation limits. A managed proxy makes upstream selection require a native sandbox for routing. An explicit `linux_backend: "bubblewrap"` does not force native enforcement for external execution without a proxy.
 
-`linux_backend` is optional. Normal callers should omit it and specify policies. Explicit `"landlock"` preserves upstream legacy direct-exec capability: native Landlock/seccomp enforcement followed by replacement of the runner, with no waiting supervisor or PID namespace. It rejects proxy configuration, external enforcement, `parent_pid`, `private_tmp`, an explicit `cleanup_timeout_ms`, or `sigterm: "retire"`; empty/default lifecycle is accepted. It also rejects policies requiring restricted reads or finer denial than the legacy representation supports. Restricted writes require Landlock ABI 3 or newer for truncate enforcement. Filesystem-unrestricted Landlock execution needs no filesystem rules, but still applies the chosen native network policy. There is no automatic backend fallback after namespace or enforcement failure.
+`linux_backend` is optional. Omitted, `null`, and explicit `"bubblewrap"` retain the same supervised execution and policy selection. Standalone `"landlock"` execution has been removed. Both transports reject that value with a removal diagnostic before starting native setup or a workload. It is never interpreted as bubblewrap, and namespace or enforcement failures never trigger another backend or an unenforced retry.
+
+The removed value is parsed only to report that capability removal clearly; it is not a compatibility execution mode. When adopting this runner revision, remove `version` from both transport payloads and remove the consumer's protocol-version metadata. Callers that selected Landlock must explicitly choose the supervised backend and its host requirements. Update the pinned consumer and runner together; do not retry a rejected request with another backend. Framing and retained lifecycle semantics are unchanged. Upstream's native Landlock implementation and ordinary app-server-socket guard are unchanged.
 
 The complete `proxy` object uses camelCase field names. Unlike `NetworkProxyConfig`, `RemoteNetworkProxyConfig` has **no defaults for its Boolean or mode fields**:
 
@@ -201,7 +203,6 @@ Environment mode, unrestricted files with restricted networking:
 
 ```json
 {
-  "version": 2,
   "filesystem": { "kind": "unrestricted" },
   "network": "restricted"
 }
@@ -211,7 +212,6 @@ Environment mode, unrestricted files and enabled networking, with ordinary priva
 
 ```json
 {
-  "version": 2,
   "filesystem": { "kind": "unrestricted" },
   "network": "enabled",
   "inherit_environment": false,
@@ -228,7 +228,6 @@ Descriptor mode, root-readable filesystem, writable cwd, and an additional writa
 
 ```json
 {
-  "version": 2,
   "command": ["/bin/echo", "sandbox ready"],
   "cwd": "/tmp",
   "environment": { "PATH": "/usr/bin:/bin" },
@@ -255,7 +254,6 @@ Environment mode, unrestricted files with an enforced managed proxy:
 
 ```json
 {
-  "version": 2,
   "filesystem": { "kind": "unrestricted" },
   "network": "restricted",
   "proxy": {
@@ -280,24 +278,12 @@ Descriptor mode, outer sandbox responsible for filesystem and restricted network
 
 ```json
 {
-  "version": 2,
   "command": ["/bin/echo", "sandbox ready"],
   "cwd": "/tmp",
   "environment": {},
   "filesystem": { "kind": "external-sandbox" },
   "network": "restricted",
   "lifecycle": { "sigterm": "retire" }
-}
-```
-
-Environment mode, explicit legacy Landlock on Linux, unrestricted files with native restricted networking and no supervised lifecycle:
-
-```json
-{
-  "version": 2,
-  "filesystem": { "kind": "unrestricted" },
-  "network": "restricted",
-  "linux_backend": "landlock"
 }
 ```
 
@@ -339,4 +325,4 @@ A thin frontend can exec the environment-mode invocation with its ordinary comma
 
 The runner owns launch, signal restoration, optional private storage, and proxy lifetime; descendant retirement follows the selected managed or external execution contract. An application-level fork-and-continue manager and sandbox-target signal wrapper are unnecessary. Large requests may retain the private descriptor mode. The coordinated downstream integration and procfs probes are described in [Linux compatibility](LINUX_COMPATIBILITY.md).
 
-The Linux native control channel is private to the runner and namespace init. It carries signals after one-shot setup, never configuration updates, and is close-on-exec in the workload. This does not change either caller transport. Explicit Landlock transports its target environment across trusted setup in a sealed anonymous file and closes that descriptor before target execution; no waiting supervisor remains.
+The Linux native control channel is private to the runner and namespace init. It carries signals after one-shot setup, never configuration updates, and is close-on-exec in the workload. This does not change either caller transport.

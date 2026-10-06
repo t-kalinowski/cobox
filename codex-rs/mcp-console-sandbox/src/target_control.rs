@@ -1,40 +1,23 @@
-//! Native namespace-init control. Only the host runner owns the other endpoint.
+//! Console namespace-init control. Only the host runner owns the other endpoint.
+use crate::signals::FORWARDED;
+use crate::signals::Signals;
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 
-pub(crate) fn wait(channel: OwnedFd, command: libc::pid_t) -> ! {
-    let result = run(channel, command);
-    match result {
-        Ok(status) => super::linux_run_main::exit_with_wait_status(status),
-        Err(error) => {
-            eprintln!("native namespace control: {error}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn run(channel: OwnedFd, command: libc::pid_t) -> io::Result<i32> {
-    let mut mask = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::sigemptyset(&mut mask);
-        libc::sigaddset(&mut mask, libc::SIGCHLD);
-    }
-    let error = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut()) };
-    if error != 0 {
-        return Err(io::Error::from_raw_os_error(error));
-    }
-    let fd = unsafe { libc::signalfd(-1, &mask, libc::SFD_CLOEXEC) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let signals = unsafe { OwnedFd::from_raw_fd(fd) };
+pub(crate) fn wait(channel: OwnedFd, command: libc::pid_t, signals: &Signals) -> io::Result<i32> {
+    let signals = signals.notification()?;
     loop {
         let mut status = 0;
         let reaped = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
         if reaped == command {
-            return Ok(status);
+            return Ok(if libc::WIFEXITED(status) {
+                libc::WEXITSTATUS(status)
+            } else if libc::WIFSIGNALED(status) {
+                128 + libc::WTERMSIG(status)
+            } else {
+                1
+            });
         }
         if reaped > 0 {
             continue;
@@ -71,9 +54,7 @@ fn run(channel: OwnedFd, command: libc::pid_t) -> io::Result<i32> {
                 // Exiting PID 1 makes the kernel retire the entire namespace.
                 // Its native parent remains alive to wait for that completion.
                 0 => return Ok(0),
-                1 if [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM]
-                    .contains(&i32::from(signal)) =>
-                {
+                1 if FORWARDED.contains(&i32::from(signal)) => {
                     if unsafe { libc::kill(command, i32::from(signal)) } < 0 {
                         return Err(io::Error::last_os_error());
                     }
@@ -92,6 +73,15 @@ fn run(channel: OwnedFd, command: libc::pid_t) -> io::Result<i32> {
             } < 0
             {
                 return Err(io::Error::last_os_error());
+            }
+            let signal = info.ssi_signo as i32;
+            // Group delivery includes its leader. Address the PID only if
+            // the target has not created a group with its own ID.
+            if FORWARDED.contains(&signal)
+                && unsafe { libc::kill(-command, signal) } < 0
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                unsafe { libc::kill(command, signal) };
             }
         }
     }

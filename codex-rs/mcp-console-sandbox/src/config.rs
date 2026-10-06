@@ -82,5 +82,7 @@ impl Lifecycle {
 pub enum LinuxBackend {
     #[default]
     Bubblewrap,
-    Landlock,
+    // Parse the removed value only to give a clear error before native setup.
+    #[serde(rename = "landlock")]
+    RemovedLandlock,
 }

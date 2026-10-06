@@ -4,10 +4,10 @@ mod bootstrap;
 mod codex;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod config;
-#[cfg(target_os = "linux")]
-mod direct_linux;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod launch;
+#[cfg(target_os = "linux")]
+mod linux_namespace;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod native;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -18,6 +18,8 @@ mod profiles;
 mod signals;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage;
+#[cfg(target_os = "linux")]
+mod target_control;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
@@ -103,13 +105,7 @@ fn run() -> anyhow::Result<i32> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(async move {
-            #[cfg(target_os = "linux")]
-            if request.linux_backend == Some(config::LinuxBackend::Landlock) {
-                return direct_linux::run(request, stdin, signals).await;
-            }
-            launch::run(request, stdin, signals).await
-        })
+        .block_on(launch::run(request, stdin, signals))
 }
 
 #[cfg(windows)]

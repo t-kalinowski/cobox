@@ -2,24 +2,8 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn explicit_landlock_runs_without_namespace_helpers_and_preserves_policy_checks() {
+fn ordinary_native_entry_keeps_app_server_socket_isolation_guard() {
     let directory = tempfile::tempdir().unwrap();
-    let forbidden = directory.path().join("forbidden");
-    let mut request = fixture("write", &[forbidden.to_str().unwrap()]);
-    request["linux_backend"] = json!("landlock");
-    let mut command = runner(directory.path());
-    command.env("PATH", "/nonexistent");
-    let output = run_command(command, frame(&request), &[]);
-    assert!(!output.status.success(), "{output:?}");
-    assert!(!forbidden.exists());
-    assert!(
-        !String::from_utf8_lossy(&output.stderr).contains("configuration JSON"),
-        "{output:?}"
-    );
-    request["command"] = json!(["/bin/echo", "explicit landlock"]);
-    let output = run(frame(&request), &[]);
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"explicit landlock\n");
     // Native invocations without trusted standalone setup retain upstream's
     // app-server socket isolation requirement.
     let profile =
@@ -37,20 +21,11 @@ fn explicit_landlock_runs_without_namespace_helpers_and_preserves_policy_checks(
             .contains("filesystem-restricted execution requires bubblewrap"),
         "{output:?}"
     );
-    request["lifecycle"] = json!({"private_tmp": {"environment": ["TMPDIR"]}});
-    let output = run(frame(&request), &[]);
-    assert!(!output.status.success(), "{output:?}");
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("landlock does not provide supervised lifetime"),
-        "{output:?}"
-    );
 }
 
 #[test]
 fn explicit_backend_selection_does_not_fall_back_when_namespaces_are_denied() {
-    for backend in ["bubblewrap", "landlock"] {
+    for backend in [None, Some("bubblewrap")] {
         let directory = tempfile::tempdir().unwrap();
         let mut command = runner(directory.path());
         unsafe {
@@ -93,49 +68,17 @@ fn explicit_backend_selection_does_not_fall_back_when_namespaces_are_denied() {
             });
         }
         let mut request = request(&["/bin/echo", "target"]);
-        request["linux_backend"] = json!(backend);
-        let output = run_command(command, frame(&request), &[]);
-        if backend == "landlock" {
-            assert_eq!(
-                (output.status.code(), output.stdout, output.stderr),
-                (Some(0), b"target\n".to_vec(), vec![])
-            );
-        } else {
-            assert!(!output.status.success());
-            assert!(output.stdout.is_empty());
-            assert!(
-                String::from_utf8_lossy(&output.stderr).contains("namespace"),
-                "{output:?}"
-            );
+        if let Some(backend) = backend {
+            request["linux_backend"] = json!(backend);
         }
+        let output = run_command(command, frame(&request), &[]);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("namespace"),
+            "{output:?}"
+        );
     }
-}
-
-#[test]
-fn landlock_preserves_native_policy_rejections_and_rejects_proxy_switching() {
-    let mut request = request(&["/bin/echo", "must not run"]);
-    request["linux_backend"] = json!("landlock");
-    request["proxy"] = proxy_config();
-    let output = run(frame(&request), &[]);
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("landlock does not support managed proxy routing"),
-        "{output:?}"
-    );
-    request["proxy"] = Value::Null;
-    request["filesystem"]["entries"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"path": {"type": "path", "path": "/etc"}, "access": "none"}));
-    let output = run(frame(&request), &[]);
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("incompatible with --use-legacy-landlock"),
-        "{output:?}"
-    );
 }
 
 fn constrained_runner(directory: &Path, unavailable: i64) -> Command {
@@ -347,21 +290,6 @@ fn missing_native_wait_status_never_reports_cleanup_success() {
     );
     assert!(
         stderr.contains("private storage retained after incomplete retirement"),
-        "{output:?}"
-    );
-}
-
-#[test]
-fn unavailable_landlock_never_executes_the_target() {
-    let directory = tempfile::tempdir().unwrap();
-    let command = constrained_runner(directory.path(), libc::SYS_landlock_create_ruleset);
-    let mut request = request(&["/bin/echo", "must not run"]);
-    request["linux_backend"] = json!("landlock");
-    let output = run_command(command, frame(&request), &[]);
-    assert!(!output.status.success(), "{output:?}");
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("Landlock"),
         "{output:?}"
     );
 }

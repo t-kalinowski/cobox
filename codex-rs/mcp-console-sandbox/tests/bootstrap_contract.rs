@@ -9,6 +9,9 @@ mod codex;
 mod configuration;
 #[path = "lifecycle/lifecycle_tests.rs"]
 mod lifecycle;
+#[cfg(target_os = "linux")]
+#[path = "lifecycle/native_entry_tests.rs"]
+mod native_entry;
 #[path = "lifecycle/ownership_tests.rs"]
 mod ownership;
 #[path = "policy/policy_tests.rs"]
@@ -47,7 +50,6 @@ use std::process::Stdio;
 
 fn request(command: &[&str]) -> Value {
     json!({
-        "version": 2,
         "command": command,
         "cwd": std::env::current_dir().unwrap(),
         "environment": {},
@@ -71,7 +73,10 @@ fn copy_executable(from: &Path, to: &Path) {
     // A concurrent fork can retain a writable copy descriptor until exec, even
     // with CLOEXEC, and make another launch fail with ETXTBSY. Keep those
     // descriptors in a separate copy process and wait for it to close them.
+    // Bazel inputs are read-only. Replace the staged inode so repeated launches
+    // do not try to reopen that read-only executable for writing.
     let output = Command::new("cp")
+        .arg("--remove-destination")
         .arg("--")
         .arg(from)
         .arg(to)
@@ -214,9 +219,6 @@ fn invalid_requests_fail_on_stderr_only() {
     let valid = request(&["/bin/echo", "must-not-launch"]);
     let mut requests = vec![request(&[]), request(&[""])];
     for (field, value) in [
-        ("version", json!(1)),
-        ("version", json!(3)),
-        ("version", json!(-1)),
         ("command", json!("/bin/true")),
         ("cwd", json!("relative")),
         ("unexpected", json!(true)),

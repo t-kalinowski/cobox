@@ -311,9 +311,8 @@ fn unreadable_bootstrap_is_rejected() {
 
 #[test]
 fn bootstrap_errors_close_the_resource_without_consuming_stdin() {
-    let mut unsupported = request(&["/bin/echo", "must-not-launch"]);
-    unsupported["version"] = json!(1);
-    for bytes in [frame(&unsupported), 1048577u32.to_be_bytes().to_vec()] {
+    let invalid = request(&[]);
+    for bytes in [frame(&invalid), 1048577u32.to_be_bytes().to_vec()] {
         let mut input = tempfile::tempfile().unwrap();
         input.write_all(b"original-input").unwrap();
         input.rewind().unwrap();

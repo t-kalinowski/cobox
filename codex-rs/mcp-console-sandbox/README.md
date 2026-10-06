@@ -2,16 +2,16 @@
 
 `mcp-console-sandbox` exposes this release's native sandbox without application sessions, application configuration files, or a Rust API dependency. It runs an opaque command with inherited stdin, stdout, and stderr. Linux uses the native bubblewrap, seccomp, and proxy paths; macOS uses the native process Seatbelt profile. Windows provides `setup` and `status` commands and executes workloads through `--config-env NAME -- command [args...]`. Its elevated backend uses two companion helpers, described in [Windows support and port assessment](WINDOWS.md); the environment JSON transport supports Console policy and Job retirement, with the platform limits documented there. Other platforms report unsupported on stderr and exit 1 without launching the target.
 
-The default supervisor owns launch, descendant retirement, optional private storage, and the upstream managed proxy. Caller-death and SIGTERM retirement are explicit options. Linux also accepts explicit Landlock execution, which has no supervisor or process isolation. The [lifecycle contract](LIFECYCLE.md) defines cleanup ordering and platform limits, including runner loss; the [Linux compatibility guide](LINUX_COMPATIBILITY.md) defines host requirements.
+The default supervisor owns launch, descendant retirement, optional private storage, and the upstream managed proxy. Caller-death and SIGTERM retirement are explicit options. The [lifecycle contract](LIFECYCLE.md) defines cleanup ordering and platform limits, including runner loss; the [Linux compatibility guide](LINUX_COMPATIBILITY.md) defines host requirements.
 
-The [complete JSON configuration reference](PROTOCOL.md#complete-json-reference) covers both transports and every nested field. `filesystem: {"kind":"unrestricted"}` retains the independently selected native network policy. `external-sandbox` delegates enforcement to an outer sandbox unless a managed proxy requires native routing; its Linux supervision covers the original process group.
+MCP Console is the single consumer and pins the runner revision; both are updated together. The private protocol has no version field or compatibility negotiation. The [complete JSON configuration reference](PROTOCOL.md#complete-json-reference) covers both transports and every nested field. `filesystem: {"kind":"unrestricted"}` retains the independently selected native network policy. `external-sandbox` delegates enforcement to an outer sandbox unless a managed proxy requires native routing; its Linux supervision covers the original process group.
 
 ## Invocation
 
 Put JSON in one selected child environment variable, and keep arguments, cwd, and ordinary environment values as normal launch inputs:
 
 ```sh
-SANDBOX_CONFIG='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted","lifecycle":{"private_tmp":{"environment":["TMPDIR"]}}}' \
+SANDBOX_CONFIG='{"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted","lifecycle":{"private_tmp":{"environment":["TMPDIR"]}}}' \
   mcp-console-sandbox --config-env SANDBOX_CONFIG -- /bin/cat
 ```
 
@@ -40,7 +40,7 @@ Portable Linux pairs use `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-m
 
 Build and strip `bwrap` first, export its SHA-256 as `CODEX_BWRAP_SHA256`, then build the runner with the same target and `--locked --release`. Inspect both with `readelf -W -l -d -V`: portable pairs must have no interpreter, `NEEDED` libraries, or symbol-version requirements. They need no host libcap or OpenSSL runtime libraries. Their target command still needs its own interpreter, libraries, and compatible libc; static runner artifacts do not establish portability of an application's R, Python, or SQL runtime.
 
-For Linux Cargo tests, build the ordinary debug helper before running the executable suite:
+For Linux Cargo tests, build the ordinary debug helper before running the executable suite. Its `native_entry` cases exercise the native entry point without a standalone descriptor as well as the standalone hook:
 
 ```console
 cargo build --locked -p codex-bwrap --bin bwrap
@@ -48,7 +48,7 @@ env "CARGO_BIN_EXE_bwrap=$sandbox_target_dir/debug/bwrap" \
   just test -p mcp-console-sandbox --retries 0
 ```
 
-On Linux and macOS, Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required. For Windows Cargo and Bazel builds, tests, and companion packaging, follow the [Windows build instructions](WINDOWS.md#build-and-distribute).
+On Linux and macOS, Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required. Both crates glob their Rust implementation files; the standalone test rule explicitly lists `tests/lifecycle/native_entry_tests.rs`. The control implementation is compiled only in the standalone package. For Windows Cargo and Bazel builds, tests, and companion packaging, follow the [Windows build instructions](WINDOWS.md#build-and-distribute).
 
 The [focused workflow](../../.github/workflows/mcp-console-sandbox.yml) runs macOS and GNU Linux executable/native suites and tests both musl architectures' transport and lifecycle contracts. GNU fault-injection tests stay separate because their loader interposers cannot instrument static executables. [REBASE.md](REBASE.md) contains the full upgrade checklist, macOS native-test exclusions, and revision-specific results; workflow definitions alone do not establish that a run passed. [INTEGRATION.md](INTEGRATION.md) inventories the code carried over upstream. [UPSTREAM_CHANGES.md](UPSTREAM_CHANGES.md) records inherited enforcement and compatibility changes by release.
 

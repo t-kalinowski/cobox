@@ -48,7 +48,7 @@ fn configuration_is_explicit_json_without_file_fallback() {
         path.to_str().unwrap(),
         "{}",
         "null",
-        "{\"version\":2,\"version\":2}",
+        "{\"network\":\"enabled\",\"network\":\"restricted\"}",
     ] {
         let output = runner(directory.path())
             .args([

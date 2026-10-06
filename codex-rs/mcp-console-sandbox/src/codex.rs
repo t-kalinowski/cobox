@@ -90,7 +90,6 @@ mod upstream {
             }
         }
         let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network);
-        let filesystem = permissions.file_system_sandbox_policy();
         let manager = SandboxManager::default();
         // Managed launches require native init for target setup and retirement,
         // even when no filesystem or network restrictions were requested.
@@ -108,33 +107,9 @@ mod upstream {
             request.proxy.is_some(),
         );
         ensure!(
-            permissions.enforcement() != SandboxEnforcement::External
-                || request.linux_backend != Some(crate::config::LinuxBackend::Landlock),
-            "external-sandbox delegates enforcement; omit the legacy landlock override"
-        );
-        ensure!(
             sandbox != SandboxType::None || request.macos_seatbelt_profile_extension.is_none(),
             "a Seatbelt extension requires native enforcement"
         );
-        #[cfg(target_os = "linux")]
-        if request.linux_backend == Some(crate::config::LinuxBackend::Landlock)
-            && !filesystem.has_full_disk_write_access()
-        {
-            // Native best-effort Landlock on ABI 1/2 does not restrict truncate.
-            // Do not present those capabilities as a read-only filesystem.
-            let abi = unsafe {
-                libc::syscall(
-                    libc::SYS_landlock_create_ruleset,
-                    std::ptr::null::<u8>(),
-                    0,
-                    1,
-                )
-            };
-            ensure!(
-                abi >= 3,
-                "Landlock filesystem policy requires truncate enforcement (ABI 3 or later)"
-            );
-        }
         let proxy = if let Some(config) = request.proxy {
             Some(
                 NetworkProxy::builder()
@@ -188,6 +163,7 @@ mod upstream {
         }
         #[cfg(target_os = "macos")]
         let (mut command, setup) = {
+            let filesystem = permissions.file_system_sandbox_policy();
             let mut setup = setup;
             use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
             use codex_sandboxing::seatbelt::create_seatbelt_profile;
@@ -292,8 +268,7 @@ mod upstream {
                 network: proxy.as_ref(),
                 sandbox_policy_cwd: &cwd,
                 sandbox_exe: Some(&executable),
-                use_legacy_landlock: request.linux_backend
-                    == Some(crate::config::LinuxBackend::Landlock),
+                use_legacy_landlock: false,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
             })?;
             let mut command = Command::new(&native.command[0]);
@@ -323,6 +298,6 @@ mod upstream {
 
     #[cfg(target_os = "linux")]
     pub fn linux_sandbox_main() -> ! {
-        codex_linux_sandbox::run_main_with_target_setup(crate::native::linux_target_setup)
+        codex_linux_sandbox::run_main_with_target_setup(crate::linux_namespace::run)
     }
 }

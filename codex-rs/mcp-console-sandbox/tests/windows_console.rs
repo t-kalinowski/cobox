@@ -50,7 +50,7 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
         ),
     ] {
         let mut config = json!({
-            "version":2, "extends":":read-only", "network":"enabled",
+            "extends":":read-only", "network":"enabled",
             "windows_sandbox_level":"unelevated",
             "windows_state_dir":root.path().join("state"),
         });
@@ -86,7 +86,7 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
 
     let root = tempfile::tempdir()?;
     let config = json!({
-        "version": 2, "extends": ":read-only", "network": "enabled",
+        "extends": ":read-only", "network": "enabled",
         "windows_sandbox_level": "unelevated",
         "windows_state_dir": root.path().join("state"),
         "lifecycle": {"private_tmp": {"parent": root.path(), "environment": ["TMPDIR"]}},
@@ -130,7 +130,6 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
 fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let config = json!({
-        "version": 2,
         "extends": ":read-only",
         "network": "enabled",
         "windows_sandbox_level": "unelevated",
@@ -171,7 +170,7 @@ fn environment_transport_preserves_target_arguments() -> anyhow::Result<()> {
         .env(
             "CONSOLE_POLICY",
             json!({
-                "version": 2, "extends": ":read-only", "network": "enabled",
+                "extends": ":read-only", "network": "enabled",
                 "windows_sandbox_level": "unelevated",
                 "windows_state_dir": root.path().join("state"),
             })
@@ -196,16 +195,15 @@ fn invalid_configuration_fails_before_creating_state() -> anyhow::Result<()> {
     for (payload, diagnostic) in [
         ("not-json".to_owned(), "invalid configuration JSON (Syntax"),
         (
-            json!({"version": 2, "extends": ":read-only", "windows_state_dir": "relative"})
-                .to_string(),
+            json!({"extends": ":read-only", "windows_state_dir": "relative"}).to_string(),
             "invalid configuration JSON (Data",
         ),
         (
-            json!({"version": 2, "extends": ":read-only", "workspace": "relative"}).to_string(),
+            json!({"extends": ":read-only", "workspace": "relative"}).to_string(),
             "invalid configuration JSON (Data",
         ),
         (
-            json!({"version": 2, "extends": ":read-only", "environment": []}).to_string(),
+            json!({"extends": ":read-only", "environment": []}).to_string(),
             "invalid configuration JSON (Data",
         ),
     ] {
