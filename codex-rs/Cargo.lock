@@ -3894,6 +3894,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-mcp-console-sandbox-windows"
+version = "0.160.1"
+dependencies = [
+ "anyhow",
+ "codex-utils-process",
+ "codex-utils-pty",
+ "codex-windows-sandbox",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "codex-mcp-extension"
 version = "0.160.1"
 dependencies = [

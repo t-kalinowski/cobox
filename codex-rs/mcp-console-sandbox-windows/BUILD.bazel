@@ -1,0 +1,57 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//:defs.bzl", "WINDOWS_RUSTC_LINK_FLAGS")
+
+# The setup launcher requests UAC explicitly. Preserve the upstream asInvoker
+# manifest, scoped to this helper, in Cargo and both Windows Bazel ABIs.
+genrule(
+    name = "setup-manifest-resource",
+    srcs = ["mcp-console-sandbox-setup.manifest"],
+    outs = ["mcp-console-sandbox-setup.manifest.res"],
+    cmd = " && ".join([
+        "printf '1 24 \"%s\"\\n' \"$(location :mcp-console-sandbox-setup.manifest)\" > \"$(@D)/mcp-console-sandbox-setup.manifest.rc\"",
+        "$(location @llvm//tools:llvm-rc) -no-preprocess \"$(@D)/mcp-console-sandbox-setup.manifest.rc\"",
+    ]),
+    tools = ["@llvm//tools:llvm-rc"],
+)
+
+rust_binary(
+    name = "mcp-console-sandbox-setup",
+    srcs = ["src/setup.rs"],
+    compile_data = select({
+        "@llvm//constraints/windows/abi:gnullvm": [":setup-manifest-resource"],
+        "@llvm//constraints/windows/abi:msvc": ["mcp-console-sandbox-setup.manifest"],
+        "//conditions:default": [],
+    }),
+    crate_root = "src/setup.rs",
+    edition = "2024",
+    rustc_flags = WINDOWS_RUSTC_LINK_FLAGS + select({
+        "@llvm//constraints/windows/abi:gnullvm": [
+            "-C",
+            "link-arg=$(location :setup-manifest-resource)",
+        ],
+        "@llvm//constraints/windows/abi:msvc": [
+            "-C",
+            "link-arg=/MANIFEST:EMBED",
+            "-C",
+            "link-arg=/MANIFESTINPUT:$(location :mcp-console-sandbox-setup.manifest)",
+        ],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(),
+)
+
+rust_binary(
+    name = "mcp-console-sandbox-runner",
+    srcs = ["src/runner.rs"],
+    # Make the #[path] module and its children available at their original paths.
+    compile_data = ["//codex-rs/windows-sandbox-rs:package-files"],
+    crate_root = "src/runner.rs",
+    edition = "2024",
+    rustc_flags = WINDOWS_RUSTC_LINK_FLAGS,
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(),
+)
