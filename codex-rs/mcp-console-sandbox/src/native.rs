@@ -11,7 +11,9 @@ use std::io::Write;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 #[derive(Serialize, Deserialize)]
@@ -30,7 +32,7 @@ pub struct Seatbelt {
     pub parameters: Vec<(String, String)>,
 }
 
-fn accept(descriptor: OwnedFd) -> Result<(TargetSetup, File)> {
+pub(super) fn accept(descriptor: OwnedFd) -> Result<(TargetSetup, File)> {
     // The upstream restricted filter allows descriptor read/write, but denies
     // the sendto syscall used by UnixStream::write on Linux.
     let mut stream = File::from(descriptor);
@@ -47,50 +49,6 @@ fn accept(descriptor: OwnedFd) -> Result<(TargetSetup, File)> {
     stream.read_exact(&mut payload)?;
     let setup = serde_json::from_slice(&payload).context("native setup JSON")?;
     Ok((setup, stream))
-}
-
-#[cfg(target_os = "linux")]
-pub fn linux_target_setup(command: &mut Command, descriptor: OwnedFd) -> std::io::Result<OwnedFd> {
-    // Re-arm after bubblewrap's credential/exec boundary, before readiness.
-    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let (setup, channel) = match accept(descriptor) {
-        Ok(value) => value,
-        Err(error)
-            if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
-                matches!(
-                    e.kind(),
-                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
-                )
-            }) =>
-        {
-            std::process::exit(0)
-        }
-        Err(error) => return Err(std::io::Error::other(error)),
-    };
-    use std::os::fd::AsRawFd;
-    if unsafe { libc::fcntl(channel.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // Install the target environment only after enforcement and helper setup.
-    // Only managed proxy values rewritten in the namespace cross this boundary.
-    command.env_clear().envs(&setup.environment);
-    if !setup.environment.contains_key("PWD") {
-        command.env("PWD", std::env::current_dir()?);
-    }
-    for name in setup.proxy_environment {
-        let value = std::env::var_os(&name)
-            .ok_or_else(|| std::io::Error::other("missing native proxy environment"))?;
-        command.env(name, value);
-    }
-    for name in setup.excluded_environment {
-        command.env_remove(name);
-    }
-    unsafe {
-        command.pre_exec(move || setup.signals.restore());
-    }
-    Ok(channel.into())
 }
 
 #[cfg(target_os = "macos")]

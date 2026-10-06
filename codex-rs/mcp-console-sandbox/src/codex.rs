@@ -90,7 +90,6 @@ mod upstream {
             }
         }
         let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network);
-        let filesystem = permissions.file_system_sandbox_policy();
         let manager = SandboxManager::default();
         // Managed launches require native init for target setup and retirement,
         // even when no filesystem or network restrictions were requested.
@@ -164,6 +163,7 @@ mod upstream {
         }
         #[cfg(target_os = "macos")]
         let (mut command, setup) = {
+            let filesystem = permissions.file_system_sandbox_policy();
             let mut setup = setup;
             use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
             use codex_sandboxing::seatbelt::create_seatbelt_profile;
@@ -298,6 +298,6 @@ mod upstream {
 
     #[cfg(target_os = "linux")]
     pub fn linux_sandbox_main() -> ! {
-        codex_linux_sandbox::run_main_with_target_setup(crate::native::linux_target_setup)
+        codex_linux_sandbox::run_main_with_target_setup(crate::linux_namespace::run)
     }
 }

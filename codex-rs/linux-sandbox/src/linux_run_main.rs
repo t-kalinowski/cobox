@@ -176,7 +176,9 @@ pub fn run_main() -> ! {
     run_main_with_target_setup(None)
 }
 
-pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) -> ! {
+pub(crate) fn run_main_with_target_setup(
+    setup: Option<fn(Vec<String>, std::os::fd::OwnedFd) -> !>,
+) -> ! {
     let LandlockCommand {
         sandbox_policy_cwd,
         command_cwd,
@@ -277,45 +279,29 @@ pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) 
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
 
-        use std::os::unix::process::CommandExt;
-        let signal_mask = ForwardedSignalMask::block();
-        let mut target = std::process::Command::new(&command[0]);
-        target.args(&command[1..]);
-        unsafe {
-            target.pre_exec(move || {
-                reset_forwarded_signal_handlers_to_default();
-                signal_mask.restore();
-                Ok(())
-            });
-        }
-        let control = if let Some(fd) = target_setup_fd {
+        if let Some(fd) = target_setup_fd {
             let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
-            Some(
-                setup.unwrap_or_else(|| panic!("missing native hook"))(&mut target, descriptor)
-                    .unwrap_or_else(|error| {
-                        eprintln!("native target setup: {error}");
-                        std::process::exit(1);
-                    }),
-            )
-        } else {
-            None
-        };
-        // The namespace-init loop below reaps this child with waitpid(-1).
-        #[expect(clippy::zombie_processes)]
-        let child = target
-            .spawn()
-            .unwrap_or_else(|error| panic!("spawn sandboxed command: {error}"));
-        let command_pid = child.id() as libc::pid_t;
-        drop(target);
+            setup.unwrap_or_else(|| panic!("missing native hook"))(command, descriptor);
+        }
+
+        let signal_mask = ForwardedSignalMask::block();
+        let command_pid = unsafe { libc::fork() };
+        if command_pid < 0 {
+            let err = std::io::Error::last_os_error();
+            panic!("failed to fork sandboxed command: {err}");
+        }
+
+        if command_pid == 0 {
+            reset_forwarded_signal_handlers_to_default();
+            signal_mask.restore();
+            exec_or_panic(command);
+        }
 
         // Only the command owns its input after fork. Retaining a reader here
         // would hide command-side stdin closure from the caller's writer.
         close_fd_or_panic(libc::STDIN_FILENO, "release namespace init stdin");
         let signal_forwarders = install_bwrap_signal_forwarders(command_pid);
         signal_mask.restore();
-        if let Some(control) = control {
-            crate::target_control::wait(control, command_pid);
-        }
         loop {
             let mut status = 0;
             let reaped_pid = unsafe { libc::waitpid(-1, &mut status, 0) };
@@ -888,7 +874,6 @@ fn release_child_exec_start(write_fd: libc::c_int) {
     }
 }
 
-#[derive(Clone, Copy)]
 struct ForwardedSignalMask {
     previous: libc::sigset_t,
 }
@@ -1452,7 +1437,7 @@ fn hash_path(path: &Path) -> u64 {
     hash
 }
 
-pub(crate) fn exit_with_wait_status(status: libc::c_int) -> ! {
+fn exit_with_wait_status(status: libc::c_int) -> ! {
     if libc::WIFEXITED(status) {
         std::process::exit(libc::WEXITSTATUS(status));
     }

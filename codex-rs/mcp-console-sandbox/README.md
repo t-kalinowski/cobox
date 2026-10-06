@@ -40,7 +40,7 @@ Portable Linux pairs use `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-m
 
 Build and strip `bwrap` first, export its SHA-256 as `CODEX_BWRAP_SHA256`, then build the runner with the same target and `--locked --release`. Inspect both with `readelf -W -l -d -V`: portable pairs must have no interpreter, `NEEDED` libraries, or symbol-version requirements. They need no host libcap or OpenSSL runtime libraries. Their target command still needs its own interpreter, libraries, and compatible libc; static runner artifacts do not establish portability of an application's R, Python, or SQL runtime.
 
-For Linux Cargo tests, build the ordinary debug helper before running the executable suite:
+For Linux Cargo tests, build the ordinary debug helper before running the executable suite. Its `native_entry` cases exercise the native entry point without a standalone descriptor as well as the standalone hook:
 
 ```console
 cargo build --locked -p codex-bwrap --bin bwrap
@@ -48,7 +48,7 @@ env "CARGO_BIN_EXE_bwrap=$sandbox_target_dir/debug/bwrap" \
   just test -p mcp-console-sandbox --retries 0
 ```
 
-On Linux and macOS, Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required. For Windows Cargo and Bazel builds, tests, and companion packaging, follow the [Windows build instructions](WINDOWS.md#build-and-distribute).
+On Linux and macOS, Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required. Both crates glob their Rust implementation files; the standalone test rule explicitly lists `tests/lifecycle/native_entry_tests.rs`. The control implementation is compiled only in the standalone package. For Windows Cargo and Bazel builds, tests, and companion packaging, follow the [Windows build instructions](WINDOWS.md#build-and-distribute).
 
 The [focused workflow](../../.github/workflows/mcp-console-sandbox.yml) runs macOS and GNU Linux executable/native suites and tests both musl architectures' transport and lifecycle contracts. GNU fault-injection tests stay separate because their loader interposers cannot instrument static executables. [REBASE.md](REBASE.md) contains the full upgrade checklist, macOS native-test exclusions, and revision-specific results; workflow definitions alone do not establish that a run passed. [INTEGRATION.md](INTEGRATION.md) inventories the code carried over upstream. [UPSTREAM_CHANGES.md](UPSTREAM_CHANGES.md) records inherited enforcement and compatibility changes by release.
 

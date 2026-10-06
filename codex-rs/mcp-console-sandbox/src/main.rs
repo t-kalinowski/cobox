@@ -6,6 +6,8 @@ mod codex;
 mod config;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod launch;
+#[cfg(target_os = "linux")]
+mod linux_namespace;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod native;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -16,6 +18,8 @@ mod profiles;
 mod signals;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage;
+#[cfg(target_os = "linux")]
+mod target_control;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]

@@ -9,6 +9,9 @@ mod codex;
 mod configuration;
 #[path = "lifecycle/lifecycle_tests.rs"]
 mod lifecycle;
+#[cfg(target_os = "linux")]
+#[path = "lifecycle/native_entry_tests.rs"]
+mod native_entry;
 #[path = "lifecycle/ownership_tests.rs"]
 mod ownership;
 #[path = "policy/policy_tests.rs"]

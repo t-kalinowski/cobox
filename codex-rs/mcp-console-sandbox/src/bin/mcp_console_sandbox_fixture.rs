@@ -177,6 +177,33 @@ fn main() -> anyhow::Result<()> {
             }
             anyhow::bail!("signal did not terminate the fixture");
         }
+        #[cfg(target_os = "linux")]
+        "signal-init" => {
+            // Exercise signals delivered to namespace init itself, independently
+            // of the runner's control channel. sigwait is the forwarding barrier.
+            let forwarded = [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
+            unsafe {
+                let mut mask = std::mem::zeroed();
+                libc::sigemptyset(&mut mask);
+                for signal in forwarded {
+                    libc::sigaddset(&mut mask, signal);
+                }
+                anyhow::ensure!(
+                    libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut()) == 0
+                );
+                anyhow::ensure!(
+                    libc::getppid() == 1,
+                    "target must have namespace init as parent"
+                );
+                for signal in forwarded {
+                    anyhow::ensure!(libc::kill(1, signal) == 0);
+                    let mut received = 0;
+                    anyhow::ensure!(libc::sigwait(&mask, &mut received) == 0);
+                    anyhow::ensure!(received == signal, "init forwarded the wrong signal");
+                }
+            }
+            std::process::exit(42);
+        }
         "descriptors" => {
             #[cfg(target_os = "linux")]
             let directory = "/proc/self/fd";

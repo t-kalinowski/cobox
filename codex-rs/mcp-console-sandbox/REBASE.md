@@ -33,6 +33,10 @@ The executable commands and job definitions live in [.github/workflows/mcp-conso
 
 The 0.154.0 workflow excluded `create_seatbelt_args_with_read_only_git_and_codex_subpaths` and `create_seatbelt_args_with_read_only_git_pointer_file`. Both failed at that release because the stderr matcher rejected Bash's `line 1:` prefix. Both pass on the macOS host used for the 0.160.1 reapplication, so the current workflow runs the complete native suite.
 
+## Linux footprint consolidation
+
+The [2026-10-06 Linux report](LINUX_FOOTPRINT_2026_10_06.md) records removal of standalone Landlock and restoration of ordinary native fork/exec/wait, after the Windows consolidation. Keep the post-enforcement handoff non-returning: the standalone package owns target setup, spawning, signal handling and namespace-init control/reaping. Preserve upstream mount verification, proxy routing and enforcement before that handoff, and retain the shared stdin-transfer and fresh `--ro-bind-data` descriptor fixes. Recheck both entry points when rebasing; the historical Landlock results below describe the former interface.
+
 ## Validation of the 0.160.1 reapplication
 
 On 2026-10-06, the current net patch from `mcp-console/sandbox-runner/rust-v0.154.0` at `56d877c8e235af07adba2751d3d077ec27d030b2` was reapplied to upstream `rust-v0.160.1`, commit `d27764b82f7118f674371e6d6e76271d9d606edb`, on `mcp-console/sandbox-runner/rust-v0.160.1`. The original local patch branch and its history were preserved. Native integration, the runner and contracts, and build registration are separate commits through `5887b51abf488e22d5e1d8b888d21c0eef6968a3`.
