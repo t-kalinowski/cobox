@@ -76,6 +76,9 @@ pub(crate) struct BwrapOptions {
     /// Whether the host exposes WSLg's duplicate distro root, which must be hidden
     /// when constructing a restricted filesystem view.
     pub mask_wslg_distro: bool,
+    /// Retain namespace init even when filesystem and network access are full.
+    /// Target setup and supervised lifetime callers need its control channel.
+    pub require_process_isolation: bool,
     /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
@@ -91,6 +94,7 @@ impl Default for BwrapOptions {
             network_mode: BwrapNetworkMode::FullAccess,
             mask_wsl_interop: false,
             mask_wslg_distro: false,
+            require_process_isolation: false,
             glob_scan_max_depth: None,
         }
     }
@@ -242,7 +246,7 @@ impl SyntheticMountTarget {
 /// with explicit writable roots and read-only subpaths layered afterward.
 ///
 /// When the policy grants full disk write access and full network access, this
-/// returns `command` unchanged so we avoid unnecessary sandboxing overhead.
+/// returns `command` unchanged unless process isolation is required.
 /// If network isolation is requested, we still wrap with bubblewrap so network
 /// namespace restrictions apply while preserving full filesystem access.
 pub(crate) fn create_bwrap_command_args(
@@ -257,7 +261,9 @@ pub(crate) fn create_bwrap_command_args(
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below.
     if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
-        return if options.network_mode == BwrapNetworkMode::FullAccess {
+        return if options.network_mode == BwrapNetworkMode::FullAccess
+            && !options.require_process_isolation
+        {
             Ok(BwrapArgs {
                 args: command,
                 preserved_files: Vec::new(),
@@ -1253,10 +1259,11 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if bwrap_args.preserved_files.is_empty() {
-        bwrap_args.preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = bwrap_args.preserved_files[0].as_raw_fd().to_string();
+    // Bubblewrap consumes and closes each --ro-bind-data descriptor. Reusing a
+    // number can read an unrelated descriptor reopened by an earlier mount.
+    let null_file = File::open("/dev/null")?;
+    let null_fd = null_file.as_raw_fd().to_string();
+    bwrap_args.preserved_files.push(null_file);
     bwrap_args.args.push("--ro-bind-data".to_string());
     bwrap_args.args.push(null_fd);
     bwrap_args.args.push(path_to_string(path));
