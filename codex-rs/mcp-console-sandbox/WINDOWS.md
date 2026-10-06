@@ -15,11 +15,34 @@ just test --locked --release -p codex-mcp-console-sandbox --retries 0
 
 Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
 
-For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged. Bazel builds the equivalent targets:
+For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged.
+
+For local Bazel builds, start an **x64 Visual Studio Developer PowerShell** and run from the repository root. Install Git for Windows and use its Bash executable explicitly (adjust the path if installed elsewhere). Use a short, writable output directory reserved for this checkout. Match upstream CI's MSVC host platform and forward its Windows SDK environment. The existing test toolchain allows GNU LLVM test executables to run on the MSVC host:
 
 ```powershell
-bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-setup //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-runner
+$env:BAZEL_SH = "$env:ProgramFiles/Git/bin/bash.exe"
+$windowsBazel = @(
+    '--host_platform=//:local_windows_msvc',
+    '--platforms=//:local_windows',
+    '--workspace_status_command=./scripts/workspace-status.cmd',
+    '--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain',
+    "--shell_executable=$env:BAZEL_SH"
+)
+foreach ($name in @(
+    'INCLUDE', 'LIB', 'LIBPATH', 'PATH', 'UCRTVersion',
+    'UniversalCRTSdkDir', 'VCINSTALLDIR', 'VCToolsInstallDir',
+    'WindowsLibPath', 'WindowsSdkBinPath', 'WindowsSdkDir',
+    'WindowsSDKLibVersion', 'WindowsSDKVersion'
+)) {
+    if ([Environment]::GetEnvironmentVariable($name)) {
+        $windowsBazel += "--action_env=$name", "--host_action_env=$name"
+    }
+}
+bazel --output_base=C:/b/cobox --noexperimental_remote_repo_contents_cache build @windowsBazel //codex-rs/mcp-console-sandbox:mcp-console-sandbox //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-setup //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-runner
+bazel --output_base=C:/b/cobox --noexperimental_remote_repo_contents_cache test @windowsBazel --test_env=PATH --test_arg=--test-threads=1 //codex-rs/mcp-console-sandbox:windows-cli-test //codex-rs/mcp-console-sandbox:windows-console-test //codex-rs/mcp-console-sandbox:windows-native-test //codex-rs/mcp-console-sandbox:windows-lifecycle-test
 ```
+
+`local_windows` keeps the GNU LLVM target ABI; `local_windows_msvc` selects the ABI required by the Windows-hosted Rust compiler's proc-macros and build tools. A bare Windows Bazel invocation defaults the host to GNU LLVM, causing Rust to reject proc-macro DLLs such as `time_macros` with `E0463`. This is a build configuration mismatch, not a missing crate or a reason to patch its source. Short output paths also avoid the Windows linker path-length failure. Select the `.cmd` workspace-status script explicitly so `cmd.exe` does not try to open the `.sh` script through Windows file associations. These local settings mirror the existing upstream CI setup without changing shared Bazel defaults. The ordinary Bazel tests skip the two opt-in elevated network cases; run those against explicitly provisioned state using the Cargo recipe below.
 
 Stage the three executables from those targets together under their existing names. The setup manifest retains `asInvoker`; elevation is explicitly requested by the native setup launcher. The command runner retains the Windows GUI subsystem. See [INTEGRATION.md](INTEGRATION.md#windows-integration) for module and resource resolution.
 
