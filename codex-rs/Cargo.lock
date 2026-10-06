@@ -3894,17 +3894,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-mcp-console-sandbox-windows"
-version = "0.160.1"
-dependencies = [
- "anyhow",
- "codex-utils-process",
- "codex-utils-pty",
- "codex-windows-sandbox",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "codex-mcp-extension"
 version = "0.160.1"
 dependencies = [
@@ -10160,6 +10149,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "mcp-console-sandbox-windows"
+version = "0.160.1"
+dependencies = [
+ "anyhow",
+ "codex-utils-process",
+ "codex-utils-pty",
+ "codex-windows-sandbox",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

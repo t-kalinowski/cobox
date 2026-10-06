@@ -28,17 +28,17 @@ jobs:
         with:
           tool: nextest@0.9.144,just@1.51.0
       - name: Build standalone debug executable and companions
-        run: cargo build --locked -p codex-mcp-console-sandbox -p codex-mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+        run: cargo build --locked -p codex-mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
       - name: Run Windows executable contracts
         run: just test --locked -p codex-mcp-console-sandbox --retries 0
       - name: Check shared bridge and product identity
         run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(stdio_bridge::) | test(wfp::product_tests::)'
       - name: Build standalone release executable and companions
-        run: cargo build --locked --release -p codex-mcp-console-sandbox -p codex-mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+        run: cargo build --locked --release -p codex-mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
       - name: Exercise release artifacts
         run: just test --locked --release -p codex-mcp-console-sandbox --retries 0
       - name: Lint native executable
-        run: cargo clippy --locked -p codex-mcp-console-sandbox -p codex-mcp-console-sandbox-windows --all-targets -- -D warnings
+        run: cargo clippy --locked -p codex-mcp-console-sandbox -p mcp-console-sandbox-windows --all-targets -- -D warnings
 
   linux-release:
     strategy:
