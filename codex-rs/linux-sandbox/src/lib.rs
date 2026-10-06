@@ -59,6 +59,9 @@ pub type TargetSetupHook = fn(
 /// owns that descriptor and runs after enforcement, before spawning the target.
 /// It returns the close-on-exec native control descriptor and establishes target
 /// pre-exec state. The workload must never inherit this descriptor.
+/// Standalone callers can explicitly select restricted Landlock without the
+/// ordinary helper's app-server socket isolation. They must provide any
+/// required protection of app-server sockets themselves.
 #[cfg(target_os = "linux")]
 pub fn run_main_with_target_setup(setup: TargetSetupHook) -> ! {
     linux_run_main::run_main_with_target_setup(Some(setup));

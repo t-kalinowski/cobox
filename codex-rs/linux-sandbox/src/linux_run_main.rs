@@ -225,7 +225,21 @@ pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) 
         file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
-    ensure_legacy_landlock_mode_supports_policy(use_legacy_landlock, &file_system_sandbox_policy);
+    // Standalone setup preserves explicit Landlock selection and its supported
+    // policies. Ordinary helpers require bubblewrap to isolate app-server sockets.
+    if target_setup_fd.is_none() {
+        ensure_legacy_landlock_mode_supports_policy(
+            use_legacy_landlock,
+            &file_system_sandbox_policy,
+        );
+    } else if use_legacy_landlock
+        && file_system_sandbox_policy
+            .needs_direct_runtime_enforcement(network_sandbox_policy, &sandbox_policy_cwd)
+    {
+        panic!(
+            "permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock"
+        );
+    }
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.

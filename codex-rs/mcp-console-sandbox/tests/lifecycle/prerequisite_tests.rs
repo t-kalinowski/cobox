@@ -20,6 +20,23 @@ fn explicit_landlock_runs_without_namespace_helpers_and_preserves_policy_checks(
     let output = run(frame(&request), &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"explicit landlock\n");
+    // Native invocations without trusted standalone setup retain upstream's
+    // app-server socket isolation requirement.
+    let profile =
+        serde_json::to_string(&codex_protocol::models::PermissionProfile::read_only()).unwrap();
+    let output = runner(directory.path())
+        .args(["--sandbox-policy-cwd", "/", "--permission-profile"])
+        .arg(profile)
+        .args(["--use-legacy-landlock", "--", "/bin/echo", "must not run"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("filesystem-restricted execution requires bubblewrap"),
+        "{output:?}"
+    );
     request["lifecycle"] = json!({"private_tmp": {"environment": ["TMPDIR"]}});
     let output = run(frame(&request), &[]);
     assert!(!output.status.success(), "{output:?}");
