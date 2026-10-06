@@ -477,7 +477,9 @@ pub fn main() -> Result<()> {
     let ret = real_main(&mut setup_mode);
     if let Err(e) = &ret {
         // Best-effort: log unexpected top-level errors.
-        if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Codex
+            && let Ok(codex_home) = std::env::var("CODEX_HOME")
+        {
             let sbx_dir = sandbox_dir(Path::new(&codex_home));
             let _ = std::fs::create_dir_all(&sbx_dir);
             // An unparsed payload must not enable writes to an existing log.
@@ -538,6 +540,11 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
         ))
     })?;
     *setup_mode = Some(payload.mode);
+    if payload.offline_username != crate::sandbox_name(crate::OFFLINE_USERNAME)
+        || payload.online_username != crate::sandbox_name(crate::ONLINE_USERNAME)
+    {
+        anyhow::bail!("sandbox account names do not match this setup helper");
+    }
     if payload.version != SETUP_VERSION {
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
@@ -813,6 +820,23 @@ fn configure_offline_sandbox_network(
             format!("ensure offline network blocks failed: {err}"),
         )));
     }
+    let count = crate::install_loopback_filters_for_account(
+        &payload.offline_username,
+        &crate::WindowsSandboxProvisioningSettings {
+            proxy_ports: payload.proxy_ports.clone(),
+            allow_local_binding: payload.allow_local_binding,
+        },
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+            format!("install offline loopback filters failed: {err}"),
+        ))
+    })?;
+    log_line(
+        log,
+        &format!("installed {count} offline loopback WFP filters"),
+    )?;
     Ok(())
 }
 

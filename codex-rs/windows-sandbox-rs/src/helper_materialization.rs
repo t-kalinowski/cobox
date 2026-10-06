@@ -31,17 +31,18 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 
 fn legacy_lookup() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = bundled_executable_path_for_exe(&exe, COMMAND_RUNNER_EXE)
+        && let Some(candidate) =
+            bundled_executable_path_for_exe(&exe, &crate::sandbox_name(COMMAND_RUNNER_EXE))
     {
         return candidate;
     }
-    PathBuf::from(COMMAND_RUNNER_EXE)
+    PathBuf::from(crate::sandbox_name(COMMAND_RUNNER_EXE).as_ref())
 }
 
 pub(crate) fn resolve_command_runner(codex_home: &Path, log_dir: Option<&Path>) -> Result<PathBuf> {
     if registered_core_requested() {
         let exe = std::env::current_exe().context("resolve registered Core helper source")?;
-        let direct_path = exe.with_file_name(COMMAND_RUNNER_EXE);
+        let direct_path = exe.with_file_name(crate::sandbox_name(COMMAND_RUNNER_EXE).as_ref());
         log_note(
             &format!(
                 "helper launch resolution: using app-contained command-runner path {}",
@@ -155,12 +156,14 @@ fn copy_runner_if_needed(codex_home: &Path, log_dir: Option<&Path>) -> Result<Pa
 
 fn sibling_source_path() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    bundled_executable_path_for_exe(&exe, COMMAND_RUNNER_EXE).ok_or_else(|| {
-        anyhow!(
-            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
-            exe.display()
-        )
-    })
+    bundled_executable_path_for_exe(&exe, &crate::sandbox_name(COMMAND_RUNNER_EXE)).ok_or_else(
+        || {
+            anyhow!(
+                "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
+                exe.display()
+            )
+        },
+    )
 }
 
 pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
@@ -189,7 +192,9 @@ pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Op
 }
 
 fn materialized_file_name(suffix: &str) -> String {
-    format!("codex-command-runner-{suffix}.exe")
+    let name = crate::sandbox_name(COMMAND_RUNNER_EXE);
+    let stem = name.trim_end_matches(".exe");
+    format!("{stem}-{suffix}.exe")
 }
 
 fn helper_version_suffix(source: &Path) -> Result<String> {

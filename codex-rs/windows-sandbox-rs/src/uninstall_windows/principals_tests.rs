@@ -81,7 +81,7 @@ impl Drop for ProfileFixture {
     fn drop(&mut self) {
         let _ = self.stop();
         let result = if self.user.sid.is_empty() {
-            super::remove_sandbox_principal(self.user.name)
+            super::remove_sandbox_principal(&self.user.name)
         } else {
             self.user.remove()
         };
@@ -127,7 +127,7 @@ fn profile_cleanup_preserves_account_until_profile_can_be_deleted() -> Result<()
     );
     let mut fixture = ProfileFixture {
         user: SandboxUser {
-            name,
+            name: name.to_owned(),
             original_flags: user_info.usri1_flags,
             sid: Vec::new(),
         },

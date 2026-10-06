@@ -145,7 +145,7 @@ impl DesktopPolicy {
 }
 
 pub struct LaunchDesktop {
-    _private_desktop: PrivateDesktop,
+    _private_desktop: Option<PrivateDesktop>,
     startup_name: Vec<u16>,
 }
 
@@ -216,15 +216,24 @@ impl LaunchDesktop {
         let private_desktop = PrivateDesktop::create(logs_base_dir)?;
         let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
         Ok(Self {
-            _private_desktop: private_desktop,
+            _private_desktop: Some(private_desktop),
             startup_name,
         })
     }
 
-    /// Opens the caller-owned private desktop without creating one or falling back to Default.
+    /// Opens the selected private desktop. Console can explicitly opt into the
+    /// caller desktop with `Default`; every other name must identify a private desktop.
     pub fn open_private(name: &str) -> Result<Self> {
+        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+            && name == "Default"
+        {
+            return Ok(Self {
+                _private_desktop: None,
+                startup_name: to_wide("Winsta0\\Default"),
+            });
+        }
         if !name
-            .strip_prefix(PRIVATE_DESKTOP_PREFIX)
+            .strip_prefix(crate::sandbox_name(PRIVATE_DESKTOP_PREFIX).as_ref())
             .is_some_and(|nonce| {
                 !nonce.is_empty()
                     && nonce.len() <= 32
@@ -246,10 +255,10 @@ impl LaunchDesktop {
             anyhow::bail!("OpenDesktopW failed: {}", unsafe { GetLastError() });
         }
         Ok(Self {
-            _private_desktop: PrivateDesktop {
+            _private_desktop: Some(PrivateDesktop {
                 handle,
                 name: name.to_owned(),
-            },
+            }),
             startup_name: to_wide(format!("Winsta0\\{name}")),
         })
     }
@@ -311,7 +320,8 @@ pub(crate) fn shared_private_desktop_for_user(
         bInheritHandle: 0,
     };
     let mut rng = SmallRng::from_entropy();
-    let name = format!("{PRIVATE_DESKTOP_PREFIX}{:032x}", rng.r#gen::<u128>());
+    let prefix = crate::sandbox_name(PRIVATE_DESKTOP_PREFIX);
+    let name = format!("{prefix}{:032x}", rng.r#gen::<u128>());
     let name_wide = to_wide(&name);
     let handle = unsafe {
         CreateDesktopW(
@@ -355,7 +365,11 @@ struct PrivateDesktop {
 impl PrivateDesktop {
     fn create(logs_base_dir: Option<&Path>) -> Result<Self> {
         let mut rng = SmallRng::from_entropy();
-        let name = format!("CodexSandboxDesktop-{:x}", rng.r#gen::<u128>());
+        let name = format!(
+            "{}{:x}",
+            crate::sandbox_name(PRIVATE_DESKTOP_PREFIX),
+            rng.r#gen::<u128>()
+        );
         let name_wide = to_wide(&name);
         let handle = unsafe {
             CreateDesktopW(

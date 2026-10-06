@@ -102,6 +102,12 @@ mod path_normalization;
 #[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
+mod product;
+#[cfg(target_os = "windows")]
+pub use product::WindowsSandboxProduct;
+#[cfg(target_os = "windows")]
+pub use product::sandbox_name;
+#[cfg(target_os = "windows")]
 mod provisioning_client;
 #[cfg(target_os = "windows")]
 mod provisioning_protocol;
@@ -281,6 +287,8 @@ pub use hide_users::hide_current_user_profile_dir;
 pub use hide_users::hide_newly_created_users;
 #[cfg(target_os = "windows")]
 pub use identity::SandboxAccountCredentialMismatch;
+#[cfg(target_os = "windows")]
+pub use identity::check_sandbox_setup;
 #[cfg(target_os = "windows")]
 pub use identity::logon_existing_sandbox_account;
 #[cfg(target_os = "windows")]
@@ -481,6 +489,8 @@ pub use unified_exec::spawn_windows_sandbox_session_for_level;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
+pub use unified_exec::spawn_windows_sandbox_session_with_desktop;
+#[cfg(target_os = "windows")]
 pub use uninstall_windows::PreparedWindowsSandboxCleanup;
 #[cfg(target_os = "windows")]
 pub use uninstall_windows::clean_up_packaged_windows_sandbox;
@@ -488,6 +498,8 @@ pub use uninstall_windows::clean_up_packaged_windows_sandbox;
 pub use uninstall_windows::prepare_packaged_windows_sandbox_cleanup;
 #[cfg(target_os = "windows")]
 pub use uninstall_windows::prepare_packaged_windows_sandbox_cleanup_with_retained_tokens;
+#[cfg(target_os = "windows")]
+pub use wfp::install_loopback_filters_for_account;
 #[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
 #[cfg(target_os = "windows")]

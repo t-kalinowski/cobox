@@ -49,7 +49,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 5;
+pub const SETUP_VERSION: u32 = 6;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
@@ -348,8 +348,8 @@ fn run_setup_refresh_inner(
         offline_proxy_settings_for_request(&request, offline_proxy_settings_override);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
+        online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
         codex_home: request.codex_home.to_path_buf(),
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
@@ -889,11 +889,11 @@ fn find_setup_exe() -> PathBuf {
     {
         return setup_exe;
     }
-    PathBuf::from(SETUP_EXE_FILENAME)
+    PathBuf::from(crate::sandbox_name(SETUP_EXE_FILENAME).as_ref())
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
-    bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
+    bundled_executable_path_for_exe(exe, &crate::sandbox_name(SETUP_EXE_FILENAME))
 }
 
 fn report_helper_failure(
@@ -1151,8 +1151,8 @@ fn elevated_provisioning_payload(
         offline_proxy_settings_for_request(request, offline_proxy_settings_override);
     ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
+        online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
         codex_home: request.codex_home.to_path_buf(),
         command_cwd: request.codex_home.to_path_buf(),
         read_roots: Vec::new(),
@@ -1231,8 +1231,8 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
     }
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
+        online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
         codex_home: codex_home.to_path_buf(),
         command_cwd: codex_home.to_path_buf(),
         read_roots: Vec::new(),
