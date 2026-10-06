@@ -50,7 +50,7 @@ env "CARGO_BIN_EXE_bwrap=$sandbox_target_dir/debug/bwrap" \
 
 Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required.
 
-The [focused workflow](../../.github/workflows/mcp-console-sandbox.yml) runs macOS and GNU Linux executable/native suites and tests both musl architectures' transport and lifecycle contracts. GNU fault-injection tests stay separate because their loader interposers cannot instrument static executables. [REBASE.md](REBASE.md) contains the full upgrade checklist, macOS native-test exclusions, and revision-specific results; workflow definitions alone do not establish that a run passed. [INTEGRATION.md](INTEGRATION.md) inventories the code carried over upstream.
+The [focused workflow](../../.github/workflows/mcp-console-sandbox.yml) runs macOS and GNU Linux executable/native suites and tests both musl architectures' transport and lifecycle contracts. GNU fault-injection tests stay separate because their loader interposers cannot instrument static executables. [REBASE.md](REBASE.md) contains the full upgrade checklist, macOS native-test exclusions, and revision-specific results; workflow definitions alone do not establish that a run passed. [INTEGRATION.md](INTEGRATION.md) inventories the code carried over upstream. [UPSTREAM_CHANGES.md](UPSTREAM_CHANGES.md) records inherited enforcement and compatibility changes by release.
 
 ## Telemetry and network
 
