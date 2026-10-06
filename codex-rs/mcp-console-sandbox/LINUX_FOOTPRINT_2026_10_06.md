@@ -32,13 +32,13 @@ Counts classify paths present in the upstream tree separately from additive path
 | Modified upstream Linux files                                          |            4 |     190 / 25 |           4 |    109 / 12 |
 | Additive files inside the native Linux crate                           |            1 |       98 / 0 |           0 |       0 / 0 |
 | All modified upstream files, including unchanged Windows consolidation |           31 |    843 / 372 |          31 |   762 / 359 |
-| All additive files                                                     |           69 |    11006 / 0 |          71 |   11071 / 0 |
+| All additive files                                                     |           69 |    11006 / 0 |          71 |   11082 / 0 |
 
 The ordinary native fork/exec/wait and Landlock guard were restored; the remaining native change is 109 additions and 12 deletions, down from 190 and 25. The 98-line Console control implementation no longer lives in the upstream crate.
 
 ## Validation
 
-Validation used x86_64 Linux 6.8.0-146-generic, Ubuntu 24.04 userspace, Rust 1.95.0 and disabled test retries. GNU runtime checks used a disposable privileged container as UID 0 with namespace operations available; enforcement inside the runner remained enabled. This is not a non-root compatibility claim.
+Validation used x86_64 Linux 6.8.0-146-generic, Ubuntu 24.04 userspace, Rust 1.95.0 and disabled test retries. Initial GNU runtime checks used a disposable privileged container as UID 0 with namespace operations available; enforcement inside the runner remained enabled. The subsequent host validation below ran as UID 1000.
 
 Before implementation, the debug build and all 97 standalone contracts passed. The initial native run passed 279 tests and failed 14 because the container UID did not own the host-mounted fixture cwd; metadata placeholder creation failed before workloads ran. With a root-owned copy of the native test crate bind-mounted only inside the container, all 293 native tests passed. No test assertions, enforcement rules or host sysctls were changed for that correction. Three ignored native tests are internal subprocess fixtures exercised by their enclosing tests.
 
@@ -61,11 +61,19 @@ The complete GNU suites cover managed proxy routing, target loader/environment i
 
 The musl build followed the pinned release recipe with Zig 0.14.0, musl GCC, pinned libcap/OpenSSL and the stripped helper's embedded SHA-256. These were actual x86_64 runtime checks, not cross-compilation. No aarch64, macOS or Windows runtime checks were performed in this pass.
 
-Host `bazel test` built successfully but its baseline runtime passed 88 and failed 9: AppArmor blocked bundled namespace setup, and repeated copies of read-only Bazel executables failed for the ordinary user. The candidate Bazel suite was therefore run from its real, materialized runfiles in the same namespace-capable container and passed. This does not claim the ordinary host's Bazel runtime limitations were fixed.
+Host `bazel test` built successfully but its baseline runtime passed 88 and failed 9: AppArmor blocked bundled namespace setup, and repeated copies of read-only Bazel executables failed for the ordinary user. The candidate Bazel suite was therefore run from its real, materialized runfiles in the same namespace-capable container and passed. Those failures were subsequently reproduced and corrected in the host validation below.
 
 The scoped argument-comment lint and `just fix -p mcp-console-sandbox -p codex-linux-sandbox` passed; Clippy reported an existing unused import in the core crate. `just fmt` completed. Its unrelated justfile formatting was discarded. Tests preceded these final formatting/lint passes, following the repository workflow.
 
-For the unversioned-protocol follow-up, both transport acceptance tests first failed without the version field. After removing the field and validation, all 100 GNU debug, 100 GNU release and 100 Bazel-built executable tests passed. The rebuilt x86_64 musl release runner passed 35 transport, lifecycle, native-entry, configuration and documented-payload cases; 65 cases were excluded by the selector. The static pair passed ELF checks again, and the Python bootstrap example ran successfully. The native implementation was unchanged from the hook revision and its 293-test result above; that suite was not repeated. No macOS or Windows runtime checks were available for this follow-up; their payloads were updated to the same shared schema.
+For the unversioned-protocol follow-up, both transport acceptance tests first failed without the version field. After removing the field and validation, all 100 GNU debug, 100 GNU release and 100 Bazel-built executable tests passed. The rebuilt x86_64 musl release runner passed 35 transport, lifecycle, native-entry, configuration and documented-payload cases; 65 cases were excluded by the selector. The static pair passed ELF checks again, and the Python bootstrap example ran successfully. The native implementation was unchanged from the hook revision and its 293-test result above; that suite was not repeated at that stage. No macOS or Windows runtime checks were available for this follow-up; their payloads were updated to the same shared schema.
+
+### Host validation
+
+After unversioning, ordinary host `bazel test` reproduced 92 passes and eight failures: two read-only executable-copy failures and six namespace failures. The copy fixture now uses `cp --remove-destination` so repeated launches replace the staged inode. It preserves executable permissions, including Bazel's mode 0555, and retains the separate copy process that prevents inherited writable descriptors from causing `ETXTBSY`. The 12 existing configuration contracts passed under both Cargo and Bazel after this change, before the host namespace setting changed.
+
+The development host now sets `kernel.apparmor_restrict_unprivileged_userns = 0` through `/etc/sysctl.d/90-local-userns.conf`, matching the Linux CI setting. This enables unprivileged user namespaces systemwide while AppArmor remains enabled. `unshare --user --map-root-user true` succeeds. The sysctl is local host configuration; runner enforcement sources are unchanged.
+
+With that setting, all 393 Cargo tests passed directly as UID 1000: 293 native Linux/sandboxing/bubblewrap tests and 100 standalone executable contracts, with three internal subprocess fixtures skipped. A fresh host `bazel test` passed all 100 executable contracts. Retries were disabled, and Bazel test-result caching was disabled. These runs used the ordinary host workspace and helpers, without the earlier root/container fixture workaround.
 
 ## Downstream consumers
 
