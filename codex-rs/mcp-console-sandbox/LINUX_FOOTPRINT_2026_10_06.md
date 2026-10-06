@@ -1,10 +1,10 @@
 # Linux standalone footprint reduction
 
-This pass started from the fetched tip of `mcp-console/sandbox-runner/rust-v0.160.1`, `5bdf256e9`, including the landed Windows consolidation. It compares the net patch with the recorded upstream base, `rust-v0.160.1` at `d27764b82f7118f674371e6d6e76271d9d606edb`. The Landlock removal and namespace hook refactor are separate commits. No Windows backend or companion source changed.
+This pass started from the fetched tip of `mcp-console/sandbox-runner/rust-v0.160.1`, `5bdf256e9`, including the landed Windows consolidation. It compares the net patch with the recorded upstream base, `rust-v0.160.1` at `d27764b82f7118f674371e6d6e76271d9d606edb`. The Landlock removal and namespace hook refactor are separate commits. No Windows backend or companion source changed. A follow-up removes shared protocol versioning for the pinned, single consumer; platform test payloads follow that unversioned contract.
 
 ## Interface and ownership
 
-Standalone `linux_backend: "landlock"` is removed. Both protocol-2 transports reject it before native setup, with a removal diagnostic; there is no reinterpretation or fallback. Omitted, null and explicit bubblewrap retain supervision. The shared bootstrap descriptor, fully unrestricted supervision, external-sandbox contract, and permission semantics remain unchanged. Upstream's native Landlock implementation remains intact, and its ordinary policy/app-server-socket guard is restored without a standalone exception.
+Standalone `linux_backend: "landlock"` is removed. Both transports reject it before native setup, with a removal diagnostic; there is no reinterpretation or fallback. Omitted, null and explicit bubblewrap retain supervision. The shared bootstrap descriptor, fully unrestricted supervision, external-sandbox contract, and permission semantics remain unchanged. Upstream's native Landlock implementation remains intact, and its ordinary policy/app-server-socket guard is restored without a standalone exception.
 
 The native hook is `fn(Vec<String>, OwnedFd) -> !`. Native code finishes namespace setup, mount/capability verification, proxy routing and enforcement before handing over the command and setup descriptor. The standalone package then owns setup acceptance, environment projection, spawning, signal restoration, stdin release and namespace-init control/reaping. It reuses the existing signal utilities and private descriptor I/O; no supervisor, process discovery, policy implementation or generic plugin mechanism was added.
 
@@ -32,7 +32,7 @@ Counts classify paths present in the upstream tree separately from additive path
 | Modified upstream Linux files                                          |            4 |     190 / 25 |           4 |    109 / 12 |
 | Additive files inside the native Linux crate                           |            1 |       98 / 0 |           0 |       0 / 0 |
 | All modified upstream files, including unchanged Windows consolidation |           31 |    843 / 372 |          31 |   762 / 359 |
-| All additive files                                                     |           69 |    11006 / 0 |          71 |   11085 / 0 |
+| All additive files                                                     |           69 |    11006 / 0 |          71 |   11071 / 0 |
 
 The ordinary native fork/exec/wait and Landlock guard were restored; the remaining native change is 109 additions and 12 deletions, down from 190 and 25. The 98-line Console control implementation no longer lives in the upstream crate.
 
@@ -44,7 +44,7 @@ Before implementation, the debug build and all 97 standalone contracts passed. T
 
 The new backend-rejection test first failed because the target ran successfully. The ordinary-entry SIGPIPE regression first failed with 141 instead of 23. Both passed after their respective changes.
 
-| Candidate check                                                           | Result                                                                               |
+| Hook revision (`dbaca54d4`) check                                         | Result                                                                               |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | GNU debug standalone executable suite                                     | 100 passed                                                                           |
 | Native Linux, sandboxing and bubblewrap suites                            | 293 passed; 3 internal fixture tests ignored                                         |
@@ -65,10 +65,12 @@ Host `bazel test` built successfully but its baseline runtime passed 88 and fail
 
 The scoped argument-comment lint and `just fix -p mcp-console-sandbox -p codex-linux-sandbox` passed; Clippy reported an existing unused import in the core crate. `just fmt` completed. Its unrelated justfile formatting was discarded. Tests preceded these final formatting/lint passes, following the repository workflow.
 
+For the unversioned-protocol follow-up, both transport acceptance tests first failed without the version field. After removing the field and validation, all 100 GNU debug, 100 GNU release and 100 Bazel-built executable tests passed. The rebuilt x86_64 musl release runner passed 35 transport, lifecycle, native-entry, configuration and documented-payload cases; 65 cases were excluded by the selector. The static pair passed ELF checks again, and the Python bootstrap example ran successfully. The native implementation was unchanged from the hook revision and its 293-test result above; that suite was not repeated. No macOS or Windows runtime checks were available for this follow-up; their payloads were updated to the same shared schema.
+
 ## Downstream consumers
 
-Current MCP Console main was fetched and inspected at `ce674459`. Normal managed launches use protocol 2 and omit `linux_backend`; its shipping manifest still pins `6a18b21c2e75a10229a842424403d71cbd1e60ef` from 0.154.0. That manifest and the downstream working tree were not changed.
+MCP Console main was fetched and inspected at `ce674459`. At that revision, normal managed launches use protocol 2 and omit `linux_backend`; its shipping manifest still pins `6a18b21c2e75a10229a842424403d71cbd1e60ef` from 0.154.0. That manifest and the downstream working tree were not changed.
 
-The current downstream `tests/fixtures/cli/sandbox/procfs.py` supports a runner interface directly. It passed against the candidate debug runner in both actual fresh and inherited procfs views, each with all/denied reads and restricted/enabled networking. It verified host and supervisor environment/memory/control isolation, namespace entry denial, policy replacement denial and unchanged synthetic host state. This exercises the supported downstream runner fixture; it is not a rebuilt, digest-bound Console frontend or shipping-pin adoption.
+The downstream `tests/fixtures/cli/sandbox/procfs.py` supports a runner interface directly. Its unchanged payloads passed against the hook revision's debug runner in both actual fresh and inherited procfs views, each with all/denied reads and restricted/enabled networking. It verified host and supervisor environment/memory/control isolation, namespace entry denial, policy replacement denial and unchanged synthetic host state. After removing protocol versioning, a temporary copy with only its two version fields removed passed all eight launches again. This exercises the downstream runner fixture with the required payload adjustment; it is not a rebuilt, digest-bound Console frontend or shipping-pin adoption.
 
-Before downstream adoption, update `docs/SANDBOX_CONFIGURATION.md`'s Landlock section and the Landlock-specific cases/snapshots in `tests/boundaries/cli/sandbox/test_configuration.py`: replace direct execution, lifecycle-incompatibility, unavailable-ABI and policy-representation expectations with the removal diagnostic. Remove their now-unused `LANDLOCK` capability probe and `without_landlock` fixture if no consumers remain. Retain bubblewrap policy, descriptor, signal, lifecycle, proxy and procfs tests. Non-Linux rejection of the Linux-only field remains valid.
+Before downstream adoption, remove the `version` insertion in `src/sandbox/runner.rs`, `protocol_version` from the shipping manifest and its generated build constant, and version fields in fixtures and examples. Coordinate those payload changes with the source pin; the shipping pin is not changed by this PR. Also update `docs/SANDBOX_CONFIGURATION.md`'s Landlock section and the Landlock-specific cases/snapshots in `tests/boundaries/cli/sandbox/test_configuration.py`: replace direct execution, lifecycle-incompatibility, unavailable-ABI and policy-representation expectations with the removal diagnostic. Remove their now-unused `LANDLOCK` capability probe and `without_landlock` fixture if no consumers remain. Retain bubblewrap policy, descriptor, signal, lifecycle, proxy and procfs tests. Non-Linux rejection of the Linux-only field remains valid.

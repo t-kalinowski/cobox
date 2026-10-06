@@ -28,7 +28,6 @@ const RESERVED_CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
 pub struct Bootstrap {
     #[serde(skip)]
     pub excluded_environment: Vec<String>,
-    pub version: u32,
     pub command: Vec<String>,
     pub cwd: AbsolutePathBuf,
     pub environment: HashMap<String, String>,
@@ -53,7 +52,6 @@ pub struct Bootstrap {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentConfiguration {
-    version: u32,
     #[serde(default, deserialize_with = "supplied")]
     filesystem: Option<RawFileSystemSandboxPolicy>,
     #[serde(default, deserialize_with = "supplied")]
@@ -154,7 +152,6 @@ pub fn take_input() -> Result<Input> {
         }
         let mut request = Bootstrap {
             excluded_environment: vec![name.to_owned()],
-            version: config.version,
             command: args[3..]
                 .iter()
                 .map(|arg| {
@@ -291,11 +288,6 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
             "target environment value contains NUL"
         );
     }
-    ensure!(
-        request.version == 2,
-        "unsupported bootstrap version {}",
-        request.version
-    );
     ensure!(
         request
             .command

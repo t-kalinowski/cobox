@@ -4,14 +4,14 @@
 
 The default supervisor owns launch, descendant retirement, optional private storage, and the upstream managed proxy. Caller-death and SIGTERM retirement are explicit options. The [lifecycle contract](LIFECYCLE.md) defines cleanup ordering and platform limits, including runner loss; the [Linux compatibility guide](LINUX_COMPATIBILITY.md) defines host requirements.
 
-The [complete JSON configuration reference](PROTOCOL.md#complete-json-reference) covers both transports and every nested field. `filesystem: {"kind":"unrestricted"}` retains the independently selected native network policy. `external-sandbox` delegates enforcement to an outer sandbox unless a managed proxy requires native routing; its Linux supervision covers the original process group.
+MCP Console is the single consumer and pins the runner revision; both are updated together. The private protocol has no version field or compatibility negotiation. The [complete JSON configuration reference](PROTOCOL.md#complete-json-reference) covers both transports and every nested field. `filesystem: {"kind":"unrestricted"}` retains the independently selected native network policy. `external-sandbox` delegates enforcement to an outer sandbox unless a managed proxy requires native routing; its Linux supervision covers the original process group.
 
 ## Invocation
 
 Put JSON in one selected child environment variable, and keep arguments, cwd, and ordinary environment values as normal launch inputs:
 
 ```sh
-SANDBOX_CONFIG='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted","lifecycle":{"private_tmp":{"environment":["TMPDIR"]}}}' \
+SANDBOX_CONFIG='{"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted","lifecycle":{"private_tmp":{"environment":["TMPDIR"]}}}' \
   mcp-console-sandbox --config-env SANDBOX_CONFIG -- /bin/cat
 ```
 

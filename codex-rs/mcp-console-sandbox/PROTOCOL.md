@@ -1,12 +1,14 @@
-# Bootstrap protocol version 2
+# Bootstrap protocol
 
-Windows implements the environment transport with native Job retirement. Its `windows_sandbox_level` and `windows_state_dir` fields, explicit setup requirement, unsupported policy features, and owner/storage semantics are specified in [Windows support](WINDOWS.md#versioned-console-transport). The descriptor transport and Unix-specific signal/terminal behavior below do not apply to Windows.
+Windows implements the environment transport with native Job retirement. Its `windows_sandbox_level` and `windows_state_dir` fields, explicit setup requirement, unsupported policy features, and owner/storage semantics are specified in [Windows support](WINDOWS.md#console-transport). The descriptor transport and Unix-specific signal/terminal behavior below do not apply to Windows.
+
+This private protocol is unversioned. MCP Console is its single consumer and pins the runner revision; the consumer and runner are updated in lockstep. Do not send a `version` field: unknown top-level fields are rejected. There is no version negotiation or compatibility execution mode.
 
 Two explicit input modes are supported. Both accept one immutable configuration and use the same permission-driven execution selection. Execution uses the runner's supervisor.
 
 ## Environment configuration
 
-Invoke `mcp-console-sandbox --config-env NAME -- command [args...]`. `NAME` selects a UTF-8 JSON value already present in this child's launch environment, never a filename. The JSON requires `version` and either a built-in `extends` selector or explicit `filesystem` and `network` policies from the request below. `command` and `cwd` are rejected: supply the command after `--` and select the working directory when launching the child. The optional `environment` object contains target-only overrides. `inherit_environment` defaults to `true`; set it to `false` to start with an empty target environment. Omitting both fields inherits the ordinary launch environment without requiring its serialization. Private-directory exports and managed proxy values override ordinary target settings. No application policy is merged into an explicit configuration.
+Invoke `mcp-console-sandbox --config-env NAME -- command [args...]`. `NAME` selects a UTF-8 JSON value already present in this child's launch environment, never a filename. The JSON requires either a built-in `extends` selector or explicit `filesystem` and `network` policies from the request below. `command` and `cwd` are rejected: supply the command after `--` and select the working directory when launching the child. The optional `environment` object contains target-only overrides. `inherit_environment` defaults to `true`; set it to `false` to start with an empty target environment. Omitting both fields inherits the ordinary launch environment without requiring its serialization. Private-directory exports and managed proxy values override ordinary target settings. No application policy is merged into an explicit configuration.
 
 The OS copies the launch environment during process creation. The runner reads the selected value once into owned validated state before runtime or native setup. Changing the parent's environment after successful launch, even before the runner parses JSON, cannot alter that copy. There is no file discovery, path reference, include, reload, or overflow file. Both input modes reject conflicting invocation options and duplicate top-level fields.
 
@@ -27,7 +29,7 @@ fd 2: target stderr
 fd N: [4-byte unsigned big-endian JSON length][UTF-8 JSON]
 ```
 
-This is a breaking private protocol change. Only version 2 is accepted. The no-argument invocation is rejected, and stdin is never read to discover configuration or select a protocol. There is no compatibility mode or environment-variable fallback.
+The no-argument invocation is rejected, and stdin is never read to discover configuration or select a protocol. There is no compatibility mode or environment-variable fallback.
 
 The launcher normally creates an anonymous pipe, inherits its read end into the executable, closes its own read end, and retains the writer until it sends configuration. Start the executable before writing a potentially pipe-sized frame. There is no descriptor transfer after process creation.
 
@@ -35,7 +37,7 @@ The JSON payload must contain 1 through 1,048,576 bytes. The executable validate
 
 In this mode configuration becomes fixed at request acceptance, not process creation. The trusted caller must retain exclusive control of the bytes and descriptor writers until the complete frame is accepted. An anonymous pipe does not authenticate a writer, and a mutable descriptor source can change while being read. The caller may prepare the request after spawning the supervisor. The accepted request is owned memory; the descriptor closes before setup, and further writes or changes to its backing resource cannot alter policy. Neither the caller nor the runner spills configuration to mutable files.
 
-The bootstrap descriptor is closed after parsing and validation, before runtime, proxy, or native setup. It is not a persistent control channel. Empty or truncated frames, invalid lengths, malformed requests, unsupported versions, and invalid invocation arguments return a nonzero status and an error on stderr without launching the target. Remaining request fields retain their native validation.
+The bootstrap descriptor is closed after parsing and validation, before runtime, proxy, or native setup. It is not a persistent control channel. Empty or truncated frames, invalid lengths, malformed requests and invalid invocation arguments return a nonzero status and an error on stderr without launching the target. Remaining request fields retain their native validation.
 
 Stdin, stdout, and stderr are attached directly. The target inherits stdin's original open file description, including its offset, seekability, terminal identity, and binary contents. This executable drops its owned stdin from the launch command immediately after spawning, before waiting for the child. Rust startup supplies `/dev/null` when stdin was closed at invocation, matching the existing runtime behavior.
 
@@ -51,7 +53,6 @@ Only Linux and macOS execute this protocol. Other platforms return an unsupporte
 
 | JSON field                         | Type                              | Requiredness, omission and `null`                                                                                            | Meaning and constraints                                                                                                                                                                                                                                                                                                                              |
 | ---------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                          | `u32` integer                     | Required in both modes; no `null`                                                                                            | Must be `2`.                                                                                                                                                                                                                                                                                                                                         |
 | `filesystem`                       | Object below                      | Required without `extends`; omitted with a selector inherits its baseline; no `null`                                         | Filesystem permissions and ownership of enforcement.                                                                                                                                                                                                                                                                                                 |
 | `network`                          | String                            | Required without `extends`; omitted with a selector inherits its baseline; no `null`                                         | Exactly `"restricted"` or `"enabled"`; no aliases. Independent of filesystem access; see the execution matrix below.                                                                                                                                                                                                                                 |
 | `extends`                          | String                            | Optional; omitted or `null` selects no built-in                                                                              | Exactly `":workspace"` or `":read-only"`. Unsupported identifiers produce a native diagnostic.                                                                                                                                                                                                                                                       |
@@ -87,7 +88,6 @@ Private storage is independent of built-in selection: `lifecycle.private_tmp` st
 
 ```json
 {
-  "version": 2,
   "extends": ":workspace",
   "workspace_options": {
     "exclude_tmpdir_env_var": true,
@@ -154,7 +154,7 @@ External enforcement uses canonical `PermissionProfile::External`. Without a pro
 
 `linux_backend` is optional. Omitted, `null`, and explicit `"bubblewrap"` retain the same supervised execution and policy selection. Standalone `"landlock"` execution has been removed. Both transports reject that value with a removal diagnostic before starting native setup or a workload. It is never interpreted as bubblewrap, and namespace or enforcement failures never trigger another backend or an unenforced retry.
 
-The transport remains version 2: framing, accepted retained configurations, and lifecycle semantics are unchanged. The removed value is parsed only to report that capability removal clearly; it is not a compatibility execution mode. Callers that selected it must explicitly choose the supervised backend and its host requirements. Upstream's native Landlock implementation and ordinary app-server-socket guard are unchanged.
+The removed value is parsed only to report that capability removal clearly; it is not a compatibility execution mode. When adopting this runner revision, remove `version` from both transport payloads and remove the consumer's protocol-version metadata. Callers that selected Landlock must explicitly choose the supervised backend and its host requirements. Update the pinned consumer and runner together; do not retry a rejected request with another backend. Framing and retained lifecycle semantics are unchanged. Upstream's native Landlock implementation and ordinary app-server-socket guard are unchanged.
 
 The complete `proxy` object uses camelCase field names. Unlike `NetworkProxyConfig`, `RemoteNetworkProxyConfig` has **no defaults for its Boolean or mode fields**:
 
@@ -203,7 +203,6 @@ Environment mode, unrestricted files with restricted networking:
 
 ```json
 {
-  "version": 2,
   "filesystem": { "kind": "unrestricted" },
   "network": "restricted"
 }
@@ -213,7 +212,6 @@ Environment mode, unrestricted files and enabled networking, with ordinary priva
 
 ```json
 {
-  "version": 2,
   "filesystem": { "kind": "unrestricted" },
   "network": "enabled",
   "inherit_environment": false,
@@ -230,7 +228,6 @@ Descriptor mode, root-readable filesystem, writable cwd, and an additional writa
 
 ```json
 {
-  "version": 2,
   "command": ["/bin/echo", "sandbox ready"],
   "cwd": "/tmp",
   "environment": { "PATH": "/usr/bin:/bin" },
@@ -257,7 +254,6 @@ Environment mode, unrestricted files with an enforced managed proxy:
 
 ```json
 {
-  "version": 2,
   "filesystem": { "kind": "unrestricted" },
   "network": "restricted",
   "proxy": {
@@ -282,7 +278,6 @@ Descriptor mode, outer sandbox responsible for filesystem and restricted network
 
 ```json
 {
-  "version": 2,
   "command": ["/bin/echo", "sandbox ready"],
   "cwd": "/tmp",
   "environment": {},

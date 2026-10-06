@@ -188,7 +188,7 @@ fn external_sandbox_runs_inside_existing_native_network_restrictions() {
     ]);
     request["environment"]["OUTER_POLICY"] = json!(
         json!({
-            "version":2,"filesystem":{"kind":"external-sandbox"},"network":"restricted"
+            "filesystem":{"kind":"external-sandbox"},"network":"restricted"
         })
         .to_string()
     );

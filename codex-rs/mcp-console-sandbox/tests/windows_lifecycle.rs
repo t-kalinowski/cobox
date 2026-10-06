@@ -25,7 +25,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 fn configuration(root: &Path) -> Value {
     json!({
-        "version": 2, "extends": ":read-only", "network": "enabled",
+        "extends": ":read-only", "network": "enabled",
         "windows_sandbox_level": "unelevated",
         "windows_state_dir": root.join("state"),
         "lifecycle": {"private_tmp": {"parent": root, "environment": ["TMPDIR"]}},
@@ -226,7 +226,7 @@ fn elevated_offline_account_denies_loopback_tcp() -> Result<()> {
         let listener = std::net::TcpListener::bind(address)?;
         for (network, expected) in [("enabled", "connected\n"), ("restricted", "blocked\n")] {
             let config = json!({
-                "version":2, "extends":":read-only", "network":network,
+                "extends":":read-only", "network":network,
                 "windows_sandbox_level":"elevated",
                 "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
                     .map(PathBuf::from),
@@ -260,7 +260,7 @@ fn elevated_offline_account_denies_loopback_udp() -> Result<()> {
         listener.set_read_timeout(Some(std::time::Duration::from_millis(/*millis*/ 200)))?;
         for network in ["enabled", "restricted"] {
             let config = json!({
-                "version":2, "extends":":read-only", "network":network,
+                "extends":":read-only", "network":network,
                 "windows_sandbox_level":"elevated",
                 "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
                     .map(PathBuf::from),

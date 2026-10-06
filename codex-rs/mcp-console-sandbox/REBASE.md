@@ -35,6 +35,8 @@ The 0.154.0 workflow excluded `create_seatbelt_args_with_read_only_git_and_codex
 
 ## Linux footprint consolidation
 
+The private configuration protocol is unversioned because MCP Console pins the runner and updates with it. Preserve that single-consumer boundary when rebasing.
+
 The [2026-10-06 Linux report](LINUX_FOOTPRINT_2026_10_06.md) records removal of standalone Landlock and restoration of ordinary native fork/exec/wait, after the Windows consolidation. Keep the post-enforcement handoff non-returning: the standalone package owns target setup, spawning, signal handling and namespace-init control/reaping. Preserve upstream mount verification, proxy routing and enforcement before that handoff, and retain the shared stdin-transfer and fresh `--ro-bind-data` descriptor fixes. Recheck both entry points when rebasing; the historical Landlock results below describe the former interface.
 
 ## Validation of the 0.160.1 reapplication

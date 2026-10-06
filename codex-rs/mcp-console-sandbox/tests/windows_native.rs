@@ -49,7 +49,7 @@ fn console_refuses_other_products_state_before_setup_or_launch() {
                 .env(
                     "CONSOLE_POLICY",
                     json!({
-                        "version": 2, "extends": ":read-only", "network": "enabled",
+                        "extends": ":read-only", "network": "enabled",
                         "windows_state_dir": root.path(),
                     })
                     .to_string(),

@@ -209,7 +209,10 @@ fn invalid_nested_configuration_is_rejected_before_target_execution() {
 fn duplicate_struct_fields_fail_while_environment_map_keys_keep_the_last_value() {
     let base = serde_json::to_string(&fixture("context", &[])).unwrap();
     for (before, after) in [
-        ("\"version\":2", "\"version\":2,\"version\":2"),
+        (
+            "\"network\":\"restricted\"",
+            "\"network\":\"restricted\",\"network\":\"enabled\"",
+        ),
         (
             "\"kind\":\"restricted\"",
             "\"kind\":\"restricted\",\"kind\":\"restricted\"",

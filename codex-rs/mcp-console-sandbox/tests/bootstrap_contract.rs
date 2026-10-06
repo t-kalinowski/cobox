@@ -50,7 +50,6 @@ use std::process::Stdio;
 
 fn request(command: &[&str]) -> Value {
     json!({
-        "version": 2,
         "command": command,
         "cwd": std::env::current_dir().unwrap(),
         "environment": {},
@@ -217,9 +216,6 @@ fn invalid_requests_fail_on_stderr_only() {
     let valid = request(&["/bin/echo", "must-not-launch"]);
     let mut requests = vec![request(&[]), request(&[""])];
     for (field, value) in [
-        ("version", json!(1)),
-        ("version", json!(3)),
-        ("version", json!(-1)),
         ("command", json!("/bin/true")),
         ("cwd", json!("relative")),
         ("unexpected", json!(true)),

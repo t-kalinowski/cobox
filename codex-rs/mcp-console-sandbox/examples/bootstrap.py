@@ -8,7 +8,6 @@ import sys
 
 def launch(executable: str) -> int:
     request = {
-        "version": 2,
         "command": ["/bin/cat"],
         "cwd": "/tmp",
         "environment": {},
