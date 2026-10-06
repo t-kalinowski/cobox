@@ -2,6 +2,8 @@
 
 This inventories the extraction from `rust-v0.160.1`, commit `d27764b82f7118f674371e6d6e76271d9d606edb`, carried forward from `mcp-console/sandbox-runner/rust-v0.154.0` at `56d877c8e235af07adba2751d3d077ec27d030b2`. Only the pinned release is supported. Use this inventory with the source and [reapplication procedure](REBASE.md) when upgrading.
 
+Console-owned packages and components use Console names without a `codex-` prefix. Windows-specific code uses `windows` in its package or module name: the cross-platform runner is `mcp-console-sandbox`, and its companion package is `mcp-console-sandbox-windows`. The `codex.rs` facade and references to upstream dependencies retain their Codex names. Existing shipping executable names remain stable.
+
 ## What the patch carries
 
 Upstream already supplies filesystem/network policy, the managed proxy, Seatbelt, seccomp, bubblewrap, and namespace-init cleanup. The patch adds a [standalone configuration boundary](PROTOCOL.md), target-environment isolation, optional trusted Seatbelt extensions, and one [supervised lifetime](LIFECYCLE.md) with cancellation, caller-death observation, private storage, and cleanup-error reporting. Native Linux waiting helpers also release target stdin promptly. These additions do not imply that every other upstream execution path lacks process management or cleanup.
