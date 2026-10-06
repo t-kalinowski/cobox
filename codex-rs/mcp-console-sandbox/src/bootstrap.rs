@@ -263,19 +263,10 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
         cfg!(target_os = "linux") || request.linux_backend.is_none(),
         "linux_backend is supported only on Linux"
     );
-    if request.linux_backend == Some(crate::config::LinuxBackend::Landlock) {
-        ensure!(
-            request.proxy.is_none(),
-            "landlock does not support managed proxy routing"
-        );
-        ensure!(
-            request.lifecycle.parent_pid.is_none()
-                && request.lifecycle.private_tmp.is_none()
-                && request.lifecycle.cleanup_timeout_ms.is_none()
-                && request.lifecycle.sigterm == crate::config::Sigterm::Forward,
-            "landlock does not provide supervised lifetime; omit lifecycle options"
-        );
-    }
+    ensure!(
+        request.linux_backend != Some(crate::config::LinuxBackend::RemovedLandlock),
+        "linux_backend landlock has been removed; omit linux_backend or use bubblewrap"
+    );
     request
         .excluded_environment
         .push(RESERVED_CONFIGURATION.to_owned());

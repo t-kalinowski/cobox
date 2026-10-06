@@ -50,46 +50,29 @@ fn accept(descriptor: OwnedFd) -> Result<(TargetSetup, File)> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn linux_target_setup(
-    command: &mut Command,
-    descriptor: OwnedFd,
-    mode: codex_linux_sandbox::TargetSetupMode,
-) -> std::io::Result<Option<OwnedFd>> {
-    let (setup, channel): (TargetSetup, Option<File>) = match mode {
-        codex_linux_sandbox::TargetSetupMode::Namespace => {
-            // Re-arm after bubblewrap's credential/exec boundary, before readiness.
-            if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let (setup, channel) = match accept(descriptor) {
-                Ok(value) => value,
-                Err(error)
-                    if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
-                        matches!(
-                            e.kind(),
-                            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
-                        )
-                    }) =>
-                {
-                    std::process::exit(0)
-                }
-                Err(error) => return Err(std::io::Error::other(error)),
-            };
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::fcntl(channel.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            (setup, Some(channel))
+pub fn linux_target_setup(command: &mut Command, descriptor: OwnedFd) -> std::io::Result<OwnedFd> {
+    // Re-arm after bubblewrap's credential/exec boundary, before readiness.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let (setup, channel) = match accept(descriptor) {
+        Ok(value) => value,
+        Err(error)
+            if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                matches!(
+                    e.kind(),
+                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
+                )
+            }) =>
+        {
+            std::process::exit(0)
         }
-        codex_linux_sandbox::TargetSetupMode::Direct => {
-            // Only the trusted pre-exec stages can access the sealed setup file.
-            // There is no host supervisor or control endpoint in direct mode.
-            (
-                serde_json::from_reader(File::from(descriptor)).map_err(std::io::Error::other)?,
-                None,
-            )
-        }
+        Err(error) => return Err(std::io::Error::other(error)),
     };
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::fcntl(channel.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     // Install the target environment only after enforcement and helper setup.
     // Only managed proxy values rewritten in the namespace cross this boundary.
     command.env_clear().envs(&setup.environment);
@@ -107,7 +90,7 @@ pub fn linux_target_setup(
     unsafe {
         command.pre_exec(move || setup.signals.restore());
     }
-    Ok(channel.map(Into::into))
+    Ok(channel.into())
 }
 
 #[cfg(target_os = "macos")]

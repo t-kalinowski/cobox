@@ -39,29 +39,16 @@ pub fn run_main() -> ! {
     linux_run_main::run_main();
 }
 
-/// Whether setup precedes a namespace-init child or a direct restricted exec.
-#[cfg(target_os = "linux")]
-pub enum TargetSetupMode {
-    Namespace,
-    Direct,
-}
-
 /// Hook run after native enforcement to apply target state and retain init control.
 #[cfg(target_os = "linux")]
-pub type TargetSetupHook = fn(
-    &mut std::process::Command,
-    std::os::fd::OwnedFd,
-    TargetSetupMode,
-) -> std::io::Result<Option<std::os::fd::OwnedFd>>;
+pub type TargetSetupHook =
+    fn(&mut std::process::Command, std::os::fd::OwnedFd) -> std::io::Result<std::os::fd::OwnedFd>;
 
 /// Run the native stages with a one-shot target setup hook. The hidden
 /// `--target-setup-fd` option is carried through namespace creation. The hook
 /// owns that descriptor and runs after enforcement, before spawning the target.
 /// It returns the close-on-exec native control descriptor and establishes target
 /// pre-exec state. The workload must never inherit this descriptor.
-/// Standalone callers can explicitly select restricted Landlock without the
-/// ordinary helper's app-server socket isolation. They must provide any
-/// required protection of app-server sockets themselves.
 #[cfg(target_os = "linux")]
 pub fn run_main_with_target_setup(setup: TargetSetupHook) -> ! {
     linux_run_main::run_main_with_target_setup(Some(setup));

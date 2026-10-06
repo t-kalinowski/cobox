@@ -196,8 +196,8 @@ pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) 
 
     if let Some(fd) = target_setup_fd {
         assert!(
-            fd > libc::STDERR_FILENO && setup.is_some(),
-            "target setup requires a native hook and a private descriptor"
+            fd > libc::STDERR_FILENO && setup.is_some() && !use_legacy_landlock,
+            "target setup requires bubblewrap, a native hook and a private descriptor"
         );
     }
 
@@ -225,21 +225,7 @@ pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) 
         file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
-    // Standalone setup preserves explicit Landlock selection and its supported
-    // policies. Ordinary helpers require bubblewrap to isolate app-server sockets.
-    if target_setup_fd.is_none() {
-        ensure_legacy_landlock_mode_supports_policy(
-            use_legacy_landlock,
-            &file_system_sandbox_policy,
-        );
-    } else if use_legacy_landlock
-        && file_system_sandbox_policy
-            .needs_direct_runtime_enforcement(network_sandbox_policy, &sandbox_policy_cwd)
-    {
-        panic!(
-            "permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock"
-        );
-    }
+    ensure_legacy_landlock_mode_supports_policy(use_legacy_landlock, &file_system_sandbox_policy);
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
@@ -304,15 +290,13 @@ pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) 
         }
         let control = if let Some(fd) = target_setup_fd {
             let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
-            setup.unwrap_or_else(|| panic!("missing native hook"))(
-                &mut target,
-                descriptor,
-                crate::TargetSetupMode::Namespace,
+            Some(
+                setup.unwrap_or_else(|| panic!("missing native hook"))(&mut target, descriptor)
+                    .unwrap_or_else(|error| {
+                        eprintln!("native target setup: {error}");
+                        std::process::exit(1);
+                    }),
             )
-            .unwrap_or_else(|error| {
-                eprintln!("native target setup: {error}");
-                std::process::exit(1);
-            })
         } else {
             None
         };
@@ -436,22 +420,6 @@ pub(crate) fn run_main_with_target_setup(setup: Option<crate::TargetSetupHook>) 
         /*proxy_routing_active*/ false,
     ) {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
-    }
-    if let Some(fd) = target_setup_fd {
-        use std::os::unix::process::CommandExt;
-        let mut target = std::process::Command::new(&command[0]);
-        target.args(&command[1..]);
-        let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
-        setup.unwrap_or_else(|| panic!("missing native hook"))(
-            &mut target,
-            descriptor,
-            crate::TargetSetupMode::Direct,
-        )
-        .unwrap_or_else(|error| {
-            eprintln!("native target setup: {error}");
-            std::process::exit(1)
-        });
-        panic!("exec sandboxed command: {}", target.exec());
     }
     exec_or_panic(command);
 }

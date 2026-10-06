@@ -108,33 +108,9 @@ mod upstream {
             request.proxy.is_some(),
         );
         ensure!(
-            permissions.enforcement() != SandboxEnforcement::External
-                || request.linux_backend != Some(crate::config::LinuxBackend::Landlock),
-            "external-sandbox delegates enforcement; omit the legacy landlock override"
-        );
-        ensure!(
             sandbox != SandboxType::None || request.macos_seatbelt_profile_extension.is_none(),
             "a Seatbelt extension requires native enforcement"
         );
-        #[cfg(target_os = "linux")]
-        if request.linux_backend == Some(crate::config::LinuxBackend::Landlock)
-            && !filesystem.has_full_disk_write_access()
-        {
-            // Native best-effort Landlock on ABI 1/2 does not restrict truncate.
-            // Do not present those capabilities as a read-only filesystem.
-            let abi = unsafe {
-                libc::syscall(
-                    libc::SYS_landlock_create_ruleset,
-                    std::ptr::null::<u8>(),
-                    0,
-                    1,
-                )
-            };
-            ensure!(
-                abi >= 3,
-                "Landlock filesystem policy requires truncate enforcement (ABI 3 or later)"
-            );
-        }
         let proxy = if let Some(config) = request.proxy {
             Some(
                 NetworkProxy::builder()
@@ -292,8 +268,7 @@ mod upstream {
                 network: proxy.as_ref(),
                 sandbox_policy_cwd: &cwd,
                 sandbox_exe: Some(&executable),
-                use_legacy_landlock: request.linux_backend
-                    == Some(crate::config::LinuxBackend::Landlock),
+                use_legacy_landlock: false,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
             })?;
             let mut command = Command::new(&native.command[0]);

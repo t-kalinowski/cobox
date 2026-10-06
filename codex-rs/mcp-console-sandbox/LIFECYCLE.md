@@ -1,6 +1,6 @@
 # Standalone lifecycle contract
 
-The default execution path owns one sandbox lifetime. Its single application supervisor owns native launch, descendant retirement, optional private storage, and the optional upstream network proxy. Linux's native namespace init and bubblewrap helpers provide native setup and namespace lifetime control. macOS's short native stage applies Seatbelt and execs the target in the same process. There is no separate Console manager, manager monitor, watchdog, or mutual recovery protocol. Explicit Linux Landlock execution has no supervisor and is described under [boundaries](#boundaries-and-intentional-differences).
+The default execution path owns one sandbox lifetime. Its single application supervisor owns native launch, descendant retirement, optional private storage, and the optional upstream network proxy. Linux's native namespace init and bubblewrap helpers provide native setup and namespace lifetime control. macOS's short native stage applies Seatbelt and execs the target in the same process. There is no separate Console manager, manager monitor, watchdog, or mutual recovery protocol.
 
 The JSON shape and all defaults are defined in the [complete configuration reference](PROTOCOL.md#lifecycle-object). Managed unrestricted files retain the ordinary lifecycle below, with weaker guarantees against malicious interference. External execution without a proxy uses direct process supervision: Linux covers its original process group, while macOS retains descendant observation. An outer sandbox must retire descendants outside those mechanisms. Crashes or interference can leave processes or storage and can undermine other restrictions through shared writable host state.
 
@@ -64,8 +64,6 @@ Linux bubblewrap supervision waits for its known direct native child. The native
 Fresh and supported inherited procfs use the same backend and policy. Inherited procfs can expose host PIDs and readable metadata; this is not a grant of access to process environment, root, cwd, fd links, memory, or control interfaces. The same-user differential tests in MCP Console exercise those interfaces and the actual supervisor.
 
 A pidfd captured from kernel readiness credentials permits termination of a stopped namespace init. If pidfd opening or signalling is unavailable, ordinary retirement closes the native channel. A stopped or kernel-uninterruptible init can then exceed the deadline. Missing wait status, termination errors, and deadlines produce a nonzero result with private storage retained; they never count as successful cleanup.
-
-Explicit Landlock execution replaces the runner with the native helper and then the target. It has no supervisor, private storage, caller-death cleanup, or descendant retirement. It rejects lifecycle options that would request those guarantees and rejects managed proxy routing instead of switching backend. Landlock applies filesystem and network policy but does not isolate same-user signals.
 
 The native execution gate uses permitted descriptor read/write on its private socket; the kernel supplies the readiness sender's identity. Application sidebands must also obey the [upstream restricted-network rules](PROTOCOL.md#network-and-target-environment).
 
