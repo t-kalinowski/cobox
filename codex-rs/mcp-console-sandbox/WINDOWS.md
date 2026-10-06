@@ -100,7 +100,7 @@ Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner
 
 The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) records the current builds, runtime checks, restored files, counts, and provisioning/Bazel limits.
 
-The public versioned-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation and clear rejection of removed options; transport regressions cover JSON/path validation and exact target argument forwarding. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
+The public versioned-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation; transport regressions cover JSON/path validation and exact target argument forwarding. Rejection of the removed CLI was verified separately during the migration, without retaining a test for unsupported options. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
 
 ```powershell
 just test --locked -p codex-mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
