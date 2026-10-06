@@ -83,7 +83,7 @@ The public versioned-transport regression exercises unelevated policy, private s
 just test --locked -p codex-mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
 ```
 
-The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
+The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. For a nondefault provisioned directory, set `MCP_CONSOLE_SANDBOX_TEST_STATE_DIR` to its absolute path; this supplies `windows_state_dir` without changing the test harness's `LOCALAPPDATA`. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
 
 On the Windows host tested on 2026-10-02, the unelevated backend allowed deletion outside the writable roots, including with the `:read-only` profile. The upstream `legacy_workspace_write_delete_is_limited_to_writable_roots` test also failed at the unmodified `rust-v0.154.0` release. Successful file-creation denial does not establish deletion isolation. This is an unresolved native enforcement limitation, not a passing security gate; this branch does not replace the upstream token/ACL model to conceal the failure.
 

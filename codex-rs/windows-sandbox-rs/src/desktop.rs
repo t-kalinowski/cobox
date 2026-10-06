@@ -145,7 +145,7 @@ impl DesktopPolicy {
 }
 
 pub struct LaunchDesktop {
-    _private_desktop: Option<PrivateDesktop>,
+    _private_desktop: PrivateDesktop,
     startup_name: Vec<u16>,
 }
 
@@ -216,11 +216,12 @@ impl LaunchDesktop {
         let private_desktop = PrivateDesktop::create(logs_base_dir)?;
         let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
         Ok(Self {
-            _private_desktop: Some(private_desktop),
+            _private_desktop: private_desktop,
             startup_name,
         })
     }
 
+    /// Opens the caller-owned private desktop without creating one or falling back to Default.
     pub fn open_private(name: &str) -> Result<Self> {
         if !name
             .strip_prefix(crate::sandbox_name(PRIVATE_DESKTOP_PREFIX).as_ref())
@@ -245,10 +246,10 @@ impl LaunchDesktop {
             anyhow::bail!("OpenDesktopW failed: {}", unsafe { GetLastError() });
         }
         Ok(Self {
-            _private_desktop: Some(PrivateDesktop {
+            _private_desktop: PrivateDesktop {
                 handle,
                 name: name.to_owned(),
-            }),
+            },
             startup_name: to_wide(format!("Winsta0\\{name}")),
         })
     }
