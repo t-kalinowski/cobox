@@ -10,6 +10,12 @@ pub(super) fn run() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let operation = args.next().context("fixture operation")?;
     match operation.to_str().context("UTF-8 fixture operation")? {
+        "arguments" => {
+            println!(
+                "{}",
+                serde_json::to_string(&std::env::args().skip(2).collect::<Vec<_>>())?
+            );
+        }
         "copy-stdin" => {
             std::io::copy(&mut std::io::stdin().lock(), &mut std::io::stdout().lock())?;
         }

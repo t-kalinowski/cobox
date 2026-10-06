@@ -152,3 +152,72 @@ fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
     assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
     Ok(())
 }
+
+#[test]
+fn environment_transport_preserves_target_arguments() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let arguments = [
+        "--state-dir",
+        "--help",
+        "--windows-sandbox-level",
+        "",
+        "two words",
+        "quote\"inside",
+        "trailing\\",
+        "日本語",
+    ];
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .current_dir(root.path())
+        .env(
+            "CONSOLE_POLICY",
+            json!({
+                "version": 2, "extends": ":read-only", "network": "enabled",
+                "windows_sandbox_level": "unelevated",
+                "windows_state_dir": root.path().join("state"),
+            })
+            .to_string(),
+        )
+        .args(["--config-env", "CONSOLE_POLICY", "--"])
+        .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg("arguments")
+        .args(arguments)
+        .output()?;
+    assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+        json!(arguments)
+    );
+    Ok(())
+}
+
+#[test]
+fn invalid_configuration_fails_before_creating_state() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    for (payload, diagnostic) in [
+        ("not-json".to_owned(), "invalid configuration JSON (Syntax"),
+        (
+            json!({"version": 2, "extends": ":read-only", "windows_state_dir": "relative"})
+                .to_string(),
+            "invalid configuration JSON (Data",
+        ),
+        (
+            json!({"version": 2, "extends": ":read-only", "workspace": "relative"}).to_string(),
+            "invalid configuration JSON (Data",
+        ),
+        (
+            json!({"version": 2, "extends": ":read-only", "environment": []}).to_string(),
+            "invalid configuration JSON (Data",
+        ),
+    ] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env("LOCALAPPDATA", root.path())
+            .env("CONSOLE_POLICY", payload)
+            .args(["--config-env", "CONSOLE_POLICY", "--", "cmd.exe"])
+            .output()?;
+        assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains(diagnostic), "{stderr}");
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+    }
+    Ok(())
+}

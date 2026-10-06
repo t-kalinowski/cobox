@@ -42,18 +42,21 @@ fn console_refuses_other_products_state_before_setup_or_launch() {
     })
     .to_string();
     std::fs::write(secrets.join("sandbox_users.json"), &contents).expect("users");
-    for action in ["setup", "status", "run"] {
+    for action in ["setup", "status", "--config-env"] {
         let mut command = Command::new(cargo_bin("mcp-console-sandbox").expect("runner binary"));
-        command.args([action, "--state-dir"]).arg(root.path());
-        if action == "run" {
-            command.arg("--command-cwd").arg(root.path()).args([
-                "--permission-profile",
-                r#"{"type":"external","network":"enabled"}"#,
-                "--env-json",
-                "{}",
-                "--",
-                "cmd.exe",
-            ]);
+        if action == "--config-env" {
+            command
+                .env(
+                    "CONSOLE_POLICY",
+                    json!({
+                        "version": 2, "extends": ":read-only", "network": "enabled",
+                        "windows_state_dir": root.path(),
+                    })
+                    .to_string(),
+                )
+                .args(["--config-env", "CONSOLE_POLICY", "--", "cmd.exe"]);
+        } else {
+            command.args([action, "--state-dir"]).arg(root.path());
         }
         let output = command.output().expect("runner");
         assert_eq!(output.status.code(), Some(1));

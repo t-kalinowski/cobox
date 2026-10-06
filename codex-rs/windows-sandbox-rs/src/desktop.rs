@@ -221,17 +221,7 @@ impl LaunchDesktop {
         })
     }
 
-    /// Opens the selected private desktop. Console can explicitly opt into the
-    /// caller desktop with `Default`; every other name must identify a private desktop.
     pub fn open_private(name: &str) -> Result<Self> {
-        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
-            && name == "Default"
-        {
-            return Ok(Self {
-                _private_desktop: None,
-                startup_name: to_wide("Winsta0\\Default"),
-            });
-        }
         if !name
             .strip_prefix(crate::sandbox_name(PRIVATE_DESKTOP_PREFIX).as_ref())
             .is_some_and(|nonce| {

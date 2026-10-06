@@ -1,8 +1,8 @@
 # Windows native sandbox
 
-The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status`, native `run` options, and Console's versioned environment transport.
+The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status`, Console's versioned environment transport for all execution.
 
-The public backend names are `elevated` and `unelevated`, for both `--windows-sandbox-level` and the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
+The public backend names are `elevated` and `unelevated`, in the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
 
 ## Build and distribute
 
@@ -39,7 +39,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 `--config-env NAME -- COMMAND ...` consumes protocol version 2 as described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
 - `windows_sandbox_level` defaults to `elevated`. `unelevated` is explicit; `disabled` is rejected.
-- Targets run on a private Windows desktop, matching Codex's default. Native `run` also defaults to a private desktop; `--windows-sandbox-private-desktop=false` explicitly opts out.
+- Targets run on a private Windows desktop, matching upstream behavior, with Console-specific desktop names.
 - `windows_state_dir` optionally selects an absolute persistent state directory.
 - The elevated mode requires prior explicit setup. Ordinary versioned launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
@@ -49,9 +49,9 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 The ordinary command arguments, cwd, and stdio remain the target's inputs. Environment inheritance and overrides retain the shared protocol rules. Private storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
 
-## Native CLI
+## Command interface
 
-Run `--help` or `run --help` for the typed native options. `run` consumes a serialized `PermissionProfile` and explicit environment map rather than a versioned request. The command must follow `--`; target flags pass through unchanged. Clap syntax errors exit 2 before setup or launch. Paths and JSON are validated at that boundary. The native CLI retains the upstream setup/repair behavior; versioned Console launches require explicit initial provisioning.
+Run `--help` for `setup` and `status`. Execute workloads only with `--config-env NAME -- command [args...]`. The former `run` subcommand and its permission, environment, root-override, proxy, and desktop arguments are removed; they fail with a CLI diagnostic and exit 2. They are not mapped onto JSON fields. Protocol version 2 is unchanged: cwd comes from the caller, environment follows its inheritance/override rules, and policy uses its existing profile and filesystem fields. Target arguments after `--` pass through unchanged, including names that used to be runner options. Ordinary launches require explicit initial provisioning for elevated mode.
 
 Targets still need host read/traverse permission. In particular, Python 3.14's private temporary directories can grant access only through owner/admin/system ACL entries that a restricted token cannot use. Ordinary directories inheriting the current user's access work without machine-wide ACL changes. Use native Windows paths with backslashes for `cmd.exe`. Targets also remain subject to host Application Control policy; error 4551 is a host policy rejection.
 
@@ -67,7 +67,7 @@ Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner
 
 ## Validation limits
 
-The public versioned-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover typed validation and target argument forwarding. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
+The public versioned-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation and clear rejection of removed options; transport regressions cover JSON/path validation and exact target argument forwarding. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
 
 ```powershell
 just test --locked -p codex-mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
