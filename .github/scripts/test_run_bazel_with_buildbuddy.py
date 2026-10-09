@@ -323,6 +323,83 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
 
 
 class RunBazelCiTest(unittest.TestCase):
+    def test_failed_cross_test_prints_log_for_selected_platform(self) -> None:
+        bash = "bash"
+        if os.name == "nt":
+            git = shutil.which("git")
+            assert git is not None, "Git for Windows is required to run the CI wrapper"
+            bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+        for explicit_platform in (
+            None,
+            "//:windows_x86_64_gnullvm",
+            "//:windows_x86_64_msvc",
+        ):
+            with (
+                self.subTest(platform=explicit_platform),
+                TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                platform = explicit_platform or "//:windows_x86_64_gnullvm"
+                log = (
+                    root
+                    / platform.removeprefix("//:")
+                    / "testlogs/example/test/test.log"
+                )
+                log.parent.mkdir(parents=True)
+                log.write_text("platform-specific failure details\n", encoding="utf-8")
+                capture = root / "capture.py"
+                capture.write_text(
+                    "import sys\nfrom pathlib import Path\n"
+                    "args = sys.argv[1:]\n"
+                    "if 'test' in args:\n"
+                    "    print('FAIL: //example:test')\n"
+                    "    sys.exit(7)\n"
+                    "platform = next((arg.split('=', 1)[1] for arg in reversed(args) "
+                    "if arg.startswith('--platforms=')), 'default')\n"
+                    "print((Path(__file__).parent / platform.removeprefix('//:') "
+                    "/ 'testlogs').as_posix())\n",
+                    encoding="utf-8",
+                )
+                fake_bazel = root / ("bazel.cmd" if os.name == "nt" else "bazel")
+                fake_bazel.write_text(
+                    f'@echo off\n"{sys.executable}" "{capture}" %*\n'
+                    if os.name == "nt"
+                    else f'#!/bin/sh\n{shlex.quote(sys.executable)} {shlex.quote(str(capture))} "$@"\n',
+                    encoding="utf-8",
+                )
+                fake_bazel.chmod(0o755)
+                env = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith(("BAZEL_", "BUILDBUDDY_", "CODEX_BAZEL_"))
+                }
+                env.update(
+                    RUNNER_OS="Windows",
+                    CODEX_BAZEL_BIN=str(fake_bazel),
+                    CODEX_BAZEL_WINDOWS_PATH="C:/Windows/System32",
+                )
+                args = ["test"]
+                if explicit_platform:
+                    args.append(f"--platforms={explicit_platform}")
+                result = subprocess.run(
+                    [
+                        bash,
+                        Path(__file__).with_name("run-bazel-ci.sh").as_posix(),
+                        "--windows-cross-compile",
+                        "--print-failed-test-logs",
+                        "--",
+                        *args,
+                        "--",
+                        "//example:test",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+                self.assertIn("platform-specific failure details", result.stdout)
+
     def test_keyless_windows_cross_invocation_keeps_target_platform(self) -> None:
         bash = "bash"
         if os.name == "nt":
