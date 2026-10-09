@@ -35,7 +35,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             "GITHUB_REPOSITORY": repository,
         }
 
-    def test_keyless_invocation_drops_remote_ci_configuration(self) -> None:
+    def test_keyless_invocation_preserves_common_ci_configuration(self) -> None:
         self.assertIsNone(
             run_bazel_with_buildbuddy.remote_config(
                 ["build", "--config=ci-linux", "//codex-rs/cli:codex"],
@@ -47,7 +47,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 ["build", "--config=ci-linux", "--", "//codex-rs/cli:codex"],
                 {},
             ),
-            ["build", "--", "//codex-rs/cli:codex"],
+            ["build", "--config=ci-bazel", "--", "//codex-rs/cli:codex"],
         )
 
     def test_program_arguments_after_separator_do_not_select_or_lose_rbe(self) -> None:
@@ -258,6 +258,38 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
+    def test_main_preserves_local_ci_defaults_without_credentials(self) -> None:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("BAZEL_", "BUILDBUDDY_"))
+        }
+        env["CODEX_BAZEL_BIN"] = sys.executable
+        child_code = "import json, sys; print(json.dumps(sys.argv[1:]))"
+        for config in ("ci-linux", "ci-macos", "ci-v8", "ci-windows-cross"):
+            with self.subTest(config=config):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(run_bazel_with_buildbuddy.__file__)),
+                        "-c",
+                        child_code,
+                        "build",
+                        f"--config={config}",
+                        "--",
+                        "//example:test",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    json.loads(result.stdout),
+                    ["build", "--config=ci-bazel", "--", "//example:test"],
+                )
+
     def test_main_preserves_spaced_argument_and_child_exit_status(self) -> None:
         spaced_arg = (
             r"--test_env=PATH=C:\Program Files\PowerShell\7;C:\Program Files\Git\bin"
@@ -361,6 +393,7 @@ class RunBazelCiTest(unittest.TestCase):
                     [f"--host_platform={explicit_host or '//:local_windows'}"],
                 )
                 self.assertIn("--config=windows-cross-tests", invocation)
+                self.assertIn("--config=ci-bazel", invocation)
                 self.assertEqual(invocation[-2:], ["--", "//example:test"])
                 self.assertFalse(any(arg.startswith("--remote_") for arg in invocation))
 
