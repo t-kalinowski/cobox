@@ -264,6 +264,8 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             for key, value in os.environ.items()
             if not key.startswith(("BAZEL_", "BUILDBUDDY_"))
         }
+        # Python stands in for Bazel here and cannot accept its CI startup flags.
+        env.pop("GITHUB_ACTIONS", None)
         env["CODEX_BAZEL_BIN"] = sys.executable
         child_code = "import json, sys; print(json.dumps(sys.argv[1:]))"
         for config in ("ci-linux", "ci-macos", "ci-v8", "ci-windows-cross"):
