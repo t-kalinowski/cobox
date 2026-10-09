@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import unittest
@@ -284,6 +285,72 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 37, result.stderr)
+
+
+class RunBazelCiTest(unittest.TestCase):
+    def test_keyless_windows_cross_invocation_keeps_target_platform(self) -> None:
+        for explicit_platform in (None, "//:windows_x86_64_msvc"):
+            with (
+                self.subTest(platform=explicit_platform),
+                TemporaryDirectory() as temp_dir,
+            ):
+                capture = Path(temp_dir) / "capture.py"
+                capture.write_text(
+                    "import json, sys\nprint(json.dumps(sys.argv[1:]))\n",
+                    encoding="utf-8",
+                )
+                fake_bazel = Path(temp_dir) / (
+                    "bazel.cmd" if os.name == "nt" else "bazel"
+                )
+                fake_bazel.write_text(
+                    f'@echo off\n"{sys.executable}" "{capture}" %*\n'
+                    if os.name == "nt"
+                    else f'#!/bin/sh\n{shlex.quote(sys.executable)} {shlex.quote(str(capture))} "$@"\n',
+                    encoding="utf-8",
+                )
+                fake_bazel.chmod(0o755)
+                env = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith(("BAZEL_", "BUILDBUDDY_", "CODEX_BAZEL_"))
+                }
+                env.update(
+                    RUNNER_OS="Windows",
+                    CODEX_BAZEL_BIN=str(fake_bazel),
+                    CODEX_BAZEL_WINDOWS_PATH="C:/Windows/System32",
+                )
+                args = ["test", "--skip_incompatible_explicit_targets"]
+                if explicit_platform:
+                    args.append(f"--platforms={explicit_platform}")
+                result = subprocess.run(
+                    [
+                        "bash",
+                        str(Path(__file__).with_name("run-bazel-ci.sh")),
+                        "--windows-cross-compile",
+                        "--",
+                        *args,
+                        "--",
+                        "//example:test",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                invocation = json.loads(result.stdout.splitlines()[-1])
+                self.assertEqual(
+                    [arg for arg in invocation if arg.startswith("--platforms=")],
+                    [f"--platforms={explicit_platform or '//:windows_x86_64_gnullvm'}"],
+                )
+                self.assertIn("--host_platform=//:local_windows_msvc", invocation)
+                self.assertIn(
+                    "--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain",
+                    invocation,
+                )
+                self.assertEqual(invocation[-2:], ["--", "//example:test"])
+                self.assertFalse(any(arg.startswith("--remote_") for arg in invocation))
 
 
 if __name__ == "__main__":

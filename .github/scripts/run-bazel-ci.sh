@@ -304,9 +304,22 @@ fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   # The Windows cross-compile config depends on authenticated remote
-  # execution. When credentials are unavailable, keep the local build shape
-  # and its lower concurrency cap.
-  post_config_bazel_args+=(--jobs=8)
+  # execution. Keep its GNU target and test toolchain when building locally;
+  # otherwise the MSVC host override also changes the default target ABI.
+  has_target_platform_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --platforms=* ]]; then
+      has_target_platform_override=1
+      break
+    fi
+  done
+  if [[ $has_target_platform_override -eq 0 ]]; then
+    post_config_bazel_args+=(--platforms=//:windows_x86_64_gnullvm)
+  fi
+  post_config_bazel_args+=(
+    --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
+    --jobs=8
+  )
 fi
 
 if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
