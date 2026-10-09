@@ -35,7 +35,8 @@ jobs:
 
   sdks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Include a cold local CLI build when remote credentials are unavailable.
+    timeout-minutes: 60
     environment:
       name: bazel
       deployment: false
