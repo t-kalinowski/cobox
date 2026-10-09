@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -289,6 +290,11 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
 
 class RunBazelCiTest(unittest.TestCase):
     def test_keyless_windows_cross_invocation_keeps_target_platform(self) -> None:
+        bash = "bash"
+        if os.name == "nt":
+            git = shutil.which("git")
+            assert git is not None, "Git for Windows is required to run the CI wrapper"
+            bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
         for explicit_platform in (None, "//:windows_x86_64_msvc"):
             with (
                 self.subTest(platform=explicit_platform),
@@ -324,8 +330,8 @@ class RunBazelCiTest(unittest.TestCase):
                     args.append(f"--platforms={explicit_platform}")
                 result = subprocess.run(
                     [
-                        "bash",
-                        str(Path(__file__).with_name("run-bazel-ci.sh")),
+                        bash,
+                        Path(__file__).with_name("run-bazel-ci.sh").as_posix(),
                         "--windows-cross-compile",
                         "--",
                         *args,
@@ -338,7 +344,7 @@ class RunBazelCiTest(unittest.TestCase):
                     text=True,
                 )
 
-                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 invocation = json.loads(result.stdout.splitlines()[-1])
                 self.assertEqual(
                     [arg for arg in invocation if arg.startswith("--platforms=")],
