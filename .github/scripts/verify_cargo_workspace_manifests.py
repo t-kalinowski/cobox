@@ -20,9 +20,6 @@ ROOT = Path(__file__).resolve().parents[2]
 CARGO_RS_ROOT = ROOT / "codex-rs"
 WORKSPACE_PACKAGE_FIELDS = ("version", "edition", "license")
 TOP_LEVEL_NAME_EXCEPTIONS = {
-    # Standalone Console packages keep their product names.
-    "mcp-console-sandbox": "mcp-console-sandbox",
-    "mcp-console-sandbox-windows": "mcp-console-sandbox-windows",
     "windows-sandbox-rs": "codex-windows-sandbox",
 }
 UTILITY_NAME_EXCEPTIONS = {

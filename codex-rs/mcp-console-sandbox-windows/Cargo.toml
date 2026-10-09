@@ -1,5 +1,5 @@
 [package]
-name = "mcp-console-sandbox-windows"
+name = "codex-mcp-console-sandbox-windows"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -26,13 +26,13 @@ For an ordinary GNU Linux build, install a C toolchain, `pkg-config`, and libcap
 ```console
 cd codex-rs
 cargo build --locked --release \
-  -p mcp-console-sandbox --bin mcp-console-sandbox \
+  -p codex-mcp-console-sandbox --bin mcp-console-sandbox \
   -p codex-bwrap --bin bwrap
 sandbox_target_dir="$(cargo metadata --locked --format-version=1 --no-deps |
   python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
 ```
 
-Stage `$sandbox_target_dir/release/mcp-console-sandbox` and `$sandbox_target_dir/release/bwrap` together when supplying the bundled helper. The ordinary Cargo helper links to system libcap, so the destination needs its runtime library. On macOS, build only the runner with `cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox --release`. The fixture binary is a test target, not a runtime companion.
+Stage `$sandbox_target_dir/release/mcp-console-sandbox` and `$sandbox_target_dir/release/bwrap` together when supplying the bundled helper. The ordinary Cargo helper links to system libcap, so the destination needs its runtime library. On macOS, build only the runner with `cargo build --locked -p codex-mcp-console-sandbox --bin mcp-console-sandbox --release`. The fixture binary is a test target, not a runtime companion.
 
 Linux selects a suitable host `bwrap` from the trusted launch `PATH` first, then the upstream bundled-helper search. An adjacent `bwrap`, the existing `codex-resources` layout, and install-context locations are supported. No patched bubblewrap option or runner-specific adjacent-helper check is required. Packaging should embed the shipped helper's digest through build-time `CODEX_BWRAP_SHA256`; a selected bundled helper is hashed and executed through the same open descriptor. An unused missing or modified bundle does not block a suitable host helper; a selected modified bundle fails verification without fallback.
 
@@ -45,7 +45,7 @@ For Linux Cargo tests, build the ordinary debug helper before running the execut
 ```console
 cargo build --locked -p codex-bwrap --bin bwrap
 env "CARGO_BIN_EXE_bwrap=$sandbox_target_dir/debug/bwrap" \
-  just test -p mcp-console-sandbox --retries 0
+  just test -p codex-mcp-console-sandbox --retries 0
 ```
 
 On Linux and macOS, Bazel uses `bazel build //codex-rs/mcp-console-sandbox:mcp-console-sandbox` and `bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test`. Test data supplies the runner, fixture, and bundled helper; no source-revision stamp or workspace status configuration is required. Both crates glob their Rust implementation files; the standalone test rule explicitly lists `tests/lifecycle/native_entry_tests.rs`. The control implementation is compiled only in the standalone package. For Windows Cargo and Bazel builds, tests, and companion packaging, follow the [Windows build instructions](WINDOWS.md#build-and-distribute).
