@@ -295,9 +295,13 @@ class RunBazelCiTest(unittest.TestCase):
             git = shutil.which("git")
             assert git is not None, "Git for Windows is required to run the CI wrapper"
             bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
-        for explicit_platform in (None, "//:windows_x86_64_msvc"):
+        for explicit_platform, explicit_host in (
+            (None, None),
+            ("//:windows_x86_64_msvc", None),
+            (None, "//:local_windows_msvc"),
+        ):
             with (
-                self.subTest(platform=explicit_platform),
+                self.subTest(platform=explicit_platform, host=explicit_host),
                 TemporaryDirectory() as temp_dir,
             ):
                 capture = Path(temp_dir) / "capture.py"
@@ -328,6 +332,8 @@ class RunBazelCiTest(unittest.TestCase):
                 args = ["test", "--skip_incompatible_explicit_targets"]
                 if explicit_platform:
                     args.append(f"--platforms={explicit_platform}")
+                if explicit_host:
+                    args.append(f"--host_platform={explicit_host}")
                 result = subprocess.run(
                     [
                         bash,
@@ -350,11 +356,11 @@ class RunBazelCiTest(unittest.TestCase):
                     [arg for arg in invocation if arg.startswith("--platforms=")],
                     [f"--platforms={explicit_platform or '//:windows_x86_64_gnullvm'}"],
                 )
-                self.assertIn("--host_platform=//:local_windows_msvc", invocation)
-                self.assertIn(
-                    "--extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain",
-                    invocation,
+                self.assertEqual(
+                    [arg for arg in invocation if arg.startswith("--host_platform=")],
+                    [f"--host_platform={explicit_host or '//:local_windows'}"],
                 )
+                self.assertIn("--config=windows-cross-tests", invocation)
                 self.assertEqual(invocation[-2:], ["--", "//example:test"])
                 self.assertFalse(any(arg.startswith("--remote_") for arg in invocation))
 

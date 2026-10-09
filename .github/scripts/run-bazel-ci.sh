@@ -258,13 +258,6 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-  # Windows cross-compilation depends on authenticated RBE. Preserve the local
-  # Windows build shape when credentials are unavailable.
-  ci_config=ci-windows
-  windows_msvc_host_platform=1
-fi
-
 post_config_bazel_args=()
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; then
   has_host_platform_override=0
@@ -303,21 +296,26 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -n "${BUI
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-  # The Windows cross-compile config depends on authenticated remote
-  # execution. Keep its GNU target and test toolchain when building locally;
-  # otherwise the MSVC host override also changes the default target ABI.
+  # Local proc-macros must use the same GNU ABI as hermetic LLVM's native
+  # dependencies (including AWS-LC). Keep caller-supplied platform overrides.
+  has_host_platform_override=$windows_msvc_host_platform
   has_target_platform_override=0
   for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --host_platform=* ]]; then
+      has_host_platform_override=1
+    fi
     if [[ "$arg" == --platforms=* ]]; then
       has_target_platform_override=1
-      break
     fi
   done
+  if [[ $has_host_platform_override -eq 0 ]]; then
+    post_config_bazel_args+=(--host_platform=//:local_windows)
+  fi
   if [[ $has_target_platform_override -eq 0 ]]; then
     post_config_bazel_args+=(--platforms=//:windows_x86_64_gnullvm)
   fi
   post_config_bazel_args+=(
-    --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
+    --config=windows-cross-tests
     --jobs=8
   )
 fi
