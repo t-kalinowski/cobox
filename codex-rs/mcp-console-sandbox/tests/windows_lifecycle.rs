@@ -8,6 +8,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::io::BufRead;
 use std::io::Write;
+use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
@@ -17,6 +18,9 @@ use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::System::Threading::OpenProcess;
 use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
 use windows_sys::Win32::System::Threading::PROCESS_TERMINATE;
@@ -165,6 +169,76 @@ fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
     );
     assert!(!temporary.exists());
     assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    Ok(())
+}
+
+#[test]
+fn private_storage_waits_for_a_transient_sharing_violation() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(temporary.join("held-by-descendant"))?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    descendant.wait();
+    assert_eq!(
+        unsafe {
+            WaitForSingleObject(process.0.as_raw_handle(), /*dwmilliseconds*/ 1_000)
+        },
+        WAIT_TIMEOUT,
+        "cleanup completed before the sharing violation was released"
+    );
+    drop(held);
+    process.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(42), vec![], vec![])
+    );
+    assert!(!temporary.exists());
+    Ok(())
+}
+
+#[test]
+fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(temporary.join("held-by-descendant"))?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    process.wait();
+    descendant.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let error = String::from_utf8(output.stderr)?;
+    assert!(
+        error.contains("remove retired Windows private storage"),
+        "{error}"
+    );
+    assert!(error.contains("os error 32"), "{error}");
+    assert!(temporary.join("held-by-descendant").is_file());
+    drop(held);
     Ok(())
 }
 
