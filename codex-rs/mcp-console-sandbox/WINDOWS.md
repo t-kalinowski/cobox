@@ -9,11 +9,11 @@ The public backend names are `elevated` and `unelevated`, in the JSON `windows_s
 Install Rust 1.95.0 with the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++ build tools, a Windows SDK, and CMake. From `codex-rs`:
 
 ```powershell
-cargo build --locked --release -p codex-mcp-console-sandbox -p codex-mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
-just test --locked --release -p codex-mcp-console-sandbox --retries 0
+cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+just test --locked --release -p mcp-console-sandbox --retries 0
 ```
 
-Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `codex-mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
+Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
 
 For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged.
 
@@ -104,7 +104,7 @@ The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) records t
 The public environment-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation; transport regressions cover JSON/path validation and exact target argument forwarding. Rejection of the removed CLI was verified separately during the migration, without retaining a test for unsupported options. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
 
 ```powershell
-just test --locked -p codex-mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
+just test --locked -p mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
 ```
 
 The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. For a nondefault provisioned directory, set `MCP_CONSOLE_SANDBOX_TEST_STATE_DIR` to its absolute path; this supplies `windows_state_dir` without changing the test harness's `LOCALAPPDATA`. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
