@@ -16,6 +16,15 @@ pub(super) fn run() -> Result<()> {
                 serde_json::to_string(&std::env::args().skip(2).collect::<Vec<_>>())?
             );
         }
+        "context" => {
+            let environment: std::collections::BTreeMap<_, _> = std::env::vars().collect();
+            serde_json::to_writer(
+                std::io::stdout(),
+                &serde_json::json!({
+                    "cwd": std::env::current_dir()?, "environment": environment
+                }),
+            )?;
+        }
         "copy-stdin" => {
             std::io::copy(&mut std::io::stdin().lock(), &mut std::io::stdout().lock())?;
         }

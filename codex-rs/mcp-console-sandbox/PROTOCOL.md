@@ -69,6 +69,8 @@ Only Linux and macOS execute this protocol. Other platforms return an unsupporte
 
 There are no other top-level fields. In particular, `excluded_environment` is internal and rejected on input. Environment mode takes the command from arguments after `--`, cwd from process creation, and environment from inheritance/overrides. Descriptor mode takes all three from the JSON. Native OS permissions and the executable's own requirements still apply; parsing a request does not establish that it can launch.
 
+Windows environment inheritance omits hidden per-drive working-directory entries such as `=C:`. Ordinary variables remain inherited, and explicit environment names containing `=` remain invalid.
+
 ### Native built-in selection
 
 `extends` selects a baseline directly from the public `codex-protocol` constructors. `":read-only"` uses `PermissionProfile::read_only()`: host reads and restricted networking. `":workspace"` uses `PermissionProfile::workspace_write_with(...)`: host reads, workspace writes, restricted networking, and native read-only metadata defaults for `.git`, `.agents`, and `.codex`. The workspace is supplied to that constructor so native Git pointer handling also protects referenced metadata, then the existing workspace-root materialization API resolves symbolic entries. No Codex configuration files or full configuration loader are used.
