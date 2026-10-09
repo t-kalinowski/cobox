@@ -122,7 +122,13 @@ pub fn take_input() -> Result<Input> {
         let config: EnvironmentConfiguration = parse_json(payload.as_bytes())?;
         let mut environment = if config.inherit_environment {
             std::env::vars_os()
-                .filter(|(key, _)| key != name && key != RESERVED_CONFIGURATION)
+                .filter(|(key, _)| {
+                    // Windows records per-drive cwd metadata as hidden =C: entries,
+                    // rather than ordinary target environment variables.
+                    let drive_directory = cfg!(windows)
+                        && matches!(key.as_encoded_bytes(), [b'=', drive, b':'] if drive.is_ascii_alphabetic());
+                    !drive_directory && key != name && key != RESERVED_CONFIGURATION
+                })
                 .map(|(key, value)| {
                     Ok((
                         key.into_string()
