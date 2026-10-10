@@ -2,6 +2,8 @@
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -33,7 +35,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             "GITHUB_REPOSITORY": repository,
         }
 
-    def test_keyless_invocation_drops_remote_ci_configuration(self) -> None:
+    def test_keyless_invocation_preserves_common_ci_configuration(self) -> None:
         self.assertIsNone(
             run_bazel_with_buildbuddy.remote_config(
                 ["build", "--config=ci-linux", "//codex-rs/cli:codex"],
@@ -45,7 +47,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 ["build", "--config=ci-linux", "--", "//codex-rs/cli:codex"],
                 {},
             ),
-            ["build", "--", "//codex-rs/cli:codex"],
+            ["build", "--config=ci-bazel", "--", "//codex-rs/cli:codex"],
         )
 
     def test_program_arguments_after_separator_do_not_select_or_lose_rbe(self) -> None:
@@ -256,6 +258,40 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ],
         )
 
+    def test_main_preserves_local_ci_defaults_without_credentials(self) -> None:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("BAZEL_", "BUILDBUDDY_"))
+        }
+        # Python stands in for Bazel here and cannot accept its CI startup flags.
+        env.pop("GITHUB_ACTIONS", None)
+        env["CODEX_BAZEL_BIN"] = sys.executable
+        child_code = "import json, sys; print(json.dumps(sys.argv[1:]))"
+        for config in ("ci-linux", "ci-macos", "ci-v8", "ci-windows-cross"):
+            with self.subTest(config=config):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(run_bazel_with_buildbuddy.__file__)),
+                        "-c",
+                        child_code,
+                        "build",
+                        f"--config={config}",
+                        "--",
+                        "//example:test",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    json.loads(result.stdout),
+                    ["build", "--config=ci-bazel", "--", "//example:test"],
+                )
+
     def test_main_preserves_spaced_argument_and_child_exit_status(self) -> None:
         spaced_arg = (
             r"--test_env=PATH=C:\Program Files\PowerShell\7;C:\Program Files\Git\bin"
@@ -284,6 +320,181 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 37, result.stderr)
+
+
+class RunBazelCiTest(unittest.TestCase):
+    def test_failed_cross_test_prints_log_for_selected_platform(self) -> None:
+        bash = "bash"
+        if os.name == "nt":
+            git = shutil.which("git")
+            assert git is not None, "Git for Windows is required to run the CI wrapper"
+            bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+        for explicit_platform in (
+            None,
+            "//:windows_x86_64_gnullvm",
+            "//:windows_x86_64_msvc",
+        ):
+            with (
+                self.subTest(platform=explicit_platform),
+                TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                platform = explicit_platform or "//:windows_x86_64_gnullvm"
+                log = (
+                    root
+                    / platform.removeprefix("//:")
+                    / "testlogs/example/test/test.log"
+                )
+                log.parent.mkdir(parents=True)
+                log.write_text("platform-specific failure details\n", encoding="utf-8")
+                capture = root / "capture.py"
+                capture.write_text(
+                    "import sys\nfrom pathlib import Path\n"
+                    "args = sys.argv[1:]\n"
+                    "if 'test' in args:\n"
+                    "    print('FAIL: //example:test')\n"
+                    "    sys.exit(7)\n"
+                    "assert '--@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0' in args\n"
+                    "assert '--@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0' in args\n"
+                    "platform = next((arg.split('=', 1)[1] for arg in reversed(args) "
+                    "if arg.startswith('--platforms=')), 'default')\n"
+                    "print((Path(__file__).parent / platform.removeprefix('//:') "
+                    "/ 'testlogs').as_posix())\n",
+                    encoding="utf-8",
+                )
+                fake_bazel = root / ("bazel.cmd" if os.name == "nt" else "bazel")
+                fake_bazel.write_text(
+                    f'@echo off\n"{sys.executable}" "{capture}" %*\n'
+                    if os.name == "nt"
+                    else f'#!/bin/sh\n{shlex.quote(sys.executable)} {shlex.quote(str(capture))} "$@"\n',
+                    encoding="utf-8",
+                )
+                fake_bazel.chmod(0o755)
+                env = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith(("BAZEL_", "BUILDBUDDY_", "CODEX_BAZEL_"))
+                }
+                env.update(
+                    RUNNER_OS="Windows",
+                    BAZEL_CI_RUST_DEBUG_INFO="0",
+                    CODEX_BAZEL_BIN=str(fake_bazel),
+                    CODEX_BAZEL_WINDOWS_PATH="C:/Windows/System32",
+                )
+                args = ["test"]
+                if explicit_platform:
+                    args.append(f"--platforms={explicit_platform}")
+                result = subprocess.run(
+                    [
+                        bash,
+                        Path(__file__).with_name("run-bazel-ci.sh").as_posix(),
+                        "--windows-cross-compile",
+                        "--print-failed-test-logs",
+                        "--",
+                        *args,
+                        "--",
+                        "//example:test",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+                self.assertIn("platform-specific failure details", result.stdout)
+
+    def test_keyless_windows_cross_invocation_keeps_target_platform(self) -> None:
+        bash = "bash"
+        if os.name == "nt":
+            git = shutil.which("git")
+            assert git is not None, "Git for Windows is required to run the CI wrapper"
+            bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+        for explicit_platform, explicit_host, debug_info in (
+            (None, None, "0"),
+            ("//:windows_x86_64_msvc", None, "0"),
+            (None, "//:local_windows_msvc", "0"),
+            (None, None, ""),
+        ):
+            with (
+                self.subTest(
+                    platform=explicit_platform,
+                    host=explicit_host,
+                    debug_info=debug_info,
+                ),
+                TemporaryDirectory() as temp_dir,
+            ):
+                capture = Path(temp_dir) / "capture.py"
+                capture.write_text(
+                    "import json, sys\nprint(json.dumps(sys.argv[1:]))\n",
+                    encoding="utf-8",
+                )
+                fake_bazel = Path(temp_dir) / (
+                    "bazel.cmd" if os.name == "nt" else "bazel"
+                )
+                fake_bazel.write_text(
+                    f'@echo off\n"{sys.executable}" "{capture}" %*\n'
+                    if os.name == "nt"
+                    else f'#!/bin/sh\n{shlex.quote(sys.executable)} {shlex.quote(str(capture))} "$@"\n',
+                    encoding="utf-8",
+                )
+                fake_bazel.chmod(0o755)
+                env = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith(("BAZEL_", "BUILDBUDDY_", "CODEX_BAZEL_"))
+                }
+                env.update(
+                    RUNNER_OS="Windows",
+                    BAZEL_CI_RUST_DEBUG_INFO=debug_info,
+                    CODEX_BAZEL_BIN=str(fake_bazel),
+                    CODEX_BAZEL_WINDOWS_PATH="C:/Windows/System32",
+                )
+                args = ["test", "--skip_incompatible_explicit_targets"]
+                if explicit_platform:
+                    args.append(f"--platforms={explicit_platform}")
+                if explicit_host:
+                    args.append(f"--host_platform={explicit_host}")
+                result = subprocess.run(
+                    [
+                        bash,
+                        Path(__file__).with_name("run-bazel-ci.sh").as_posix(),
+                        "--windows-cross-compile",
+                        "--",
+                        *args,
+                        "--",
+                        "//example:test",
+                    ],
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                invocation = json.loads(result.stdout.splitlines()[-1])
+                self.assertEqual(
+                    [arg for arg in invocation if arg.startswith("--platforms=")],
+                    [f"--platforms={explicit_platform or '//:windows_x86_64_gnullvm'}"],
+                )
+                self.assertEqual(
+                    [arg for arg in invocation if arg.startswith("--host_platform=")],
+                    [f"--host_platform={explicit_host or '//:local_windows'}"],
+                )
+                self.assertIn("--config=windows-cross-tests", invocation)
+                self.assertIn("--config=ci-bazel", invocation)
+                self.assertIn("--jobs=HOST_CPUS", invocation)
+                self.assertIn("--local_test_jobs=HOST_CPUS", invocation)
+                self.assertEqual(
+                    [arg for arg in invocation if arg.endswith("=-Cdebuginfo=0")],
+                    [
+                        "--@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0",
+                        "--@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0",
+                    ]
+                    if debug_info == "0"
+                    else [],
+                )
+                self.assertEqual(invocation[-2:], ["--", "//example:test"])
+                self.assertFalse(any(arg.startswith("--remote_") for arg in invocation))
 
 
 if __name__ == "__main__":

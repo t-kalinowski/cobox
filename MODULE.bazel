@@ -249,6 +249,7 @@ nightly_rust.repository_set(
         "@platforms//os:windows",
         "@llvm//constraints/windows/abi:msvc",
     ],
+    target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
     target_triple = "x86_64-pc-windows-msvc",
     versions = ["nightly/2025-09-18"],
 )
@@ -284,8 +285,32 @@ nightly_rust.repository_set(
         "@llvm//constraints/windows/abi:gnullvm",
         "@llvm//constraints/windows/crt:msvcrt",
     ],
+    target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
     target_triple = "x86_64-pc-windows-gnullvm",
     versions = ["nightly/2025-09-18"],
+)
+
+# A GNU-hosted build needs a GNU rustc as well as GNU proc-macros: MSVC rustc
+# rejects their host metadata even when the target platform is GNU.
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64_gnullvm_stable",
+    edition = "2024",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
+    ],
+    exec_triple = "x86_64-pc-windows-gnullvm",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:gnullvm",
+        "@llvm//constraints/windows/crt:msvcrt",
+    ],
+    target_settings = ["@rules_rust//rust/toolchain/channel:stable"],
+    target_triple = "x86_64-pc-windows-gnullvm",
+    versions = ["1.95.0"],
 )
 use_repo(nightly_rust, "rust_toolchains")
 
@@ -296,9 +321,11 @@ toolchains.toolchain(
 )
 use_repo(toolchains, "default_rust_toolchains")
 
-register_toolchains("@default_rust_toolchains//:all")
-
+# Prefer the ABI-constrained Windows host toolchains over rules_rs's generic
+# Windows toolchain, which runs an MSVC compiler on either Windows platform.
 register_toolchains("@rust_toolchains//:all")
+
+register_toolchains("@default_rust_toolchains//:all")
 
 rules_rust_bindgen = use_extension(
     "@rules_rs//rs:rules_rust_bindgen.bzl",

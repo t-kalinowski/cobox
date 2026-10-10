@@ -163,8 +163,9 @@ jobs:
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    runs-on: ${{ matrix.runner }}
+    # Keyless hosted runners compile the crate graph and nightly lint locally.
+    timeout-minutes: 60
     needs: changed
     environment:
       name: bazel
@@ -175,16 +176,10 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
-            timeout_minutes: 30
           - name: macOS
-            runner: macos-15-xlarge
-            timeout_minutes: 30
+            runner: macos-15
           - name: Windows
-            runner: windows-x64
-            timeout_minutes: 30
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
+            runner: windows-latest
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate

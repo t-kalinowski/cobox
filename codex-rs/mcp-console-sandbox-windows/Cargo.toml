@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+# cargo-shear does not scan the shared runner source outside this package.
+[package.metadata.cargo-shear]
+ignored = ["codex-utils-process", "codex-utils-pty", "windows-sys"]
+
 [[bin]]
 name = "mcp-console-sandbox-setup"
 path = "src/setup.rs"

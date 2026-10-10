@@ -1,5 +1,9 @@
 name: Bazel
 
+env:
+  # Disposable checks do not need the debug information archived by releases.
+  BAZEL_CI_RUST_DEBUG_INFO: "0"
+
 # Note this workflow was originally derived from:
 # https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
 
@@ -20,15 +24,16 @@ jobs:
     # signal without putting PR latency back on the critical path. When
     # Code-mode unit tests run on every Bazel target. When authenticated RBE
     # is available, the Windows-cross shards exercise the source-built V8 path.
-    timeout-minutes: 30
+    # Hosted runners without RBE compile the full workspace locally before tests.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS
-          - os: macos-15-xlarge
+          # macOS: use a native host for each target architecture.
+          - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-15-xlarge
+          - os: macos-15-intel
             target: x86_64-apple-darwin
 
           # Linux
@@ -140,7 +145,8 @@ jobs:
     # Split the Windows Bazel test leg across separate Windows hosts. Jobs with
     # BuildBuddy credentials use Linux RBE for build actions; test execution
     # remains on a Windows runner.
-    timeout-minutes: 30
+    # Keyless runs build the GNU toolchain and crate graph on the Windows host.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -149,9 +155,7 @@ jobs:
           - 2
           - 3
           - 4
-    runs-on:
-      group: ${{ github.event.repository.name }}-runners
-      labels: ${{ github.event.repository.name }}-windows-x64
+    runs-on: windows-latest
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm shard ${{ matrix.shard }}/4
     environment:
       name: bazel
@@ -261,9 +265,7 @@ jobs:
     # it a larger timeout.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 40
-    runs-on:
-      group: ${{ github.event.repository.name }}-runners
-      labels: ${{ github.event.repository.name }}-windows-x64
+    runs-on: windows-latest
     name: Bazel test on windows-latest for x86_64-pc-windows-msvc (native main)
     environment:
       name: bazel
@@ -337,7 +339,8 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   clippy:
-    timeout-minutes: 30
+    # Full-workspace linting also compiles locally when RBE is unavailable.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -348,14 +351,11 @@ jobs:
           # that the Bazel test job uses.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: macos-15-xlarge
+          - os: macos-15
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-gnullvm
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-    runs-on: ${{ matrix.runs_on || matrix.os }}
+    runs-on: ${{ matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
     environment:
       name: bazel
@@ -389,14 +389,12 @@ jobs:
             # Keep this aligned with the fast Windows Bazel test job: use
             # Linux RBE for clippy build actions while targeting Windows
             # gnullvm. Fork/community PRs without the BuildBuddy secret fall
-            # back inside `run-bazel-ci.sh` to the previous local Windows MSVC
-            # host-platform shape.
+            # back inside `run-bazel-ci.sh` to local builds with a Windows GNU
+            # host and the same gnullvm target.
             bazel_wrapper_args+=(--windows-cross-compile)
             bazel_target_list_args+=(--windows-cross-compile)
             if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-              # The fork fallback can see incompatible explicit Windows-cross
-              # internal test binaries in the generated target list. Preserve
-              # the old local-fallback behavior there.
+              # The generated list also includes targets for other platforms.
               bazel_clippy_args+=(--skip_incompatible_explicit_targets)
             fi
           fi
@@ -440,21 +438,19 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   verify-release-build:
-    timeout-minutes: 30
+    # Allow cold local builds when remote execution credentials are unavailable.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: macos-15-xlarge
+          - os: macos-15
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-gnullvm
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-    runs-on: ${{ matrix.runs_on || matrix.os }}
+    runs-on: ${{ matrix.os }}
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
     environment:
       name: bazel
@@ -488,8 +484,8 @@ jobs:
             # This is build-only signal, so use the same Linux-RBE
             # cross-compile path as the fast Windows test and clippy jobs.
             # Fork/community PRs without the BuildBuddy secret fall back
-            # inside `run-bazel-ci.sh` to the previous local Windows MSVC
-            # host-platform shape.
+            # inside `run-bazel-ci.sh` to local builds with a Windows GNU host
+            # and the same gnullvm target.
             bazel_wrapper_args+=(--windows-cross-compile)
           fi
 

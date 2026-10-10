@@ -63,7 +63,6 @@ fn spawn_and_wait(arguments: Vec<String>, descriptor: OwnedFd) -> io::Result<i32
         command.pre_exec(move || setup.signals.restore());
     }
     // The control loop reaps this child and all other namespace children.
-    #[expect(clippy::zombie_processes)]
     let child = command.spawn()?;
     drop(command);
     // Waiting helpers must not hide target-side stdin closure from the caller.

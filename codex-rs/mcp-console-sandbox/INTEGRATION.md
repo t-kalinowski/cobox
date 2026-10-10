@@ -2,7 +2,7 @@
 
 This inventories the extraction from `rust-v0.160.1`, commit `d27764b82f7118f674371e6d6e76271d9d606edb`, carried forward from `mcp-console/sandbox-runner/rust-v0.154.0` at `56d877c8e235af07adba2751d3d077ec27d030b2`. Only the pinned release is supported. Use this inventory with the source and [reapplication procedure](REBASE.md) when upgrading.
 
-Console-owned packages and components use Console names without a `codex-` prefix. Windows-specific code uses `windows` in its package or module name: the cross-platform runner is `mcp-console-sandbox`, and its companion package is `mcp-console-sandbox-windows`. The `codex.rs` facade and references to upstream dependencies retain their Codex names. Existing shipping executable names remain stable.
+The package-local instructions for the [cross-platform runner](AGENTS.md) and [Windows companion](../mcp-console-sandbox-windows/AGENTS.md) explicitly supersede the inherited `codex-` crate-prefix rule. Their Cargo package names remain `mcp-console-sandbox` and `mcp-console-sandbox-windows`. Windows-specific code uses `windows` in its package or module name. The `codex.rs` facade and references to upstream dependencies retain their Codex names. Existing shipping executable names remain stable.
 
 ## What the patch carries
 
