@@ -339,8 +339,8 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   clippy:
-    # Allow cold local builds when remote execution credentials are unavailable.
-    timeout-minutes: 60
+    # Full-workspace linting also compiles locally when RBE is unavailable.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
