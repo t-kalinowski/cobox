@@ -354,6 +354,8 @@ class RunBazelCiTest(unittest.TestCase):
                     "if 'test' in args:\n"
                     "    print('FAIL: //example:test')\n"
                     "    sys.exit(7)\n"
+                    "assert '--@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0' in args\n"
+                    "assert '--@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0' in args\n"
                     "platform = next((arg.split('=', 1)[1] for arg in reversed(args) "
                     "if arg.startswith('--platforms=')), 'default')\n"
                     "print((Path(__file__).parent / platform.removeprefix('//:') "
@@ -375,6 +377,7 @@ class RunBazelCiTest(unittest.TestCase):
                 }
                 env.update(
                     RUNNER_OS="Windows",
+                    BAZEL_CI_RUST_DEBUG_INFO="0",
                     CODEX_BAZEL_BIN=str(fake_bazel),
                     CODEX_BAZEL_WINDOWS_PATH="C:/Windows/System32",
                 )
@@ -406,13 +409,18 @@ class RunBazelCiTest(unittest.TestCase):
             git = shutil.which("git")
             assert git is not None, "Git for Windows is required to run the CI wrapper"
             bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
-        for explicit_platform, explicit_host in (
-            (None, None),
-            ("//:windows_x86_64_msvc", None),
-            (None, "//:local_windows_msvc"),
+        for explicit_platform, explicit_host, debug_info in (
+            (None, None, "0"),
+            ("//:windows_x86_64_msvc", None, "0"),
+            (None, "//:local_windows_msvc", "0"),
+            (None, None, ""),
         ):
             with (
-                self.subTest(platform=explicit_platform, host=explicit_host),
+                self.subTest(
+                    platform=explicit_platform,
+                    host=explicit_host,
+                    debug_info=debug_info,
+                ),
                 TemporaryDirectory() as temp_dir,
             ):
                 capture = Path(temp_dir) / "capture.py"
@@ -437,6 +445,7 @@ class RunBazelCiTest(unittest.TestCase):
                 }
                 env.update(
                     RUNNER_OS="Windows",
+                    BAZEL_CI_RUST_DEBUG_INFO=debug_info,
                     CODEX_BAZEL_BIN=str(fake_bazel),
                     CODEX_BAZEL_WINDOWS_PATH="C:/Windows/System32",
                 )
@@ -475,6 +484,15 @@ class RunBazelCiTest(unittest.TestCase):
                 self.assertIn("--config=ci-bazel", invocation)
                 self.assertIn("--jobs=HOST_CPUS", invocation)
                 self.assertIn("--local_test_jobs=HOST_CPUS", invocation)
+                self.assertEqual(
+                    [arg for arg in invocation if arg.endswith("=-Cdebuginfo=0")],
+                    [
+                        "--@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0",
+                        "--@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0",
+                    ]
+                    if debug_info == "0"
+                    else [],
+                )
                 self.assertEqual(invocation[-2:], ["--", "//example:test"])
                 self.assertFalse(any(arg.startswith("--remote_") for arg in invocation))
 

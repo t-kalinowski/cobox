@@ -97,7 +97,7 @@ print_bazel_test_log_tails() {
   # Preserve their invocation order so caller platform overrides still apply.
   for arg in "${bazel_run_args[@]}"; do
     case "$arg" in
-      --config="${ci_config}" | --config=ci-bazel | --host_platform=* | --platforms=* | --repo_contents_cache=* | --repository_cache=*)
+      --config="${ci_config}" | --config=ci-bazel | --host_platform=* | --platforms=* | --repo_contents_cache=* | --repository_cache=* | --@rules_rust//rust/settings:extra_rustc_flag=* | --@rules_rust//rust/settings:extra_exec_rustc_flag=*)
         bazel_info_args+=("$arg")
         ;;
     esac
@@ -402,6 +402,14 @@ fi
 if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   # Remote concurrency defaults overwhelm small local CI runners.
   bazel_run_args+=(--jobs=HOST_CPUS --local_test_jobs=HOST_CPUS)
+fi
+if [[ -z "${BUILDBUDDY_API_KEY:-}" && "${BAZEL_CI_RUST_DEBUG_INFO:-}" == "0" ]]; then
+  # Disposable checks opt out of debug information to fit hosted build volumes.
+  # Release packaging leaves this unset and retains its debug information.
+  bazel_run_args+=(
+    --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0
+    --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0
+  )
 fi
 set +e
 # Work around Bazel 9 remote repo contents cache / overlay materialization

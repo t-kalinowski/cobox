@@ -10,6 +10,7 @@ py_test(
     data = [":process-wrapper"],
     main = "wrapper_args_test.py",
     # This build-time executable must be tested on its native execution platform.
+    # CI invokes it explicitly in the native Linux test job.
     tags = ["manual"],
     deps = ["@rules_python//python/runfiles"],
 )
