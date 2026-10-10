@@ -1,0 +1,30 @@
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -1122,2 +1122,5 @@
+     # Wrapper args first
+     process_wrapper_flags = ctx.actions.args()
++    # Substitution flags can exceed Windows argv limits before rustc starts.
++    process_wrapper_flags.set_param_file_format("multiline")
++    process_wrapper_flags.use_param_file("@%s", use_always = True)
+diff --git a/util/process_wrapper/options.rs b/util/process_wrapper/options.rs
+--- a/util/process_wrapper/options.rs
++++ b/util/process_wrapper/options.rs
+@@ -139,5 +139,16 @@
++    let mut argv = Vec::new();
++    let mut wrapper_args = true;
++    for arg in env::args() {
++        if let Some(file) = arg.strip_prefix('@').filter(|_| wrapper_args) {
++            argv.extend(read_file_to_array(file).map_err(OptionError::Generic)?);
++            continue;
++        }
++        wrapper_args &= arg != "--";
++        argv.push(arg);
++    }
++
+     let mut child_args = match flags
+-        .parse(env::args().collect())
++        .parse(argv)
+         .map_err(OptionError::FlagError)?
+     {
+         ParseOutcome::Help(help) => {
