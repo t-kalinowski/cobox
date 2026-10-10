@@ -24,16 +24,16 @@ jobs:
     # signal without putting PR latency back on the critical path. When
     # Code-mode unit tests run on every Bazel target. When authenticated RBE
     # is available, the Windows-cross shards exercise the source-built V8 path.
-    # Hosted runners without RBE need time for a cold local build before tests.
-    timeout-minutes: 60
+    # Hosted runners without RBE compile the full workspace locally before tests.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS
+          # macOS: use a native host for each target architecture.
           - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-15
+          - os: macos-15-intel
             target: x86_64-apple-darwin
 
           # Linux
