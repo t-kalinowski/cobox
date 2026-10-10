@@ -2214,10 +2214,10 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
 
     tokio::time::pause();
     let before_auth_change = tokio::time::Instant::now();
-    // A blocking task inhibits paused time's auto-advance. Its real-time I/O
-    // deadline also lets a broken test fail instead of freezing indefinitely.
+    // A blocking task inhibits paused time's auto-advance. Race its wall-clock
+    // deadline against the request so a stalled accept or HTTP read fails.
     let (release_clock, hold_clock) = std::sync::mpsc::channel::<()>();
-    let clock_guard = tokio::task::spawn_blocking(move || {
+    let mut clock_guard = tokio::task::spawn_blocking(move || {
         hold_clock.recv_timeout(Duration::from_secs(/*secs*/ 5))
     });
 
@@ -2230,7 +2230,12 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     .expect("auth with account id should save");
     auth_manager.reload().await;
 
-    let enroll_request = accept_http_request(&listener).await;
+    let enroll_request = tokio::select! {
+        request = accept_http_request(&listener) => request,
+        result = &mut clock_guard => {
+            panic!("enrollment did not arrive within the I/O deadline: {result:?}");
+        }
+    };
     assert_eq!(tokio::time::Instant::now(), before_auth_change);
     release_clock
         .send(())
