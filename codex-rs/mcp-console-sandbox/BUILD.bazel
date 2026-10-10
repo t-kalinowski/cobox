@@ -85,10 +85,12 @@ rust_test(
     crate_root = "tests/windows_cli.rs",
     data = [
         ":mcp-console-sandbox",
+        ":mcp-console-sandbox-fixture",
     ],
     edition = "2024",
     env = {
         "CARGO_BIN_EXE_mcp-console-sandbox": "$(rlocationpath :mcp-console-sandbox)",
+        "CARGO_BIN_EXE_mcp-console-sandbox-fixture": "$(rlocationpath :mcp-console-sandbox-fixture)",
     },
     tags = ["no-sandbox"],
     target_compatible_with = ["@platforms//os:windows"],

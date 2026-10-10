@@ -110,6 +110,15 @@ fn powershell_literal(path: &Path) -> String {
     path.to_string_lossy().replace('\'', "''")
 }
 
+fn publish_pid_marker(path: &Path) -> String {
+    // Existence signals readiness only after Set-Content closes the PID file.
+    let pending = powershell_literal(&path.with_extension("pending"));
+    let ready = powershell_literal(path);
+    format!(
+        "Set-Content -LiteralPath '{pending}' -Value $PID; Move-Item -LiteralPath '{pending}' -Destination '{ready}';"
+    )
+}
+
 fn start_powershell_child(
     pwsh: &Path,
     stdio_dir: &Path,
@@ -681,8 +690,8 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     let parent_marker = codex_home.path().join("parent-started");
     let watched_marker = codex_home.path().join("parent-watched");
     let descendant_command = format!(
-        "$deadline=(Get-Date).AddSeconds(30); Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
-        powershell_literal(&ready_marker),
+        "$deadline=(Get-Date).AddSeconds(30); {} while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
+        publish_pid_marker(&ready_marker),
         powershell_literal(&release_marker),
         powershell_literal(&survival_marker),
     );
@@ -691,8 +700,8 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
         powershell_literal(&ready_marker),
     );
     let parent_command = format!(
-        "{ASSERT_NO_CONSOLE} Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}; Write-Output LEGACY-CAPTURE-DIRECT; {}",
-        powershell_literal(&parent_marker),
+        "{ASSERT_NO_CONSOLE} {} while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}; Write-Output LEGACY-CAPTURE-DIRECT; {}",
+        publish_pid_marker(&parent_marker),
         powershell_literal(&watched_marker),
         start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail,),
     );
@@ -880,8 +889,8 @@ fn legacy_capture_cancellation_terminates_descendants_without_timeout() {
     let descendant_marker = codex_home.path().join("descendant-survived");
     let ready_marker = codex_home.path().join("descendant-started");
     let descendant_command = format!(
-        "Set-Content -LiteralPath '{}' -Value $PID; Start-Sleep -Seconds 1; Set-Content -LiteralPath '{}' -Value survived",
-        powershell_literal(&ready_marker),
+        "{} Start-Sleep -Seconds 1; Set-Content -LiteralPath '{}' -Value survived",
+        publish_pid_marker(&ready_marker),
         powershell_literal(&descendant_marker),
     );
     let parent_command = start_powershell_child(
@@ -976,10 +985,7 @@ async fn assert_legacy_tty_descendant_lifecycle(
             powershell_literal(&survival_marker),
         ),
     };
-    let child_command = format!(
-        "Set-Content -LiteralPath '{}' -Value $PID; {child_tail}",
-        powershell_literal(&ready_marker),
-    );
+    let child_command = format!("{} {child_tail}", publish_pid_marker(&ready_marker),);
     let parent_tail = match lifecycle {
         LegacyTtyDescendantLifecycle::Terminate => "Start-Sleep -Seconds 30".to_string(),
         LegacyTtyDescendantLifecycle::Preserve => format!(
