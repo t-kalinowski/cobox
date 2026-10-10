@@ -2,7 +2,6 @@
 """Format repository sources or check that they are already formatted."""
 
 import argparse
-import json
 import os
 import shlex
 import subprocess
@@ -42,28 +41,43 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
-    args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    workspace = REPO_ROOT / "codex-rs"
+    args = [
+        "rustfmt",
+        "--edition",
+        "2024",
+        "--config-path",
+        str(workspace / "rustfmt.toml"),
+        "--config",
+        "imports_granularity=Item,skip_children=true",
+    ]
     if check:
         args.append("--check")
-    workspace = REPO_ROOT / "codex-rs"
-    if os.name == "nt":
-        # Cargo expands package targets into absolute rustfmt arguments. The
-        # whole workspace exceeds Windows' command-line limit; one package fits.
-        metadata = json.loads(
-            subprocess.check_output(
-                ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-                cwd=workspace,
-            )
-        )
-        members = set(metadata["workspace_members"])
-        commands = tuple(
-            Command((*args[:2], "--package", package["name"], *args[2:]), workspace)
-            for package in metadata["packages"]
-            if package["id"] in members
-        )
-        return FormatterGroup("Rust", commands)
-    command = Command(tuple(args), workspace)
-    return FormatterGroup("Rust", (command,))
+    repository_files = subprocess.check_output(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.rs",
+        ],
+        cwd=REPO_ROOT,
+    ).split(b"\0")
+    rust_files = sorted(
+        os.path.relpath(REPO_ROOT / os.fsdecode(path), workspace)
+        for path in repository_files
+        if path and (REPO_ROOT / os.fsdecode(path)).is_file()
+    )
+    # Include sources outside Cargo's module graph, using short relative paths
+    # and small batches to stay within Windows' command-line limit.
+    commands = tuple(
+        Command((*args, *rust_files[offset : offset + 100]), workspace)
+        for offset in range(0, len(rust_files), 100)
+    )
+    return FormatterGroup("Rust", commands)
 
 
 def buildifier_formatter_group(*, check: bool) -> FormatterGroup:

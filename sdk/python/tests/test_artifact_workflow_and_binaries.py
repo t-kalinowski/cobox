@@ -287,6 +287,47 @@ def test_root_format_driver_covers_all_formatter_groups(
     ]
 
 
+def test_root_format_driver_covers_many_rust_files_through_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    script = _load_root_format_script_module()
+    sources = [f"bazel/rules/fixture_{'x' * 110}_{index:04}.rs" for index in range(250)]
+    sources.append("codex-rs/new file.rs")
+    for source in sources:
+        path = tmp_path / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    repository_files = b"\0".join(source.encode() for source in sources) + b"\0"
+    calls = []
+
+    def git_output(args, *, cwd):
+        assert args[:2] == ["git", "ls-files"]
+        assert cwd == tmp_path
+        return repository_files
+
+    def run_formatter(args, *, cwd, **kwargs):
+        calls.append(script.Command(tuple(args), cwd))
+        return subprocess.CompletedProcess(args, 0, stdout="")
+
+    monkeypatch.setattr(script, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(script.subprocess, "check_output", git_output)
+    monkeypatch.setattr(script.subprocess, "run", run_formatter)
+    monkeypatch.setattr(sys, "argv", ["format.py", "--check"])
+
+    assert script.main() == 0
+    rust_calls = [call for call in calls if call.args[0] == "rustfmt"]
+    formatted_sources = [
+        (call.cwd / arg).resolve().relative_to(tmp_path).as_posix()
+        for call in rust_calls
+        for arg in call.args
+        if arg.endswith(".rs")
+    ]
+    assert formatted_sources == sorted(sources)
+    assert all("--check" in call.args for call in rust_calls)
+    assert all(len(subprocess.list2cmdline(call.args)) < 32767 for call in rust_calls)
+
+
 def test_root_format_driver_discards_successful_command_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
