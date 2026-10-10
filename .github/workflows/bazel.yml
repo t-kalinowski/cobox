@@ -146,7 +146,8 @@ jobs:
     # BuildBuddy credentials use Linux RBE for build actions; test execution
     # remains on a Windows runner.
     # Keyless runs build the GNU toolchain and crate graph on the Windows host.
-    timeout-minutes: 60
+    # Give cold local builds the same budget as the full-workspace test job.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -438,8 +439,8 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   verify-release-build:
-    # Allow cold local builds when remote execution credentials are unavailable.
-    timeout-minutes: 60
+    # Cold local builds and their cleanup can exceed an hour without RBE.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
