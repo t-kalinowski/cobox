@@ -13,6 +13,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -71,8 +73,13 @@ pub fn package(test: &str) -> Result<Option<PathBuf>> {
         ));
     }
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let package =
-        Package(std::env::temp_dir().join(format!("voice-actor-{}-{nonce}", std::process::id())));
+    // Clock readings can repeat between concurrent libtest threads.
+    static NEXT_PACKAGE_ID: AtomicU64 = AtomicU64::new(/*v*/ 0);
+    let package_id = NEXT_PACKAGE_ID.fetch_add(/*val*/ 1, Ordering::Relaxed);
+    let package = Package(std::env::temp_dir().join(format!(
+        "voice-actor-{}-{nonce}-{package_id}",
+        std::process::id()
+    )));
     let root = &package.0;
     fs::create_dir_all(root.join("bin"))?;
     fs::create_dir_all(root.join("codex-resources/voice/bin"))?;
