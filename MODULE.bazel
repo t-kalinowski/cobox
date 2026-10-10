@@ -213,6 +213,7 @@ rules_rust.patch(
         "//patches:rules_rust_group_build_script_arg_files.patch",
         "//patches:rules_rust_windows_execroot_separators.patch",
         "//patches:rules_rust_compiler_thp.patch",
+        "//patches:rules_rust_wrapper_response_file.patch",
     ],
     strip = 1,
 )
@@ -248,6 +249,7 @@ nightly_rust.repository_set(
         "@platforms//os:windows",
         "@llvm//constraints/windows/abi:msvc",
     ],
+    target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
     target_triple = "x86_64-pc-windows-msvc",
     versions = ["nightly/2025-09-18"],
 )
@@ -283,6 +285,7 @@ nightly_rust.repository_set(
         "@llvm//constraints/windows/abi:gnullvm",
         "@llvm//constraints/windows/crt:msvcrt",
     ],
+    target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
     target_triple = "x86_64-pc-windows-gnullvm",
     versions = ["nightly/2025-09-18"],
 )
@@ -305,6 +308,7 @@ nightly_rust.repository_set(
         "@llvm//constraints/windows/abi:gnullvm",
         "@llvm//constraints/windows/crt:msvcrt",
     ],
+    target_settings = ["@rules_rust//rust/toolchain/channel:stable"],
     target_triple = "x86_64-pc-windows-gnullvm",
     versions = ["1.95.0"],
 )

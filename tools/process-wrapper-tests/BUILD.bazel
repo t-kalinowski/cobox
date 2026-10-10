@@ -1,0 +1,15 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load(":wrapper.bzl", "process_wrapper")
+
+process_wrapper(name = "process-wrapper")
+
+py_test(
+    name = "wrapper-args-test",
+    srcs = ["wrapper_args_test.py"],
+    args = ["$(rlocationpath :process-wrapper)"],
+    data = [":process-wrapper"],
+    main = "wrapper_args_test.py",
+    # This build-time executable must be tested on its native execution platform.
+    tags = ["manual"],
+    deps = ["@rules_python//python/runfiles"],
+)
