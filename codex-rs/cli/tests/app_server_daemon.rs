@@ -539,7 +539,11 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     }
     std::fs::write(
         state.join("settings.json"),
-        br#"{"shutdownGraceSeconds":0}"#,
+        serde_json::to_vec(&serde_json::json!({
+            "shutdownGraceSeconds": 0,
+            // Bootstrap coverage must not depend on the CLI having a dev version.
+            "updater": {"autoUpdateEnabled": action != "bootstrap"},
+        }))?,
     )?;
     let cli_before = daemon.codex.canonicalize()?;
     let result = daemon

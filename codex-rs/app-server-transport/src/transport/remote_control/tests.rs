@@ -2212,6 +2212,15 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         .await
         .expect_err("remote control should wait for account id before enrolling");
 
+    tokio::time::pause();
+    let before_auth_change = tokio::time::Instant::now();
+    // A blocking task inhibits paused time's auto-advance. Its real-time I/O
+    // deadline also lets a broken test fail instead of freezing indefinitely.
+    let (release_clock, hold_clock) = std::sync::mpsc::channel::<()>();
+    let clock_guard = tokio::task::spawn_blocking(move || {
+        hold_clock.recv_timeout(Duration::from_secs(/*secs*/ 5))
+    });
+
     save_auth(
         codex_home.path(),
         &remote_control_auth_dot_json(Some("account_id")),
@@ -2221,9 +2230,16 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     .expect("auth with account id should save");
     auth_manager.reload().await;
 
-    let enroll_request = timeout(Duration::from_millis(100), accept_http_request(&listener))
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(tokio::time::Instant::now(), before_auth_change);
+    release_clock
+        .send(())
+        .expect("clock guard should remain held");
+    clock_guard
         .await
-        .expect("auth change should wake remote control before the retry delay");
+        .expect("clock guard should complete")
+        .expect("enrollment should complete within the I/O deadline");
+    tokio::time::resume();
     assert_eq!(
         enroll_request.request_line,
         "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
