@@ -775,6 +775,26 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
     runtime.block_on(async move {
         // Keep writable roots out of USERPROFILE exclusions such as AppData.
         let test_root = TempDir::new_in(sandbox_cwd()).expect("create legacy delete test root");
+        // Hosted workspaces can grant inherited write access to Everyone or the
+        // logon SID, both of which the legacy restricted token retains. Give
+        // this fixture a private ACL before creating its writable/protected paths.
+        let user_sid = unsafe {
+            let token = crate::get_current_token_for_restriction().expect("current token");
+            let sid = crate::get_user_sid_bytes(token);
+            windows_sys::Win32::Foundation::CloseHandle(token);
+            crate::string_from_sid_bytes(&sid.expect("current user SID"))
+                .expect("current user SID string")
+        };
+        let acl = std::process::Command::new("icacls.exe")
+            .arg(test_root.path())
+            .args([
+                "/inheritance:r",
+                "/grant:r",
+                &format!("*{user_sid}:(OI)(CI)F"),
+            ])
+            .output()
+            .expect("set private fixture ACL");
+        assert!(acl.status.success(), "private fixture ACL: {acl:?}");
         let codex_home = sandbox_home("legacy-delete-writable-roots");
         let workspace = test_root.path().join("workspace");
         let temp_root = test_root.path().join("temp");
