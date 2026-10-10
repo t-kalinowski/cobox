@@ -75,6 +75,13 @@ jobs:
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
+      - name: Test compiler wrapper response files
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: ./.github/scripts/run-bazel-ci.sh -- test -- //tools/process-wrapper-tests:wrapper-args-test
+
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
