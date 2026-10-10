@@ -473,6 +473,8 @@ class RunBazelCiTest(unittest.TestCase):
                 )
                 self.assertIn("--config=windows-cross-tests", invocation)
                 self.assertIn("--config=ci-bazel", invocation)
+                self.assertIn("--jobs=HOST_CPUS", invocation)
+                self.assertIn("--local_test_jobs=HOST_CPUS", invocation)
                 self.assertEqual(invocation[-2:], ["--", "//example:test"])
                 self.assertFalse(any(arg.startswith("--remote_") for arg in invocation))
 

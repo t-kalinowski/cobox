@@ -309,7 +309,6 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
   fi
   post_config_bazel_args+=(
     --config=windows-cross-tests
-    --jobs=8
   )
 fi
 
@@ -399,6 +398,10 @@ else
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")
+fi
+if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+  # Remote concurrency defaults overwhelm small local CI runners.
+  bazel_run_args+=(--jobs=HOST_CPUS --local_test_jobs=HOST_CPUS)
 fi
 set +e
 # Work around Bazel 9 remote repo contents cache / overlay materialization
