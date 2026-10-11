@@ -3888,35 +3888,83 @@ mod tests {
         assert_eq!(status, Ok("HTTP 405".to_string()));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn mcp_http_probe_falls_back_to_get_when_head_times_out() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
-        let addr = listener.local_addr().expect("listener address");
-        let server = std::thread::spawn(move || {
-            let (mut head_stream, _) = listener.accept().expect("accept HEAD probe request");
-            let head = std::thread::spawn(move || {
-                let mut request = [0; 1024];
-                let _ = head_stream.read(&mut request);
-                std::thread::sleep(Duration::from_millis(50));
-            });
+        use tokio::io::AsyncBufReadExt as _;
+        use tokio::io::AsyncWriteExt as _;
 
-            let (mut get_stream, _) = listener.accept().expect("accept GET probe request");
-            let mut request = [0; 1024];
-            let _ = get_stream.read(&mut request);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener address");
+        let (head_seen, head_received) = tokio::sync::oneshot::channel();
+        let (release_head, hold_head) = tokio::sync::oneshot::channel();
+        // Keep virtual time frozen during socket I/O, with a concurrent wall-clock bound.
+        let (release_clock, hold_clock) = std::sync::mpsc::channel();
+        let mut clock_guard = tokio::task::spawn_blocking(move || {
+            hold_clock.recv_timeout(Duration::from_secs(/*secs*/ 5))
+        });
+        let server = tokio::spawn(async move {
+            let (head_stream, _) = listener.accept().await.expect("accept HEAD probe request");
+            let mut head_stream = tokio::io::BufReader::new(head_stream);
+            let mut request = String::new();
+            head_stream
+                .read_line(&mut request)
+                .await
+                .expect("read HEAD request");
+            assert!(request.starts_with("HEAD /mcp "));
+            head_seen
+                .send(tokio::time::Instant::now())
+                .expect("announce HEAD request");
+
+            let (get_stream, _) = listener.accept().await.expect("accept GET probe request");
+            let mut get_stream = tokio::io::BufReader::new(get_stream);
+            request.clear();
             get_stream
+                .read_line(&mut request)
+                .await
+                .expect("read GET request");
+            assert!(request.starts_with("GET /mcp "));
+            get_stream
+                .get_mut()
                 .write_all(
                     b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                 )
+                .await
                 .expect("write response");
-            head.join().expect("HEAD holder should finish");
+            // Retain HEAD without a response so only its timeout can trigger GET.
+            hold_head
+                .await
+                .expect("keep HEAD open until the probe finishes");
+            drop(head_stream);
         });
-
-        let status = mcp_http_probe_url_with_timeout(
-            &format!("http://{addr}/mcp"),
-            Duration::from_millis(10),
-        )
-        .await;
-        server.join().expect("probe server thread should finish");
+        let url = format!("http://{addr}/mcp");
+        let probe = tokio::spawn(async move {
+            mcp_http_probe_url_with_timeout(&url, Duration::from_millis(/*millis*/ 10)).await
+        });
+        let status = tokio::select! {
+            status = async {
+                let head_at = head_received.await.expect("HEAD request should arrive");
+                assert_eq!(tokio::time::Instant::now(), head_at);
+                tokio::time::advance(Duration::from_millis(/*millis*/ 11)).await;
+                let status = probe.await.expect("probe should finish");
+                assert_eq!(
+                    tokio::time::Instant::now(),
+                    head_at + Duration::from_millis(/*millis*/ 11),
+                );
+                release_head.send(()).expect("release HEAD connection");
+                server.await.expect("probe server task should finish");
+                status
+            } => status,
+            result = &mut clock_guard => {
+                panic!("probe did not finish within the I/O deadline: {result:?}");
+            }
+        };
+        release_clock.send(()).expect("release test clock");
+        clock_guard
+            .await
+            .expect("clock guard should finish")
+            .expect("probe should complete within the I/O deadline");
 
         assert_eq!(status, Ok("HTTP 405".to_string()));
     }
