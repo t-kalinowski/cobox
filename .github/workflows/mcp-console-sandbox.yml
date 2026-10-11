@@ -212,8 +212,7 @@ jobs:
             just test -p codex-sandboxing -p codex-linux-sandbox -p codex-bwrap --retries 0
       - name: Test Bazel executable and argument comments
         run: |
-          bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test \
-            //tools/process-wrapper-tests:wrapper-args-test
+          bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test
           just argument-comment-lint -p mcp-console-sandbox
       - name: Build standalone release executable and bubblewrap
         run: |

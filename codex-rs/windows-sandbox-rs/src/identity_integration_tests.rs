@@ -180,8 +180,8 @@ fn credential_setup_reconciles_policy_and_repairs_accounts() -> Result<()> {
         let home = tempfile::tempdir()?;
         let marker = SetupMarker {
             version: SETUP_VERSION,
-            offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
-            online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
+            offline_username: "offline".into(),
+            online_username: "online".into(),
             created_at: None,
             proxy_ports: vec![3128],
             allow_local_binding: stored_binding,
@@ -252,7 +252,7 @@ fn credential_setup_reconciles_policy_and_repairs_accounts() -> Result<()> {
             let (creds, _) = prepare()?;
             assert_eq!(
                 (creds.username, creds.password),
-                (marker.offline_username.clone(), "test-password".into())
+                ("offline".into(), "test-password".into())
             );
         }
         // The second command reuses reconciled settings, including when filtering removed the proxy.

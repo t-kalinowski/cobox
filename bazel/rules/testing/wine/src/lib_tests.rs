@@ -370,9 +370,7 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
-    let command_timeout = Duration::from_secs(30);
-    let shutdown_timeout = Duration::from_secs(10);
-    let output = async {
+    let command_result = timeout(Duration::from_secs(30), async {
         let stdout = async {
             let mut output = Vec::new();
             while let Some(chunk) = stdout_rx.recv().await {
@@ -387,46 +385,34 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
             }
             output
         };
-        tokio::join!(stdout, stderr)
-    };
-    let lifecycle = async {
-        let command_result = timeout(command_timeout, exit_rx)
-            .await
-            .context("PowerShell smoke test timed out")
-            .and_then(|result| result.context("wait for PowerShell"));
-        // Wine's PTY output can remain open after PowerShell exits. Stop its
-        // isolated wineserver before requiring EOF, even on command failure.
-        let shutdown_result = timeout(shutdown_timeout, async {
-            let mut command = TokioCommand::new(&runtime.wineserver);
-            command
-                .args(["-k", "-w"])
-                .env("HOME", prefix.path())
-                .env("WINEPREFIX", prefix.path())
-                .env("XDG_RUNTIME_DIR", prefix.path())
-                .kill_on_drop(true);
-            let status = command.status().await.context("stop isolated wineserver")?;
-            anyhow::ensure!(
-                status.success() || status.code() == Some(1),
-                "wineserver exited with {status}"
-            );
-            Ok::<_, anyhow::Error>(())
-        })
-        .await
-        .context("stop isolated wineserver timed out")
-        .and_then(std::convert::identity);
-        (command_result, shutdown_result)
-    };
-    // Drain while the command and cleanup run, within their combined budget.
-    let ((command_result, shutdown_result), output_result) = tokio::join!(
-        lifecycle,
-        timeout(command_timeout + shutdown_timeout, output),
-    );
+        let (stdout, stderr, exit_code) = tokio::join!(stdout, stderr, exit_rx);
+        Ok::<_, anyhow::Error>((stdout, stderr, exit_code.context("wait for PowerShell")?))
+    })
+    .await
+    .context("PowerShell smoke test timed out")
+    .and_then(std::convert::identity);
     drop(session);
-    let shutdown_result =
-        shutdown_result.and(output_result.context("drain PowerShell output timed out"));
+    let shutdown_result = timeout(Duration::from_secs(10), async {
+        let mut command = TokioCommand::new(&runtime.wineserver);
+        command
+            .args(["-k", "-w"])
+            .env("HOME", prefix.path())
+            .env("WINEPREFIX", prefix.path())
+            .env("XDG_RUNTIME_DIR", prefix.path())
+            .kill_on_drop(true);
+        let status = command.status().await.context("stop isolated wineserver")?;
+        anyhow::ensure!(
+            status.success() || status.code() == Some(1),
+            "wineserver exited with {status}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("stop isolated wineserver timed out")
+    .and_then(std::convert::identity);
     let (stdout, stderr, exit_code) = match (command_result, shutdown_result) {
-        (Ok(exit_code), Ok((stdout, stderr))) => (stdout, stderr, exit_code),
-        (Err(error), Ok(_)) => return Err(error),
+        (Ok(output), Ok(())) => output,
+        (Err(error), Ok(())) => return Err(error),
         (Ok(_), Err(error)) => return Err(error),
         (Err(error), Err(shutdown_error)) => {
             return Err(error.context(format!("Wine teardown also failed: {shutdown_error:#}")));

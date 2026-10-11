@@ -5,7 +5,9 @@ on:
 
 jobs:
   python-sdk-installation:
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -34,9 +36,10 @@ jobs:
             '
 
   sdks:
-    runs-on: ubuntu-24.04
-    # Include a cold local CLI build when remote credentials are unavailable.
-    timeout-minutes: 60
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-linux-x64
+    timeout-minutes: 20
     environment:
       name: bazel
       deployment: false

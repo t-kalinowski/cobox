@@ -3756,7 +3756,6 @@ dependencies = [
  "codex-sandboxing",
  "codex-uds",
  "codex-utils-absolute-path",
- "codex-utils-cargo-bin",
  "globset",
  "landlock",
  "libc",

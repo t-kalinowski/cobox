@@ -116,17 +116,14 @@ def remote_config(args: Sequence[str], env: Mapping[str, str]) -> str | None:
 
 
 def bazel_args_without_remote_execution(args: Sequence[str]) -> list[str]:
-    # Keep common CI settings when removing remote platform/execution settings.
-    # In particular, an ephemeral runner must not duplicate outputs in a disk cache.
+    # Remote CI configs require BuildBuddy credentials. Removing them preserves
+    # the local fallback used for fork pull requests.
     try:
         separator_idx = args.index("--")
     except ValueError:
         separator_idx = len(args)
     return [
-        *(
-            "--config=ci-bazel" if arg in REMOTE_EXECUTION_CONFIGS else arg
-            for arg in args[:separator_idx]
-        ),
+        *(arg for arg in args[:separator_idx] if arg not in REMOTE_EXECUTION_CONFIGS),
         *args[separator_idx:],
     ]
 
