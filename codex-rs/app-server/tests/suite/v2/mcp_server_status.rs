@@ -1250,11 +1250,12 @@ impl ServerHandler for McpStatusServer {
 }
 
 #[derive(Clone)]
-struct SlowInventoryServer {
+struct BlockedInventoryServer {
     tool_name: Arc<String>,
+    inventory_requests: mpsc::UnboundedSender<&'static str>,
 }
 
-impl ServerHandler for SlowInventoryServer {
+impl ServerHandler for BlockedInventoryServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
@@ -1290,8 +1291,10 @@ impl ServerHandler for SlowInventoryServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        Ok(ListResourcesResult::with_all_items(Vec::new()))
+        self.inventory_requests
+            .send("resources/list")
+            .expect("inventory monitor should remain open");
+        std::future::pending().await
     }
 
     async fn list_resource_templates(
@@ -1299,15 +1302,19 @@ impl ServerHandler for SlowInventoryServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        Ok(ListResourceTemplatesResult::with_all_items(Vec::new()))
+        self.inventory_requests
+            .send("resources/templates/list")
+            .expect("inventory monitor should remain open");
+        std::future::pending().await
     }
 }
 
 #[tokio::test]
 async fn mcp_server_status_list_tools_and_auth_only_skips_slow_inventory_calls() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_slow_inventory_mcp_server("lookup").await?;
+    let (inventory_tx, mut inventory_rx) = mpsc::unbounded_channel();
+    let (mcp_server_url, mcp_server_handle) =
+        start_blocked_inventory_mcp_server("lookup", inventory_tx).await?;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
         .with_extra_config(&format!(
@@ -1321,17 +1328,24 @@ async fn mcp_server_status_list_tools_and_auth_only_skips_slow_inventory_calls()
         .build_initialized()
         .await?;
 
-    let request_id = mcp
-        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
-            server_name: None,
-            cursor: None,
-            limit: None,
-            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
-            thread_id: None,
-        })
-        .await?;
-    let response: ListMcpServerStatusResponse =
-        timeout(Duration::from_millis(500), mcp.read_response(request_id)).await??;
+    // Required tool/auth discovery may be slow. Detect forbidden inventory
+    // requests directly instead of inferring their absence from elapsed time.
+    let response: ListMcpServerStatusResponse = tokio::select! {
+        biased;
+        inventory = inventory_rx.recv() => {
+            anyhow::bail!("tools-and-auth-only status requested inventory: {inventory:?}");
+        }
+        response = mcp.request(|request_id| ClientRequest::McpServerStatusList {
+            request_id,
+            params: ListMcpServerStatusParams {
+                server_name: None,
+                cursor: None,
+                limit: None,
+                detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                thread_id: None,
+            },
+        }) => response?,
+    };
 
     assert_eq!(response.next_cursor, None);
     assert_eq!(response.data.len(), 1);
@@ -1444,14 +1458,18 @@ async fn start_mcp_server(
     Ok((format!("http://{addr}"), handle))
 }
 
-async fn start_slow_inventory_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+async fn start_blocked_inventory_mcp_server(
+    tool_name: &str,
+    inventory_requests: mpsc::UnboundedSender<&'static str>,
+) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let tool_name = Arc::new(tool_name.to_string());
     let mcp_service = StreamableHttpService::new(
         move || {
-            Ok(SlowInventoryServer {
+            Ok(BlockedInventoryServer {
                 tool_name: Arc::clone(&tool_name),
+                inventory_requests: inventory_requests.clone(),
             })
         },
         Arc::new(LocalSessionManager::default()),
