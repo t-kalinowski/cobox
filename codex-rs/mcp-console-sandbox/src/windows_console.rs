@@ -75,7 +75,12 @@ pub(crate) fn run() -> Result<i32> {
         lease.slot.initialize()?;
         state = lease.state.clone();
     }
-    let configured = codex_windows_sandbox::check_sandbox_setup(&state)?;
+    let settings = lease.as_ref().map_or_else(
+        codex_windows_sandbox::WindowsSandboxProvisioningSettings::default,
+        |lease| lease.slot.settings(),
+    );
+    let configured = codex_windows_sandbox::check_sandbox_setup(&state)?
+        && codex_windows_sandbox::sandbox_setup_is_complete_with_settings(&state, &settings);
     ensure!(
         level != WindowsSandboxLevel::Elevated || configured,
         "Windows sandbox setup is required; run `mcp-console-sandbox setup` (or `setup --managed-proxy` for proxy sessions) with the original base state directory from an interactive terminal"

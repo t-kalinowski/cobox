@@ -219,16 +219,6 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
             real_codex_home: codex_home.to_path_buf(),
             cap_sids: elevated.cap_sids,
             network_proxy_restricting_sid,
-            console_proxy_observer_sid: if crate::ConsoleProxySlot::current().is_some() {
-                Some(
-                    crate::string_from_sid_bytes(&crate::resolve_sid(
-                        &crate::runtime_ownership::current_setup_user()?,
-                    )?)
-                    .map_err(anyhow::Error::msg)?,
-                )
-            } else {
-                None
-            },
             timeout_ms,
             tty,
             stdin_open,

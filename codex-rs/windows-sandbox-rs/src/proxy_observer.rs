@@ -1,6 +1,7 @@
 //! Query-only access for the trusted Console proxy to attribute dedicated-account clients.
 
 use crate::token::LocalSid;
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use std::ptr::null_mut;
@@ -12,8 +13,13 @@ use windows_sys::Win32::Security::*;
 ///
 /// # Safety
 /// The caller must own a valid token with READ_CONTROL, WRITE_DAC and TOKEN_ADJUST_DEFAULT.
-pub unsafe fn allow_console_proxy_observer(token: HANDLE, observer: &str) -> Result<()> {
-    let sid = LocalSid::from_string(observer)?;
+pub unsafe fn allow_console_proxy_observer(token: HANDLE, state: &std::path::Path) -> Result<()> {
+    let base = state
+        .parent()
+        .and_then(std::path::Path::parent)
+        .context("Console proxy slot state")?;
+    let owner = crate::ConsoleProxySlot::owner(base)?;
+    let sid = LocalSid::from_string(&owner.user_sid)?;
     let mut needed = 0;
     unsafe {
         GetTokenInformation(

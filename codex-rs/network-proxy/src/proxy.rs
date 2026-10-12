@@ -89,10 +89,7 @@ pub(super) struct ReservedListenerSet {
 }
 
 impl ReservedListenerSet {
-    pub(super) fn new(
-        http_listener: StdTcpListener,
-        socks_listener: Option<StdTcpListener>,
-    ) -> Self {
+    fn new(http_listener: StdTcpListener, socks_listener: Option<StdTcpListener>) -> Self {
         Self {
             http_listener,
             socks_listener,
@@ -141,7 +138,7 @@ pub enum ManagedProxyRouting {
 #[derive(Clone)]
 pub struct NetworkProxyBuilder {
     #[cfg(windows)]
-    windows_isolated_ingress: Option<([u16; 2], String)>,
+    windows_client_sid: Option<String>,
     state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
     socks_addr: Option<SocketAddr>,
@@ -155,7 +152,7 @@ impl Default for NetworkProxyBuilder {
     fn default() -> Self {
         Self {
             #[cfg(windows)]
-            windows_isolated_ingress: None,
+            windows_client_sid: None,
             state: None,
             http_addr: None,
             socks_addr: None,
@@ -168,11 +165,12 @@ impl Default for NetworkProxyBuilder {
 }
 
 impl NetworkProxyBuilder {
-    /// Use exactly the provisioned Windows ports and authenticate the client account as well
-    /// as its route SID. The embedding process owns its runtime through workload retirement.
+    /// Require this account as well as the route SID on shared Windows ingress.
+    /// A restricting SID alone can be copied into a token belonging to another account.
+    /// Reserve both ingress ports, even without SOCKS service, for account firewall exceptions.
     #[cfg(windows)]
-    pub fn windows_isolated_ingress(mut self, ports: [u16; 2], client_sid: String) -> Self {
-        self.windows_isolated_ingress = Some((ports, client_sid));
+    pub fn windows_client_sid(mut self, client_sid: String) -> Self {
+        self.windows_client_sid = Some(client_sid);
         self
     }
 
@@ -259,21 +257,13 @@ impl NetworkProxyBuilder {
             let shared_ingress_addrs = if self.managed_proxy_routing
                 == ManagedProxyRouting::SharedIngress
             {
-                let (mut managed_http_addr, mut managed_socks_addr) =
+                let (managed_http_addr, managed_socks_addr) =
                     config::clamp_bind_addrs(runtime.http_addr, runtime.socks_addr, &current_cfg);
-                if let Some((ports, _)) = &self.windows_isolated_ingress {
-                    managed_http_addr = ([127, 0, 0, 1], ports[0]).into();
-                    managed_socks_addr = ([127, 0, 0, 1], ports[1]).into();
-                }
-                let ingress = if self.windows_isolated_ingress.is_some() {
-                    WindowsProxyIngress::isolated(managed_http_addr, managed_socks_addr)?
-                } else {
-                    WindowsProxyIngress::shared(
-                        managed_http_addr,
-                        managed_socks_addr,
-                        current_cfg.enable_socks5,
-                    )?
-                };
+                let ingress = WindowsProxyIngress::shared(
+                    managed_http_addr,
+                    managed_socks_addr,
+                    current_cfg.enable_socks5 || self.windows_client_sid.is_some(),
+                )?;
                 let http_addr = ingress.http_addr();
                 let socks_addr = ingress.socks_addr();
                 windows_ingress = Some(ingress);
@@ -325,10 +315,7 @@ impl NetworkProxyBuilder {
                 )
             });
             Arc::new(WindowsSharedProxyRuntime {
-                client_sid: self
-                    .windows_isolated_ingress
-                    .as_ref()
-                    .map(|(_, sid)| sid.clone()),
+                client_sid: self.windows_client_sid,
                 ingress,
                 http_service: http,
                 socks_service: socks,

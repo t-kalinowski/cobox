@@ -288,12 +288,13 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             }
         }
     }?);
-    if let Some(observer) = &req.console_proxy_observer_sid {
-        anyhow::ensure!(
-            codex_windows_sandbox::ConsoleProxySlot::current().is_some(),
-            "proxy observer requires a Console proxy slot"
-        );
-        unsafe { codex_windows_sandbox::allow_console_proxy_observer(h_token.raw(), observer)? };
+    if codex_windows_sandbox::ConsoleProxySlot::current().is_some() {
+        unsafe {
+            codex_windows_sandbox::allow_console_proxy_observer(
+                h_token.raw(),
+                &req.real_codex_home,
+            )?
+        };
     }
     unsafe {
         // These ACL adjustments need the raw SID values, but ownership stays with `cap_psids`.

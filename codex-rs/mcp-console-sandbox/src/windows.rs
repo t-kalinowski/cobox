@@ -99,30 +99,10 @@ pub(crate) fn run() -> Result<i32> {
         let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
             &PermissionProfile::read_only(),
         )?;
-        let environment = HashMap::from([
-            (
-                "CODEX_WINDOWS_SANDBOX_PROXY_PORTS".to_owned(),
-                settings
-                    .proxy_ports
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
-            (
-                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_owned(),
-                if settings.allow_local_binding {
-                    "1"
-                } else {
-                    "0"
-                }
-                .to_owned(),
-            ),
-        ]);
         let request = SandboxSetupRequest {
             permissions: &permissions,
             command_cwd: state_dir.as_path(),
-            env_map: &environment,
+            env_map: &HashMap::new(),
             codex_home: state_dir.as_path(),
             proxy_enforced: false,
         };

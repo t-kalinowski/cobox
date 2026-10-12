@@ -56,16 +56,25 @@ impl ConsoleProxySlot {
 
     /// A machine has one pool owner and one durable lease directory, even after a crash.
     pub fn validate_owner(state: &Path) -> Result<()> {
-        let record = crate::installation_record::load_from(OWNER_KEY)?
-            .context("Console proxy ownership is not provisioned; run `setup --managed-proxy`")?;
+        let record = Self::owner(state)?;
         let caller = crate::runtime_ownership::current_setup_user()?;
         let caller_sid = crate::string_from_sid_bytes(&crate::resolve_sid(&caller)?)
             .map_err(anyhow::Error::msg)?;
         ensure!(
-            record.user_sid == caller_sid && record.codex_home == std::fs::canonicalize(state)?,
-            "Console proxy pool belongs to a different user or state directory"
+            record.user_sid == caller_sid,
+            "Console proxy pool belongs to a different user"
         );
         Ok(())
+    }
+
+    pub(crate) fn owner(state: &Path) -> Result<crate::installation_record::InstallationRecord> {
+        let record = crate::installation_record::load_from(OWNER_KEY)?
+            .context("Console proxy ownership is not provisioned; run `setup --managed-proxy`")?;
+        ensure!(
+            record.codex_home == std::fs::canonicalize(state)?,
+            "Console proxy pool belongs to a different state directory"
+        );
+        Ok(record)
     }
 
     /// Explicitly provision the complete pool with one UAC request.

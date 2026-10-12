@@ -273,6 +273,9 @@ fn elevated_proxy_direct_ipv4_ipv6_tcp_udp_and_local_access() -> Result<()> {
     }
     if let Ok(address) = std::env::var("MCP_CONSOLE_SANDBOX_TEST_ECHO_ADDR") {
         // A separate host/VM must echo UDP and accept TCP on this non-loopback address.
+        // Missing echoes establish only a blocked round trip: the receive filter could
+        // drop replies to escaped datagrams. Egress requires observation at that peer.
+        eprintln!("UNESTABLISHED external UDP egress: echo results do not observe peer receipt");
         for (session, permitted) in [
             (&mut online, true),
             (&mut strict, false),
@@ -339,12 +342,18 @@ fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result
 #[test]
 #[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_port_conflict_and_pool_exhaustion_fail_closed() -> Result<()> {
-    let occupied = TcpListener::bind("127.0.0.1:43180")?;
-    let error = Session::start(proxy())
-        .err()
-        .context("port conflict must reject startup")?;
-    assert!(error.to_string().contains("no port fallback"), "{error:#}");
-    drop(occupied);
+    for enabled in [false, true] {
+        let mut policy = proxy();
+        policy["enableSocks5"] = json!(enabled);
+        for port in [43180, 43181] {
+            let occupied = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))?;
+            let error = Session::start(policy.clone())
+                .err()
+                .context("port conflict must reject startup")?;
+            assert!(error.to_string().contains("no port fallback"), "{error:#}");
+            drop(occupied);
+        }
+    }
     let first = Session::start(proxy())?;
     let second = Session::start(proxy())?;
     let error = Session::start(proxy())
@@ -353,6 +362,49 @@ fn elevated_proxy_port_conflict_and_pool_exhaustion_fail_closed() -> Result<()> 
     assert!(
         error.to_string().contains("busy or quarantined"),
         "{error:#}"
+    );
+    second.finish()?;
+    first.finish()
+}
+
+#[test]
+#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+fn elevated_proxy_concurrent_admission_and_disabled_socks() -> Result<()> {
+    let address = origin()?;
+    let mut policy = proxy();
+    policy["enableSocks5"] = json!(false);
+    let barrier = std::sync::Barrier::new(2);
+    let (mut first, second) = std::thread::scope(|scope| -> Result<_> {
+        let start = || {
+            barrier.wait();
+            Session::start(policy.clone())
+        };
+        let first = scope.spawn(start);
+        let second = scope.spawn(start);
+        Ok((first.join().unwrap()?, second.join().unwrap()?))
+    })?;
+    assert_ne!(first.lease_path()?, second.lease_path()?);
+    let endpoint: std::net::SocketAddr = first
+        .http_endpoint()?
+        .strip_prefix("http://")
+        .context("HTTP endpoint")?
+        .parse()?;
+    let result = first.probe(json!({"op":"http", "address":address.to_string()}))?;
+    assert!(
+        result["headers"]
+            .as_str()
+            .unwrap()
+            .starts_with("HTTP/1.1 200"),
+        "{result}"
+    );
+    // The disabled service's firewall exception still has an owner. It cannot
+    // be hijacked by a host listener and does not accept SOCKS requests.
+    assert!(TcpListener::bind((endpoint.ip(), endpoint.port() + 1)).is_err());
+    let result = first.probe(json!({"op":"socks", "address":address.to_string(),
+        "endpoint":format!("socks5://{}:{}", endpoint.ip(), endpoint.port() + 1)}))?;
+    assert!(
+        result.get("error").is_some(),
+        "disabled SOCKS accepted: {result}"
     );
     second.finish()?;
     first.finish()

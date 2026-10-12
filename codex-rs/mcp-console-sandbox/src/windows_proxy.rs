@@ -79,7 +79,6 @@ pub(crate) struct Lease {
     path: PathBuf,
     file: Option<File>,
     started: bool,
-    _mutex: OwnedHandle,
 }
 
 impl Lease {
@@ -95,20 +94,9 @@ impl Lease {
             if slot.settings().allow_local_binding != config.allow_local_binding {
                 continue;
             }
-            let name: Vec<u16> = format!("Global\\McpConsoleProxyLease{index}\0")
-                .encode_utf16()
-                .collect();
-            let handle = unsafe {
-                CreateMutexW(std::ptr::null(), /*binitialowner*/ 0, name.as_ptr())
-            };
-            let last_error = unsafe { GetLastError() };
-            if handle.is_null() {
-                continue;
-            }
-            let mutex = unsafe { OwnedHandle::from_raw_handle(handle) };
-            if last_error == ERROR_ALREADY_EXISTS {
-                continue;
-            }
+            // The protected owner record pins every companion to this directory.
+            // Atomic creation is both admission and crash quarantine; a second
+            // per-slot kernel lock would duplicate the same ownership decision.
             let path = state
                 .join(".sandbox-secrets")
                 .join(format!("proxy-slot-{index}.lease"));
@@ -123,7 +111,6 @@ impl Lease {
                 path,
                 file: Some(file),
                 started: false,
-                _mutex: mutex,
             });
         }
         anyhow::bail!(
@@ -166,14 +153,32 @@ pub(crate) async fn prepare(
         &account,
     )?)
     .map_err(anyhow::Error::msg)?;
-    let proxy = NetworkProxy::builder()
-        .state(Arc::new(NetworkProxyState::from_remote_launch_config(
-            RemoteNetworkProxyLaunchConfig::new(config),
+    let state = NetworkProxyState::from_remote_launch_config(
+        RemoteNetworkProxyLaunchConfig::new(config),
+        codex_network_proxy::Platform::native(),
+    )?;
+    let [http_port, socks_port] = slot.ports();
+    let mut config = state.current_cfg().await?;
+    config.proxy_url = format!("http://127.0.0.1:{http_port}");
+    config.socks_url = format!("socks5://127.0.0.1:{socks_port}");
+    state
+        .replace_config_state(codex_network_proxy::build_config_state(
+            config,
+            Default::default(),
             codex_network_proxy::Platform::native(),
-        )?))
-        .windows_isolated_ingress(slot.ports(), sid)
+        )?)
+        .await?;
+    let proxy = NetworkProxy::builder()
+        .state(Arc::new(state))
+        .windows_client_sid(sid)
         .build()
         .await?;
+    // Upstream can choose a fallback port. An explicitly provisioned account
+    // cannot use that fallback: fail before registering a route or spawning.
+    ensure!(
+        [proxy.http_addr().port(), proxy.socks_addr().port()] == slot.ports(),
+        "provisioned Console proxy port is unavailable; no port fallback is permitted"
+    );
     let handle = proxy.run().await?;
     environment.retain(|name, _| {
         ![

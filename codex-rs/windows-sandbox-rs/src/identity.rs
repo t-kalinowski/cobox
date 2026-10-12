@@ -507,16 +507,6 @@ fn desired_offline_proxy_settings(
     env_map: &HashMap<String, String>,
     network_identity: SandboxNetworkIdentity,
 ) -> crate::setup::OfflineProxySettings {
-    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
-        let settings = crate::ConsoleProxySlot::current().map_or_else(
-            crate::WindowsSandboxProvisioningSettings::default,
-            crate::ConsoleProxySlot::settings,
-        );
-        return OfflineProxySettings {
-            proxy_ports: settings.proxy_ports,
-            allow_local_binding: settings.allow_local_binding,
-        };
-    }
     match (marker, proxy_settings_mode) {
         (Some(marker), crate::WindowsSandboxProxySettingsMode::Preserve)
             if marker.version_matches() =>
