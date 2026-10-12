@@ -67,6 +67,35 @@ impl ConsoleProxySlot {
         Ok(())
     }
 
+    /// Protected machine registration, independent of any session's requested state directory.
+    /// Host-identity sandboxes must deny access to this pool's credentials and lease records.
+    /// Older base-only installations must register and refresh credentials explicitly first.
+    pub fn registered_state_directory() -> Result<Option<std::path::PathBuf>> {
+        if let Some(record) = crate::installation_record::load_from(OWNER_KEY)? {
+            return Ok(Some(record.codex_home));
+        }
+        use windows_sys::Win32::NetworkManagement::NetManagement::*;
+        for name in [crate::OFFLINE_USERNAME, crate::ONLINE_USERNAME] {
+            let mut info = std::ptr::null_mut();
+            let status = unsafe {
+                NetUserGetInfo(
+                    std::ptr::null(),
+                    crate::to_wide(WindowsSandboxProduct::Console.name(name).as_ref()).as_ptr(),
+                    /*level*/ 0,
+                    &mut info,
+                )
+            };
+            if !info.is_null() {
+                unsafe { NetApiBufferFree(info.cast()) };
+            }
+            ensure!(
+                status == NERR_UserNotFound,
+                "MXC cannot protect unregistered Console credentials (account query: {status}); run explicit `mcp-console-sandbox setup` with the existing legacy state directory"
+            );
+        }
+        Ok(None)
+    }
+
     pub(crate) fn owner(state: &Path) -> Result<crate::installation_record::InstallationRecord> {
         let record = crate::installation_record::load_from(OWNER_KEY)?.context(
             "Console proxy ownership is not provisioned; run `mcp-console-sandbox setup`",

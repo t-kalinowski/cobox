@@ -14,6 +14,7 @@ use std::time::Duration;
 
 pub(super) fn run() -> Result<()> {
     let mut receiver = None;
+    let mut tcp_receiver = None;
     println!(
         "{}",
         json!({"pid": std::process::id(), "environment": std::env::vars().collect::<std::collections::BTreeMap<_,_>>() })
@@ -22,6 +23,18 @@ pub(super) fn run() -> Result<()> {
     for line in std::io::stdin().lock().lines() {
         let request: Value = serde_json::from_str(&line?)?;
         let result = (|| -> Result<Value> {
+            if request["op"] == "tcp-listen" {
+                let listener = TcpListener::bind(request["address"].as_str().context("listen address")?)?;
+                let address = listener.local_addr()?;
+                let (send, receive) = std::sync::mpsc::channel();
+                std::thread::spawn(move || { let _ = send.send(listener.accept().is_ok()); });
+                tcp_receiver = Some(receive);
+                return Ok(json!({"address":address.to_string()}));
+            }
+            if request["op"] == "tcp-receive" {
+                return Ok(json!({"received":tcp_receiver.as_ref().context("TCP listener")?
+                    .recv_timeout(Duration::from_millis(/*millis*/ 300)).unwrap_or(/*default*/ false)}));
+            }
             if request["op"] == "udp-listen" {
                 let socket = UdpSocket::bind(request["address"].as_str().context("listen address")?)?;
                 socket.set_read_timeout(Some(Duration::from_millis(/*millis*/ 300)))?;
@@ -153,10 +166,10 @@ fn probe(request: &Value) -> Result<Value> {
     } else {
         "HTTP_PROXY"
     };
-    let endpoint = request["endpoint"]
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or(std::env::var(environment)?);
+    let endpoint = match request["endpoint"].as_str() {
+        Some(endpoint) => endpoint.to_owned(),
+        None => std::env::var(environment)?,
+    };
     let endpoint = endpoint
         .split_once("://")
         .context("proxy URL")?

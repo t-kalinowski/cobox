@@ -1,8 +1,8 @@
 # Windows native sandbox
 
-The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
+The Windows executable uses Codex's shared sandbox selection, policy transform, and launch APIs without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
 
-The public backend names are `elevated` and `unelevated`, in the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
+The JSON `windows_sandbox_level` accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto prefers the native MXC process security environment when available and compatible with the proxy and protected-state policies; otherwise it selects elevated execution. An explicit mode is never changed after selection or launch failure. A new MXC-only installation needs no sandbox accounts, setup, or UAC. Existing unregistered legacy installations need the explicit migration described below. Managed MXC requires `allowLocalBinding: true`; an explicit false selects elevated mode in auto and rejects explicit MXC. Unsupported native filesystem enforcement fails closed, without an ACL or AppContainer fallback. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
 
 ## Build and distribute
 
@@ -13,7 +13,7 @@ cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-win
 just test --locked --release -p mcp-console-sandbox --retries 0
 ```
 
-Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
+Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by MXC and the unelevated backend. MXC dispatches through Codex's existing internal launcher entry point in this executable.
 
 For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged.
 
@@ -55,7 +55,11 @@ Run from an ordinary interactive PowerShell session:
 .\target\release\mcp-console-sandbox.exe status
 ```
 
-Explicit `setup` provisions or refreshes the base accounts and all managed-proxy slots under one Windows UAC approval. There is no separate proxy setup option; each session's policy still selects whether to use a proxy. Status prints JSON and exits zero when the base accounts have current records, are enabled, and adjacent helpers are present; `managed_proxy_provisioned` separately reports the completed proxy pool marker and owner. Status does not audit every firewall rule or managed-proxy slot.
+For the elevated backend only, explicit `setup` provisions or refreshes the base accounts and all managed-proxy slots under one Windows UAC approval. There is no separate proxy setup option; each session's policy still selects whether to use a proxy. Status prints JSON and exits zero when the base accounts have current records, are enabled, and adjacent helpers are present; `managed_proxy_provisioned` separately reports the completed proxy pool marker and owner. Status also reports `mxc_available` using the shared runtime and deny-path capability probes plus Console state protection checks. `mxc_state_error` explains an unregistered legacy installation or invalid state location; otherwise it is null. Its exit status and `configured` field continue to describe legacy provisioning; an unconfigured legacy installation can still run compatible MXC sessions. Status does not audit every firewall rule or managed-proxy slot.
+
+MXC runs with the host user identity. Its filesystem policy therefore always denies the requested state directory, the default Console state directory, and the pool directory from the protected machine registration. These exclusions survive unrestricted and external filesystem profiles. Concrete grants and control-state paths are canonicalized, including missing children under existing junctions. Codex's mandatory-denial validator rejects grants, including generated temporary-directory grants, that could reopen these directories. Failed admission removes private storage before any workload starts. Drive-root state directories are incompatible with MXC; use elevated mode or a dedicated state directory. These checks do not grant MXC access to legacy credentials.
+
+Older base-only installations may have credentials in an unregistered custom directory. If Console accounts exist without the protected registration, MXC is unavailable until explicit `setup` is run against the existing directory. That refresh rotates account passwords before registering the pool, invalidating credentials left at old locations. Auto can still select the provisioned elevated backend. Ordinary launch never performs this migration or requests UAC. Use the matching setup binary and one stable state directory; do not provision additional legacy installations while workloads are running.
 
 Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
@@ -69,9 +73,9 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
-- `windows_sandbox_level` defaults to `elevated`. `unelevated` is explicit; `disabled` is rejected.
-- Targets run on a private Windows desktop, matching upstream behavior, with Console-specific desktop names.
-- `windows_state_dir` optionally selects an absolute persistent state directory.
+- `windows_sandbox_level` defaults to `auto`. Explicit `mxc` fails if unavailable or incompatible; explicit `elevated` and `unelevated` preserve their previous behavior. `disabled` is rejected.
+- Targets use upstream private desktop isolation. Legacy desktop names retain Console's product identity; MXC uses the SDK's desktop implementation.
+- `windows_state_dir` optionally selects an absolute persistent legacy state directory. MXC does not read, create, or provision it.
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
@@ -82,6 +86,12 @@ The ordinary command arguments, cwd, and stdio remain the target's inputs. Envir
 
 ## Managed proxy ownership
 
+MXC uses Codex's dedicated HTTP/SOCKS listeners and existing domain/method enforcement. A non-breakaway native Job owns the launcher and workload descendants before either runs. Both proxy services resolve the connecting process from the kernel TCP table and require membership in that exact Job before consuming any attribution frame. Another companion, proxyless workload, or copied route token cannot borrow the endpoint. The Job handle stays alive through execution and proxy teardown. No broker, named Job, account, durable slot, or fixed port is needed on this path. Listener conflicts use the upstream allocator; launch consumes the allocated endpoints.
+
+MXC permits host loopback for managed networking only with `allowLocalBinding: true`. This grants local TCP/UDP communication outside proxy domain filtering, as it does for the legacy local-access policy. Native tests establish outbound IPv4/IPv6 loopback TCP/UDP and socket binding. On the validation host, inbound TCP/UDP failed even in the MXC network-enabled positive control, so inbound server reachability is not established. MXC permits port allocation even for proxyless restricted execution; that mode denies traffic, rather than `bind` itself. Use explicit elevated execution if denying local port allocation is required. See the [validation ledger](WINDOWS_PROXY_VALIDATION.md) for unavailable external controls.
+
+### Elevated compatibility backend
+
 Run the adjacent, matching binaries from this revision, then explicitly refresh the same state directory:
 
 ```powershell
@@ -91,9 +101,9 @@ Run the adjacent, matching binaries from this revision, then explicitly refresh 
 
 This is one UAC request for the complete pool: the elevated Console setup helper provisions the base accounts and launches its four slot setup operations without further elevation. Ordinary launches never invoke UAC, repair accounts, alter proxy ports/local-access policy, or fall back to unelevated execution. Missing accounts, stale setup records, failed logon, a missing pool marker, foreign ownership, occupied ports, and exhausted/quarantined slots fail with diagnostics. Installations created by an older base-only setup need this explicit refresh using the same `setup` command. Explicit `setup` refreshes records even when accounts still exist, so it can repair stale passwords; `status` never changes them. `managed_proxy_provisioned` reports the matching completed pool marker and owner, not current free-slot capacity or a live account health probe. Future changes to the fixed pool contract require a new pool marker before admission. Ship all three binaries together; workload environment overrides never choose these helpers.
 
-The bounded pool contains four account pairs (`McpConsoleProxyOff0`/`McpConsoleProxyOn0` through `3`) and TCP ports 43180–43187. Slots 0–1 deny local access; slots 2–3 permit it. Each companion leases one matching slot and uses Codex's existing shared Windows ingress for its HTTP/SOCKS pair, even when SOCKS service is disabled. The ingress is shared within that companion process only. There is capacity for two concurrent sessions per local-access setting. Domain rules, mode and route identity remain private to that companion. Proxyless restricted execution uses the base offline account with no proxy exceptions. Accounts, helper names, WFP identifiers and locks are separate from Codex. Every Console account belongs to the common secrets-deny group; slot groups retain their other native roles.
+The bounded pool contains four account pairs (`McpConsoleProxyOff0`/`McpConsoleProxyOn0` through `3`) and TCP ports 43180-43187. Slots 0-1 deny local access; slots 2-3 permit it. Each companion leases one matching slot and uses Codex's existing shared Windows ingress for its HTTP/SOCKS pair, even when SOCKS service is disabled. The ingress is shared within that companion process only. There is capacity for two concurrent sessions per local-access setting. Domain rules, mode and route identity remain private to that companion. Proxyless restricted execution uses the base offline account with no proxy exceptions. Accounts, helper names, WFP identifiers and locks are separate from Codex. Every Console account belongs to the common secrets-deny group; slot groups retain their other native roles.
 
-`allowLocalBinding: false` blocks direct IPv4/IPv6 TCP and UDP, loopback connects, TCP listeners and UDP receive admission. Explicitly allowed local destinations remain reachable through the managed proxy. True permits native loopback traffic and listeners; these direct local channels do not have domain filtering. External direct traffic remains blocked by the offline identity. Every Console account is forbidden from binding TCP ports 43180–43187, preventing a workload from impersonating a retired companion. A proxy connection must carry both its registered restricting SID and the owning dedicated account SID. A copied endpoint or forged route SID under another account cannot borrow policy.
+`allowLocalBinding: false` blocks direct IPv4/IPv6 TCP and UDP, loopback connects, TCP listeners and UDP receive admission. Explicitly allowed local destinations remain reachable through the managed proxy. True permits native loopback traffic and listeners; these direct local channels do not have domain filtering. External direct traffic remains blocked by the offline identity. Every Console account is forbidden from binding TCP ports 43180-43187, preventing a workload from impersonating a retired companion. A proxy connection must carry both its registered restricting SID and the owning dedicated account SID. A copied endpoint or forged route SID under another account cannot borrow policy.
 
 The public proxy object is `RemoteNetworkProxyConfig`. Full mode supports HTTP methods, CONNECT and SOCKS5 TCP; limited mode allows GET/HEAD/OPTIONS and rejects POST, CONNECT and SOCKS. Explicit denials take precedence. `enableSocks5Udp: true`, nonempty Unix-socket maps and `dangerouslyAllowAllUnixSockets: true` fail before launching a workload. HTTP/CONNECT upstream proxy selection uses the trusted companion environment; SOCKS keeps the existing direct connector. Managed environment values replace workload values case insensitively. The unversioned transport adds no listener/account selection fields.
 
@@ -126,13 +136,22 @@ Console launches save capability mappings in `.sandbox-secrets/cap_sid`; elevate
 
 ## Lifecycle
 
-Console's pipe-launched workloads enter a non-breakaway Job at process creation. After normal root exit, timeout, or cancellation, the backend terminates remaining members and confirms zero active processes before returning an exit receipt. A native Job completion port wakes the waiter; an accounting query confirms the barrier, with a five-second cleanup allowance. A missing native retirement receipt returns exit code 125 without claiming cleanup. Genuine target exit codes, including 125 and -1, remain distinct internally and permit cleanup only when a receipt exists. A missing exit receipt is distinct from a target exit code of `0xffffffff` (`-1`). Codex's default product continues to preserve descendants after normal root exit.
+Console's pipe-launched workloads enter a non-breakaway Job before their first instruction. The shared pipe launcher supervises MXC's helper and descendants; elevated and unelevated execution keep their native session supervisors. The same Job completion/accounting barrier is shared in `codex-utils-pty`. After normal root exit, timeout, or cancellation, the backend terminates remaining members and confirms zero active processes before returning an exit receipt. A native Job completion port wakes the waiter; an accounting query confirms the barrier, with a five-second cleanup allowance. A missing native retirement receipt returns exit code 125 without claiming cleanup. Genuine target exit codes, including 125 and -1, remain distinct internally and permit cleanup only when a receipt exists. A missing exit receipt is distinct from a target exit code of `0xffffffff` (`-1`). Codex's default product continues to preserve descendants after normal root exit.
 
-The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. It removes private storage only after a confirmed receipt; startup errors and unconfirmed retirement retain storage with diagnostics. Private storage is not deleted while target descendants are known to remain. After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
+The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. It removes private storage after a confirmed receipt, or after a failure before native spawn was attempted. Unconfirmed retirement retains storage with diagnostics. Private storage is not deleted while target descendants are known to remain. After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
 
-Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner loss does not guarantee storage deletion. A forcibly killed waiting Console frontend is not evidence of completed native retirement and cannot admit a replacement. Windows console signals and desktop behavior are not Unix terminal semantics.
+MXC companion loss, unelevated runner loss, and elevated helper loss close kill-on-close Jobs. MXC helper loss is also contained by the outer Job, which confirms descendant retirement before any receipt. Runner loss does not guarantee storage deletion. A forcibly killed waiting Console frontend is not evidence of completed native retirement and cannot admit a replacement. Windows console signals and desktop behavior are not Unix terminal semantics.
 
 ## Validation limits
+
+MXC acceptance uses the same executable probe workload and public environment transport as elevated acceptance, without provisioning:
+
+```powershell
+just test --locked -p mcp-console-sandbox --test windows_mxc --retries 0
+just test --locked -p mcp-console-sandbox --test windows_proxy --run-ignored only -E 'test(mxc::) & !test(mxc_and_elevated)' --retries 0 --test-threads 1 --success-output immediate
+```
+
+The mixed MXC/elevated isolation test additionally requires the provisioned legacy pool. Tests never provision automatically. The fixture is an executable making real native socket and process calls inside the sandbox, not a mock proxy or a production helper. The [current ledger](WINDOWS_PROXY_VALIDATION.md) distinguishes these results from older backend audits.
 
 The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) records the current builds, runtime checks, restored files, counts, and provisioning/Bazel limits.
 

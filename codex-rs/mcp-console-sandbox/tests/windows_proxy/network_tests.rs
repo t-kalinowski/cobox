@@ -96,7 +96,7 @@ fn elevated_proxy_transports_policies_and_isolated_companions() -> Result<()> {
     assert!(
         response["headers"]
             .as_str()
-            .unwrap()
+            .context("HTTP response headers")?
             .contains("blocked-by-denylist"),
         "{response}"
     );
@@ -182,15 +182,20 @@ fn elevated_proxy_transports_policies_and_isolated_companions() -> Result<()> {
 #[test]
 #[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_limited_mode_rejects_writes_and_tunnels() -> Result<()> {
+    limited_mode("elevated")
+}
+
+pub(super) fn limited_mode(backend: &str) -> Result<()> {
     let address = origin()?;
     let mut policy = proxy();
     policy["mode"] = json!("limited");
-    let mut session = Session::start(policy)?;
+    policy["allowLocalBinding"] = json!(backend == "mxc");
+    let mut session = Session::start_with(policy, json!({"windows_sandbox_level":backend}), &[])?;
     let allowed = session.probe(json!({"op":"http", "address":address.to_string()}))?;
     assert!(
         allowed["headers"]
             .as_str()
-            .unwrap()
+            .context("HTTP response headers")?
             .starts_with("HTTP/1.1 200"),
         "{allowed}"
     );
@@ -305,6 +310,10 @@ fn elevated_proxy_direct_ipv4_ipv6_tcp_udp_and_local_access() -> Result<()> {
 #[test]
 #[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result<()> {
+    trusted_upstream("elevated")
+}
+
+pub(super) fn trusted_upstream(backend: &str) -> Result<()> {
     let upstream = origin()?;
     let mut policy = proxy();
     policy["allowUpstreamProxy"] = json!(true);
@@ -312,7 +321,7 @@ fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result
     policy["domains"] = json!({"allowed.invalid":"allow", "denied.invalid":"deny"});
     let mut session = Session::start_with(
         policy,
-        json!({}),
+        json!({"windows_sandbox_level":backend}),
         &[
             ("HTTP_PROXY", format!("http://{upstream}")),
             ("HTTPS_PROXY", format!("http://{upstream}")),
@@ -323,7 +332,7 @@ fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result
         assert!(
             response["headers"]
                 .as_str()
-                .unwrap()
+                .context("HTTP response headers")?
                 .starts_with("HTTP/1.1 200"),
             "{response}"
         );
@@ -331,7 +340,7 @@ fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result
         assert!(
             response["headers"]
                 .as_str()
-                .unwrap()
+                .context("HTTP response headers")?
                 .contains("blocked-by-denylist"),
             "{response}"
         );
@@ -393,7 +402,7 @@ fn elevated_proxy_concurrent_admission_and_disabled_socks() -> Result<()> {
     assert!(
         result["headers"]
             .as_str()
-            .unwrap()
+            .context("HTTP response headers")?
             .starts_with("HTTP/1.1 200"),
         "{result}"
     );
@@ -413,6 +422,10 @@ fn elevated_proxy_concurrent_admission_and_disabled_socks() -> Result<()> {
 #[test]
 #[ignore = "requires explicit setup, curl.exe, and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_https_connect_transfers_authenticated_tls() -> Result<()> {
+    authenticated_tls("elevated")
+}
+
+pub(super) fn authenticated_tls(backend: &str) -> Result<()> {
     let generated = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_owned()])?;
     let key = rustls::pki_types::PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der());
     let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
@@ -440,7 +453,9 @@ fn elevated_proxy_https_connect_transfers_authenticated_tls() -> Result<()> {
         tls.flush()?;
         Ok(())
     });
-    let mut session = Session::start(proxy())?;
+    let mut policy = proxy();
+    policy["allowLocalBinding"] = json!(backend == "mxc");
+    let mut session = Session::start_with(policy, json!({"windows_sandbox_level":backend}), &[])?;
     let certificate = session._directory.path().join("origin.pem");
     std::fs::write(&certificate, generated.cert.pem())?;
     assert_eq!(
@@ -449,6 +464,8 @@ fn elevated_proxy_https_connect_transfers_authenticated_tls() -> Result<()> {
         )?,
         json!({"code":0,"body":"OK","error":""})
     );
-    server.join().unwrap()?;
+    server
+        .join()
+        .map_err(|_| anyhow::anyhow!("TLS origin thread panicked"))??;
     session.finish()
 }

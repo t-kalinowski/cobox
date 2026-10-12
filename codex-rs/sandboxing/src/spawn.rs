@@ -43,6 +43,31 @@ pub struct SpawnRequest<'a> {
 /// Spawn a process using the backend selected by the prepared sandbox request.
 #[tracing::instrument(name = "codex.process.spawn", skip_all)]
 pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess> {
+    spawn_process_impl(request, #[cfg(windows)] /*context*/ None).await
+}
+
+/// Host-owned Windows resources. These must never be derived from workload environment.
+#[cfg(windows)]
+pub struct WindowsSandboxLaunchContext<'a> {
+    pub state_dir: &'a Path,
+    /// A non-breakaway Job requires a piped launch and confirmed descendant retirement.
+    pub job: Option<std::sync::Arc<codex_utils_pty::JobObject>>,
+}
+
+/// Uses the same backend dispatch with an embedding application's state and lifetime owner.
+#[cfg(windows)]
+#[tracing::instrument(name = "codex.process.spawn", skip_all)]
+pub async fn spawn_process_with_windows_context(
+    request: SpawnRequest<'_>,
+    context: WindowsSandboxLaunchContext<'_>,
+) -> Result<SpawnedProcess> {
+    spawn_process_impl(request, Some(context)).await
+}
+
+async fn spawn_process_impl(
+    request: SpawnRequest<'_>,
+    #[cfg(windows)] context: Option<WindowsSandboxLaunchContext<'_>>,
+) -> Result<SpawnedProcess> {
     let tty = request.tty;
     let finish_spawn = |spawned| {
         if tty {
@@ -58,8 +83,12 @@ pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess> 
             let windows = request
                 .windows_sandbox
                 .context("missing Windows sandbox spawn request")?;
-            let codex_home = codex_utils_home_dir::find_codex_home()
-                .context("windows sandbox: failed to resolve codex_home")?;
+            let codex_home = match &context {
+                Some(context) => context.state_dir.to_path_buf(),
+                None => codex_utils_home_dir::find_codex_home()
+                    .context("windows sandbox: failed to resolve codex_home")?
+                    .into_path_buf(),
+            };
             let empty_paths = &[];
             let overrides = windows.filesystem_overrides;
 
@@ -106,6 +135,21 @@ pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess> 
         .command
         .split_first()
         .context("missing program for process spawn")?;
+    #[cfg(windows)]
+    if let Some(job) = context.and_then(|context| context.job) {
+        anyhow::ensure!(
+            !tty && request.stdin_open,
+            "a supervised Windows Job requires piped stdin/stdout"
+        );
+        return codex_utils_pty::pipe::spawn_process_in_job(
+            program,
+            args,
+            request.cwd,
+            request.env,
+            job,
+        )
+        .await;
+    }
     let spawned = if tty {
         codex_utils_pty::pty::spawn_process(
             program,

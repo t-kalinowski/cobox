@@ -50,6 +50,7 @@ fn console_refuses_other_products_state_before_setup_or_launch() {
                     "CONSOLE_POLICY",
                     json!({
                         "extends": ":read-only", "network": "enabled",
+                        "windows_sandbox_level": "elevated",
                         "windows_state_dir": root.path(),
                     })
                     .to_string(),

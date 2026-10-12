@@ -4,6 +4,38 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 
 #[test]
+fn job_admission_rejects_missing_connections_and_failed_native_queries() -> io::Result<()> {
+    // A real process handle is valid ownership, but is not a Job handle.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            /*binherithandle*/ 0,
+            std::process::id(),
+        )
+    };
+    if handle == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle as _) };
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let client = TcpStream::connect(listener.local_addr()?)?;
+    let (accepted, _) = listener.accept()?;
+    assert!(require_client_job(accepted.local_addr()?, accepted.peer_addr()?, &handle).is_err());
+    assert_eq!(
+        require_client_job(
+            accepted.local_addr()?,
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            &handle
+        )
+        .expect_err("nonexistent client must fail closed")
+        .kind(),
+        io::ErrorKind::NotFound
+    );
+    drop(client);
+    Ok(())
+}
+
+#[test]
 fn parses_owner_table_and_matches_reversed_client_tuple() -> io::Result<()> {
     let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3128);
     let client_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 49152);

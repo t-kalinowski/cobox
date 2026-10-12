@@ -1,5 +1,79 @@
 # Windows managed proxy validation, 2026-10-12
 
+## Shared launch and MXC refactor
+
+The companion now uses the same Windows backend selector, `SandboxManager` policy transform, and `codex-sandboxing` launch dispatch as Codex. It has no `codex-core` dependency. `auto` prefers MXC when the executor and requested policy are compatible. Native MXC acceptance passed on this host; **final dedicated-account managed-proxy acceptance remains incomplete**. No provisioning or UAC attempt was made during this refactor.
+
+Managed MXC uses Codex's dedicated HTTP/SOCKS listeners and authenticates each connection against the workload's native non-breakaway Job. It needs no account pool. MXC permits local port allocation, so a managed request with `allowLocalBinding: false` remains on the explicitly provisioned elevated backend in auto mode; explicit MXC rejects it. A fresh MXC-only installation needs no setup. An older Console account installation without a protected state-directory registration needs an explicit setup migration before MXC can safely protect its credentials. Workload grants cannot reopen requested, default, or registered control state, including through junction aliases or more-specific child grants.
+
+The executable fixtures make real native socket and process calls through Console's public unversioned `--config-env` transport. They are test workloads, not mocks of enforcement or installed production helpers. MXC and elevated acceptance share those probes and assertions.
+
+### Actual commands and results
+
+Commands ran in `codex-rs` with Rust 1.95.0/MSVC, bundled Python on PATH, and `CARGO_TARGET_DIR=C:/Users/kalin/.cache/mcp-console/cobox-target`, except the Bazel lock update at repository root. Tests ran before the final lint/format pass, following AGENTS.md.
+
+| Command | Result |
+| --- | --- |
+| Initial `just test --locked -p mcp-console-sandbox --test windows_mxc --retries 0` | Two executable regressions failed on the original missing MXC selection/status behavior before implementation. |
+| `cargo build --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --bins` | Matching companion, setup, runner and fixture binaries built successfully in 54.67 s. |
+| `just test --locked -p codex-utils-pty -p codex-network-proxy -p codex-sandboxing -p codex-mxc-sandbox -p mcp-console-sandbox --retries 0 --status-level fail --final-status-level fail` | **447 passed, 27 skipped**, 10.503 s; run `3d7be540-3491-4188-b665-7c437ff9068f`. Includes native Job assignment/retirement failure cases, TCP admission failure cases and public transport rejection/cleanup regressions. |
+| `just test --locked -p mcp-console-sandbox --test windows_mxc --test windows_proxy --run-ignored all -E 'test(mxc) & !test(mxc_and_elevated)' --retries 0 --test-threads 1 --success-output immediate` | **14 passed, 17 skipped**, 28.942 s; run `4bdd8d87-6a30-4595-a78a-22a9e3f7f292`. Five public selection/state-boundary cases and nine opt-in native MXC cases passed. |
+| `just test --locked -p codex-core --lib -E 'test(windows_sandbox_config)' --retries 0 --status-level fail --final-status-level fail` | **1 passed, 2546 skipped**, 0.075 s after compilation; run `96437b55-cb8d-498c-bb79-4a8db22ea6f8`. Confirms the relocated selector preserves core behavior. |
+| `just test --locked -p mcp-console-sandbox --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)' --retries 0 --test-threads 1` | **2 passed, 45 skipped**, 14.831 s; run `10c2369f-13b6-4401-b4d4-263a9b0de17c`. Existing explicitly provisioned base accounts blocked IPv4/IPv6 loopback TCP and UDP with online positive controls. This does not establish proxy-pool acceptance. |
+| `just test --locked --retries 0 --status-level fail --final-status-level fail` | User-authorized complete workspace run **blocked before test execution**: `glib-sys v0.22.8` could not find `pkg-config` and GLib >= 2.56. The unmodified `codex-voice-host` pulls in the GLib/GStreamer stack; confirmed with `cargo tree --locked -i glib-sys --edges normal --target x86_64-pc-windows-msvc`. No full-suite pass is claimed. |
+| `just bazel-lock-update` | Passed; `MODULE.bazel.lock` unchanged. Invocation `51ee3960-5743-4f5b-86a1-ad72ae5a8fb4`. |
+| `just fix -p mcp-console-sandbox -p mcp-console-sandbox-windows -p codex-network-proxy -p codex-utils-pty -p codex-sandboxing -p codex-mxc-sandbox -p codex-windows-sandbox -p codex-core` | Passed in 8m 13s. Addressed the new argument-count/test-helper lint warnings; restored unrelated automatic unused-import edits in core. |
+| `just fix -p mcp-console-sandbox -p mcp-console-sandbox-windows -p codex-network-proxy -p codex-utils-pty -p codex-sandboxing -p codex-mxc-sandbox -p codex-windows-sandbox` | Final scoped pass succeeded without warnings in 13.68 s after replacing helper panics with contextual errors. |
+| `mcp-console-sandbox.exe status` | Read-only status: `configured=true`, `helpers_available=true`, `managed_proxy_provisioned=false`, `mxc_available=true`, `mxc_state_error=null`. |
+| `just fmt` | Passed. Four unrelated Starlark multiline-string CRLF rewrites and line-ending-only rewrites were reviewed and restored. No tests were rerun after final lint/format. |
+
+During review, a real MXC child grant reopened a denied control-state parent (run `67af1c84-8b73-4d3e-be1c-bc64ea257fd8`: 10 passed, 1 failed). The final implementation uses upstream mandatory-denial validation after resolving workload grants, canonicalizes junction paths including missing children, and removes private storage after rejected admission. Those regressions passed in the final runs above. An unrestricted/external-filesystem credential probe used synthetic canaries; no real credentials were disclosed.
+
+### Established behavior and remaining coverage
+
+Native MXC runs established HTTP allow/deny with deny precedence, CONNECT and authenticated TLS through CONNECT, SOCKS5 TCP, limited-mode rejection of POST/CONNECT/SOCKS, trusted HTTP/CONNECT upstream routing, and managed values replacing mixed-case workload inputs. Two concurrent companions with different policies, a proxyless restricted companion, and an unsandboxed host process could not borrow another Job's proxy endpoint. Normal exit, owner death, forced companion loss, descendant retirement, endpoint closure and withheld success on cleanup failure passed. Protected-state canaries and target TEMP/TMP grants also passed with host positive controls.
+
+IPv4/IPv6 loopback TCP and receiver-observed UDP had positive controls. Direct external IPv4 TCP had a positive control. MXC proxyless restricted execution blocks that traffic but can still allocate local ports. Inbound TCP and UDP positive controls were unavailable on this host even with networking enabled, so inbound server reachability is **not established**. External IPv6 TCP lacked a working positive control; external UDP egress still requires a receiver-observed non-loopback test. The suite reports these limits rather than treating unavailable controls as proof.
+
+The final legacy pool marker remains absent (`managed_proxy_provisioned=false`). The mixed MXC/elevated borrowing test and final dedicated-account managed-proxy suite were not run. The earlier native failures below remain recorded and are not repaired by this refactor. Explicit Ctrl+C delivery, inaccessible/exited-process and changing-TCP-tuple attribution fault injection, and old unregistered-installation migration still lack full native acceptance. Windows Bazel and Linux/macOS runtime execution were not run.
+
+### Review findings and disposition
+
+The complete diff against `e9ca3f338136c185154f873ac7082f7b200fd71e`, including added files, received integration/context, breaking-change, testing and size reviews. Every finding or coverage concern from those reviews is listed here; line references identify the final correction or relevant remaining case.
+
+1. **Fixed, P1:** MXC host-identity workloads could read legacy Console credentials. Mandatory requested/default/registered state denies now protect those resources; native host-positive canaries pass. [codex-rs/mcp-console-sandbox/src/windows_proxy.rs:54](src/windows_proxy.rs#L54)
+2. **Fixed, P1:** Unrestricted or externally managed filesystem profiles discarded control-state exclusions. Existing policy preservation now retains them; all three profile kinds passed native canaries. [codex-rs/mcp-console-sandbox/src/windows_proxy.rs:92](src/windows_proxy.rs#L92)
+3. **Fixed, P1; migration acceptance pending:** An old base-only installation could keep credentials in an undiscoverable custom directory. Read-only account discovery blocks MXC until explicit setup rotates credentials and registers the state path. [codex-rs/windows-sandbox-rs/src/console_proxy_slot.rs:73](../windows-sandbox-rs/src/console_proxy_slot.rs#L73)
+4. **Fixed, P2:** The native builder ignores drive-root denies. MXC now rejects a drive-root Console state directory; the public transport regression passes. [codex-rs/mcp-console-sandbox/src/windows_proxy.rs:71](src/windows_proxy.rs#L71)
+5. **Fixed, P1:** A more-specific child grant reopened a denied state parent. Upstream mandatory-denial validation now runs over the final generated grants, including private storage and target temporary paths. [codex-rs/mcp-console-sandbox/src/windows_console.rs:273](src/windows_console.rs#L273)
+6. **Fixed, P1:** Junction aliases bypassed lexical state checks. Canonical enforced grants and protected roots, including missing descendants of existing aliases, now reject the bypass; native alias probes pass. [codex-rs/mcp-console-sandbox/src/windows_proxy.rs:24](src/windows_proxy.rs#L24)
+7. **Fixed, P2:** Rejected prelaunch state validation leaked kept private storage. Validation now runs within the common cleanup boundary, and pre-spawn failure removes that storage; the executable regression passes. [codex-rs/mcp-console-sandbox/src/windows_console.rs:400](src/windows_console.rs#L400)
+8. **Fixed, P2:** Native MXC availability alone did not establish deny-path support. Automatic selection now checks profile-specific native enforcement capability; explicit MXC fails closed. [codex-rs/mxc-sandbox/src/lib.rs:104](../mxc-sandbox/src/lib.rs#L104)
+9. **Fixed, P2; legacy acceptance pending:** Trusted provisioning environment isolation changed target TEMP/TMP grant resolution. Explicit tmpdir entries now use case-insensitive target values while host provisioning remains trusted; the native MXC regression passes. [codex-rs/mcp-console-sandbox/src/windows_console.rs:202](src/windows_console.rs#L202)
+10. **Fixed, P2:** The explicit SOCKS endpoint probe eagerly read a missing environment variable and failed before connecting. Lazy selection now exercises the actual cross-session socket attempt. [codex-rs/mcp-console-sandbox/src/bin/fixtures/windows_proxy.rs:165](src/bin/fixtures/windows_proxy.rs#L165)
+11. **Covered:** Missing native Job-failure regressions were added. A kernel active-process-limit failure proves rejected assignment never resumes the workload; a completion-port association failure proves missing retirement cannot become a success receipt. [codex-rs/utils/pty/src/pipe_tests.rs:6](../utils/pty/src/pipe_tests.rs#L6)
+12. **Partly covered:** Real invalid-Job and missing-TCP-tuple failures now reject proxy admission. Inaccessible/exited-process and changing-tuple fault injections remain unestablished. [codex-rs/network-proxy/src/windows_tcp_attribution_tests.rs:7](../network-proxy/src/windows_tcp_attribution_tests.rs#L7)
+13. **Pending acceptance:** Mixed MXC/elevated endpoint borrowing has an executable case but requires the unavailable completed legacy pool. Final dedicated-account managed-proxy acceptance also remains pending. [codex-rs/mcp-console-sandbox/tests/windows_proxy/mxc_tests.rs:191](tests/windows_proxy/mxc_tests.rs#L191)
+14. **Coverage limits retained:** Inbound TCP/UDP and external IPv6 TCP positive controls were unavailable; external UDP needs receiver observation. Owner death tests cancellation, but explicit Ctrl+C delivery remains untested. [codex-rs/mcp-console-sandbox/tests/windows_proxy/mxc_tests.rs:229](tests/windows_proxy/mxc_tests.rs#L229)
+15. **Resolved:** The initially unused Windows path-uri dependency is now used by upstream mandatory-denial validation, rather than carrying an unnecessary dependency or custom validator. [codex-rs/mcp-console-sandbox/src/windows_console.rs:270](src/windows_console.rs#L270)
+16. **Simplified:** Duplicate proxy preparation/projection was removed. The existing proxy and prepared sandbox context are retained and passed to the shared transform. [codex-rs/mcp-console-sandbox/src/windows_proxy.rs:214](src/windows_proxy.rs#L214)
+17. **Simplified:** Duplicated process-observer logic was consolidated into the shared executable-test support module. [codex-rs/mcp-console-sandbox/tests/windows_proxy/support.rs:215](tests/windows_proxy/support.rs#L215)
+18. **Size exception documented:** The net feature remains above 800 changed lines. Review stages and the smallest independently useful retirement-receipt stage are identified from the actual shared and legacy dependencies; no claim of a small complete PR is made. [codex-rs/mcp-console-sandbox/INTEGRATION.md:90](INTEGRATION.md#L90)
+
+This remains larger than the repository's 800-line guidance. The smallest independently useful stage is native retirement-receipt preservation with its regressions. Subsequent coherent stages are the shared owned-Job launch/barrier; shared selector plus MXC Job-authenticated ingress and control-state protection; then the legacy pool/provisioning and strict local-binding integration. The draft retains the complete candidate because both backends are needed for the requested policy contract.
+
+### Integration follow-up
+
+1. In mcp-console, admit the typed supported Windows proxy configuration and consume `mxc_available`/`mxc_state_error` independently of legacy `configured`/`managed_proxy_provisioned`. Preserve the unversioned environment transport and explicit capability rejection.
+2. Pin the exact reviewed cobox commit reported by the draft PR update and ship matching binaries. Auto may use MXC without provisioning; do not silently set `allowLocalBinding: true` to make a strict request compatible.
+3. For strict local-binding requests or unavailable/incompatible MXC, run plain `mcp-console-sandbox setup` explicitly against the original base state directory. It batches the base accounts and four proxy slots under **one UAC request**. Complete serial dedicated-account and mixed-backend acceptance before enabling that path. The same explicit command migrates unregistered legacy installations; it rotates base credentials before registering the protected path.
+4. Keep failed retirement/cleanup as a replacement barrier. Surface setup, state-protection, capacity, port and quarantine diagnostics. MXC has no legacy slot limit; the elevated pool has two slots per local-access class.
+5. Keep resolver sandbox parity separate. SOCKS retains Codex's direct connector; trusted upstream routing applies to HTTP/CONNECT.
+
+## Earlier dedicated-account iteration (through 63f6cf73b16baaf8bc28c78d16be18604a17d337)
+
+The following is historical evidence for the retained elevated backend, not a statement that MXC needs account provisioning or that these earlier runs validate the final revision.
+
 This is an implementation candidate, **not completed dedicated-account acceptance**. Do not enable Console's Windows proxy admission solely on the passing restricted-token or ordinary package tests. The final elevated refresh was canceled by Windows (1223), and no further provisioning attempts were made. The user's authorization had already been granted; the repeated prompts came from the original per-account implementation. Setup now batches the base identity and four slots under one elevation. That revised setup path has compiled but has not completed on this machine.
 
 The ownership simplification reuses Codex's shared Windows ingress and configuration APIs, removes duplicate per-slot mutexes and the added native IPC field, and checks provisioned settings before using native `Preserve`. Both ports remain reserved when SOCKS is disabled; any allocator fallback is rejected before route registration or launch. The four account pairs, protected installation owner and durable quarantine remain. One already-authorized setup invocation during the ownership simplification also returned 1223 before the helper started. It was not retried and no further approval was requested.
@@ -14,11 +88,11 @@ Validation of that CLI simplification:
 - `cargo build --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --bins`: passed in 11.56 s.
 - `just fix -p mcp-console-sandbox -p mcp-console-sandbox-windows -p codex-windows-sandbox`: passed without warnings in 8.90 s; `just fmt` passed. Unrelated formatter line-ending rewrites were restored. Tests were not rerun after lint/format.
 
-## Branch and verified starting point
+### Branch and verified starting point
 
 Work is confined to `t-kalinowski/cobox`, branch `console/windows-managed-proxy`, based on `e9ca3f338136c185154f873ac7082f7b200fd71e`. Console's supplied pin `42322a3931c2feeab838351e41d8048b1de8eb62` is an ancestor. The actual baseline still rejected every Windows proxy configuration, used JSON Value instead of the typed proxy configuration on Windows, and omitted Windows proxy preparation. The existing Windows ingress/attribution machinery and native offline proxy-port exceptions were present. Account-wide firewall settings and process-local shared ingress did not provide ownership across separate companions.
 
-## Executed commands and results
+### Executed commands and results
 
 Commands below ran in `codex-rs`, except the Bazel lock command at the repository root. This machine used Rust 1.95.0/MSVC, bundled Python on PATH, and `CARGO_TARGET_DIR=C:/Users/kalin/.cache/mcp-console/cobox-target`.
 
@@ -48,7 +122,7 @@ An earlier, smaller version of the dedicated-account suite passed 8 tests in 31.
 
 Two earlier per-identity setup runs completed. The subsequent consolidated setup attempts returned Windows error 1223. The incomplete pool marker is intentionally absent, so ordinary managed-proxy launches reject admission. Existing machine resources were not uninstalled. No UAC dialog was pending when the final status check ran.
 
-## Acceptance present but not established on the final revision
+### Acceptance present but not established on the final revision
 
 The ignored tests use the public unversioned `--config-env` transport and separately spawned companions with the provisioned accounts. They cover:
 
@@ -60,7 +134,7 @@ The ignored tests use the public unversioned `--config-env` transport and separa
 
 External IPv4/IPv6 TCP cases report unavailable positive controls. Non-loopback UDP requires `MCP_CONSOLE_SANDBOX_TEST_ECHO_ADDR`; run with controlled IPv4 and IPv6 peers separately. A WSL IPv4 echo server had a successful host UDP control, but the final sandbox probe was not run. Echo probes establish round-trip behavior only: a blocked reply does not prove that an outbound datagram never reached the peer. The suite reports external UDP egress as unestablished even when its echo assertions pass. Acceptance needs receiver-side observation at controlled IPv4 and IPv6 peers. Loopback UDP already checks actual receipt at the host listener. External IPv6 and final native UDP enforcement remain unestablished. An explicit Ctrl+C managed-proxy acceptance case and a transport variable whose name itself collides with a projected proxy variable are not covered by the new suite. Owner death covers the cancellation path, not delivery of the actual console signal. Setup failure/owner rejection paths, reserved IPv6 port binds and online-account port guards also lack dedicated acceptance cases. Linux/macOS runtime tests and a Windows Bazel build/test were not run.
 
-## Review and delivery order
+### Review and delivery order
 
 The full change, including added files, was reviewed against the branch baseline, with focused security, integration/context, test, and size reviews. Findings corrected:
 
@@ -78,7 +152,7 @@ The full change, including added files, was reviewed against the branch baseline
 
 The feature exceeds the usual 800-line change guidance. The smallest independently useful stage is preservation of native retirement receipts across adapters with its executable regressions. Subsequent stages are dormant native pool/provisioning and environment isolation; account-authenticated ingress; companion activation with network/lifecycle acceptance and documentation. Draft [PR #12](https://github.com/t-kalinowski/cobox/pull/12) retains the complete candidate for review. No merge, release, Console change or resolver change was performed. Final dedicated-account acceptance is required before rollout.
 
-## Required setup and mcp-console follow-up
+### Required setup and mcp-console follow-up
 
 1. Ship matching companion, setup, and runner binaries together. From an ordinary interactive terminal, explicitly run `mcp-console-sandbox.exe setup` with the existing state directory. Expect **one** UAC request. Do not automate setup during worker launch.
 2. Run the serial acceptance recipe in [WINDOWS.md](WINDOWS.md#managed-proxy-ownership), including controlled external TCP/UDP peers and the untested signal case, before rollout.

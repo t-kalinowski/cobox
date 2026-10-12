@@ -17,7 +17,13 @@ use crate::windows_cli::Cli;
 
 pub(crate) fn run() -> Result<i32> {
     if std::env::args_os()
-        .nth(1)
+        .nth(/*n*/ 1)
+        .is_some_and(|arg| arg == codex_sandboxing::CODEX_WINDOWS_MXC_ARG1)
+    {
+        codex_sandboxing::run_windows_mxc_main();
+    }
+    if std::env::args_os()
+        .nth(/*n*/ 1)
         .is_some_and(|arg| arg == "--config-env")
     {
         return crate::windows_console::run();
@@ -68,11 +74,20 @@ pub(crate) fn run() -> Result<i32> {
     .iter()
     .all(|name| directory.join(name).is_file());
     if matches!(cli.action, Action::Status) {
+        let (mut filesystem, network) = PermissionProfile::read_only().to_runtime_permissions();
+        let mxc_state_protection =
+            crate::windows_proxy::protect_state(&mut filesystem, state_dir.as_path());
+        let mxc_available = mxc_state_protection.is_ok()
+            && codex_sandboxing::windows_mxc_available_for(
+                &PermissionProfile::from_runtime_permissions(&filesystem, network),
+            );
         println!(
             "{}",
             serde_json::json!({
                 "state_dir": state_dir,
                 "configured": configured,
+                "mxc_available": mxc_available,
+                "mxc_state_error": mxc_state_protection.err().map(|error| error.to_string()),
                 "helpers_available": helpers_available,
                 "managed_proxy_provisioned": std::fs::read(crate::windows_proxy::pool_marker(state_dir.as_path())).ok().as_deref() == Some(b"1\n")
                     && codex_windows_sandbox::ConsoleProxySlot::validate_owner(state_dir.as_path()).is_ok(),

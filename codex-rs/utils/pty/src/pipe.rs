@@ -128,8 +128,10 @@ enum PipeStdinMode {
     Null,
 }
 
-/// On Windows, process-tree containment is best-effort because Tokio returns
-/// only after the root process starts, so job assignment cannot be atomic.
+/// A supplied Windows Job requires containment before resume and confirmed retirement.
+/// Other Windows callers retain best-effort containment and surviving descendants.
+// Keep existing pipe call sites unchanged when adding the optional Windows Job owner.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_process_with_stdin_mode(
     program: &OsStr,
     args: &[String],
@@ -138,6 +140,7 @@ async fn spawn_process_with_stdin_mode(
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
     inherited_fds: &[i32],
+    #[cfg(windows)] owned_job: Option<Arc<crate::JobObject>>,
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
@@ -171,7 +174,13 @@ async fn spawn_process_with_stdin_mode(
         });
 
     #[cfg(windows)]
-    let job = crate::win::JobObject::create().map(Arc::new);
+    let job = match &owned_job {
+        Some(job) => {
+            command.windows_job = Some(Arc::clone(job));
+            Ok(Arc::clone(job))
+        }
+        None => crate::win::JobObject::create().map(Arc::new),
+    };
     #[cfg(target_os = "linux")]
     let mut child =
         match crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await? {
@@ -188,6 +197,9 @@ async fn spawn_process_with_stdin_mode(
             .id()
             .ok_or_else(|| io::Error::other("missing child pid"))?;
         let assigned_job = job.and_then(|job| {
+            if owned_job.is_some() {
+                return Ok(job);
+            }
             let crate::child::ChildKind::Tokio(child) = &child.inner;
             let process_handle = child
                 .raw_handle()
@@ -198,6 +210,9 @@ async fn spawn_process_with_stdin_mode(
         match assigned_job {
             Ok(job) => WindowsChildTerminator::Job(job),
             Err(err) => {
+                if owned_job.is_some() {
+                    return Err(err.into());
+                }
                 log::warn!(
                     "Windows pipe process tree containment unavailable for pid {pid}: {err}"
                 );
@@ -272,7 +287,8 @@ async fn spawn_process_with_stdin_mode(
         let code = match child.wait().await {
             Ok(status) => {
                 #[cfg(windows)]
-                if let Some(job) = wait_job
+                if owned_job.is_none()
+                    && let Some(job) = wait_job
                     && let Err(err) = job.preserve_descendants()
                 {
                     log::warn!(
@@ -281,8 +297,25 @@ async fn spawn_process_with_stdin_mode(
                 }
                 exit_code_from_status(status)
             }
-            Err(_) => -1,
+            Err(_) => {
+                #[cfg(windows)]
+                if owned_job.is_some() {
+                    return;
+                }
+                -1
+            }
         };
+        #[cfg(windows)]
+        if let Some(job) = owned_job {
+            match tokio::task::spawn_blocking(move || crate::retire_job(&job)).await {
+                Ok(Ok(())) => {}
+                result => {
+                    log::error!("Windows pipe Job retirement failed: {result:?}");
+                    // Neither the channel nor the cached exit code may claim retirement.
+                    return;
+                }
+            }
+        }
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut guard) = wait_exit_code.lock() {
             *guard = Some(code);
@@ -334,6 +367,9 @@ pub async fn spawn_process(
         arg0,
         PipeStdinMode::Piped,
         inherited_fds,
+        #[cfg(windows)]
+        /*owned_job*/
+        None,
     )
     .await
 }
@@ -357,6 +393,33 @@ pub async fn spawn_process_no_stdin(
         arg0,
         PipeStdinMode::Null,
         inherited_fds,
+        #[cfg(windows)]
+        /*owned_job*/
+        None,
+    )
+    .await
+}
+
+/// Starts a piped child inside the supplied non-breakaway Job before it runs.
+/// The exit receipt is withheld until every descendant has retired. No process-only
+/// fallback is permitted. Keep a Job handle alive until dependent resources close.
+#[cfg(windows)]
+pub async fn spawn_process_in_job(
+    program: impl AsRef<OsStr>,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    job: Arc<crate::JobObject>,
+) -> Result<SpawnedProcess> {
+    spawn_process_with_stdin_mode(
+        program.as_ref(),
+        args,
+        cwd,
+        env,
+        /*arg0*/ &None,
+        PipeStdinMode::Piped,
+        &[],
+        Some(job),
     )
     .await
 }

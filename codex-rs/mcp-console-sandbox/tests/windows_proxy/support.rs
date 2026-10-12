@@ -22,15 +22,21 @@ impl Session {
         let directory = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
         let fixture = directory.path().join("fixture.exe");
         std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
-        let state = std::path::PathBuf::from(
-            std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR").context(
-                "set MCP_CONSOLE_SANDBOX_TEST_STATE_DIR to explicitly provisioned state",
-            )?,
-        );
+        let state = if overrides["windows_sandbox_level"] == "mxc" {
+            directory.path().join("unprovisioned")
+        } else {
+            std::path::PathBuf::from(
+                std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR").context(
+                    "set MCP_CONSOLE_SANDBOX_TEST_STATE_DIR to explicitly provisioned state",
+                )?,
+            )
+        };
         let mut config = json!({"extends": ":read-only", "network": "enabled", "proxy": policy,
+            "windows_sandbox_level":"elevated",
             "lifecycle": {"private_tmp":{"parent":directory.path(), "environment":["TMPDIR"]}},
             "windows_state_dir": state, "environment": {"hTtP_pRoXy":"http://127.0.0.1:1", "No_ProXy":"*",
-            "CoDeX_WinDows_SANDBOX_PROXY_PORTS":"1,2", "CoDeX_NETWORK_ALLOW_LOCAL_BINDING":"1"}});
+            "CoDeX_WinDows_SANDBOX_PROXY_PORTS":"1,2", "CoDeX_NETWORK_ALLOW_LOCAL_BINDING":"1",
+            "CoDeX_SaNdBoX_LaUnCh_Count":"999", "CODEX_SANDBOX_LAUNCH_0":"untrusted"}});
         if policy.is_null() {
             config["network"] = json!("restricted");
         }

@@ -4,33 +4,12 @@ use pretty_assertions::assert_eq;
 #[test]
 #[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_descendants_retire_before_slot_reuse() -> Result<()> {
-    use std::os::windows::io::AsRawHandle;
-    use std::os::windows::io::FromRawHandle;
-    use std::os::windows::io::OwnedHandle;
-    use windows_sys::Win32::System::Threading::*;
     let mut session = Session::start(proxy())?;
     let child = session.probe(json!({"op":"descendant"}))?;
     let lease_path = session.lease_path()?;
-    let handle = unsafe {
-        OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-            /*binherithandle*/ 0,
-            child["pid"].as_u64().context("descendant pid")? as u32,
-        )
-    };
-    anyhow::ensure!(
-        !handle.is_null(),
-        "open descendant: {}",
-        std::io::Error::last_os_error()
-    );
-    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let processes = observe_processes(&[&child["pid"]])?;
     session.finish()?;
-    assert_eq!(
-        unsafe {
-            WaitForSingleObject(handle.as_raw_handle(), /*dwmilliseconds*/ 0)
-        },
-        windows_sys::Win32::Foundation::WAIT_OBJECT_0
-    );
+    assert_processes_retired(&processes);
     let replacement = Session::start(proxy())?;
     assert_eq!(replacement.lease_path()?, lease_path);
     replacement.finish()
@@ -69,28 +48,9 @@ fn elevated_proxy_owner_death_cancels_and_releases_resources() -> Result<()> {
 #[test]
 #[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_companion_loss_retires_job_but_quarantines_its_slot() -> Result<()> {
-    use std::os::windows::io::AsRawHandle;
-    use std::os::windows::io::FromRawHandle;
-    use std::os::windows::io::OwnedHandle;
-    use windows_sys::Win32::System::Threading::*;
     let mut first = Session::start(proxy())?;
     let child = first.probe(json!({"op":"descendant"}))?;
-    let mut processes = Vec::new();
-    for pid in [&first.ready["pid"], &child["pid"]] {
-        let handle = unsafe {
-            OpenProcess(
-                PROCESS_SYNCHRONIZE,
-                /*binherithandle*/ 0,
-                pid.as_u64().context("process id")? as u32,
-            )
-        };
-        anyhow::ensure!(
-            !handle.is_null(),
-            "observe workload: {}",
-            std::io::Error::last_os_error()
-        );
-        processes.push(unsafe { OwnedHandle::from_raw_handle(handle) });
-    }
+    let processes = observe_processes(&[&first.ready["pid"], &child["pid"]])?;
     let temporary = std::path::PathBuf::from(
         first.ready["environment"]["TMPDIR"]
             .as_str()
@@ -99,14 +59,7 @@ fn elevated_proxy_companion_loss_retires_job_but_quarantines_its_slot() -> Resul
     let endpoint = first.http_endpoint()?.to_owned();
     first.child.kill()?;
     assert!(!wait_for_exit(&mut first.child)?.success());
-    for process in processes {
-        assert_eq!(
-            unsafe {
-                WaitForSingleObject(process.as_raw_handle(), /*dwmilliseconds*/ 10_000)
-            },
-            windows_sys::Win32::Foundation::WAIT_OBJECT_0
-        );
-    }
+    assert_processes_retired(&processes);
     assert!(
         temporary.exists(),
         "killed companion cannot acknowledge cleanup"

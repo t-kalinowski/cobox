@@ -54,6 +54,51 @@ pub(crate) fn restricting_sids_for_tcp_connection(
     restricting_sids_for_process(process_id)
 }
 
+/// Authorizes the kernel-observed client, independently of peer-supplied route tokens.
+pub(crate) fn require_client_job(
+    local: SocketAddr,
+    peer: SocketAddr,
+    job: &OwnedHandle,
+) -> io::Result<()> {
+    let (SocketAddr::V4(local), SocketAddr::V4(peer)) = (local, peer) else {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "proxy Job attribution requires IPv4",
+        ));
+    };
+    let pid = owning_process_id(local, peer)?;
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            /*binherithandle*/ 0,
+            pid,
+        )
+    };
+    if process == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let process = unsafe { OwnedHandle::from_raw_handle(process as _) };
+    let mut member = 0;
+    if unsafe {
+        windows_sys::Win32::System::JobObjects::IsProcessInJob(
+            process.as_raw_handle() as _,
+            job.as_raw_handle() as _,
+            &mut member,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // Recheck the tuple while retaining the exact process handle across authorization.
+    if member == 0 || owning_process_id(local, peer)? != pid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "proxy client belongs to a different Job",
+        ));
+    }
+    Ok(())
+}
+
 fn owning_process_id(
     accepted_local_addr: SocketAddrV4,
     accepted_peer_addr: SocketAddrV4,
@@ -177,7 +222,13 @@ fn tcp_port(table_port: u32) -> u16 {
 }
 
 fn restricting_sids_for_process(process_id: u32) -> io::Result<(String, Vec<String>)> {
-    let process_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    let process_handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            /*binherithandle*/ 0,
+            process_id,
+        )
+    };
     let process = owned_handle(process_handle, "open proxy client process")?;
 
     let mut token_handle: HANDLE = 0;
