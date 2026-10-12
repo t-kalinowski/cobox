@@ -55,7 +55,7 @@ Run from an ordinary interactive PowerShell session:
 .\target\release\mcp-console-sandbox.exe status
 ```
 
-Setup requests Windows UAC approval when provisioning is needed. Repeating it reuses current setup records and enabled accounts. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule.
+Explicit setup requests Windows UAC approval and refreshes the existing accounts and records. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule or managed-proxy slot.
 
 Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
@@ -75,10 +75,42 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
-- Managed proxy configuration, custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
+- Managed HTTP/HTTPS CONNECT and SOCKS5 TCP use the same domain and full/limited policy as Unix, with the ownership and capability limits below. Custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
 - The selected configuration and reserved transport variable are removed from the target environment case insensitively. Excluded variables cannot be reused as private temporary environment names.
 
 The ordinary command arguments, cwd, and stdio remain the target's inputs. Environment inheritance and overrides retain the shared protocol rules. Private storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
+
+## Managed proxy ownership
+
+Run the adjacent, matching binaries from this revision, then explicitly refresh the same state directory:
+
+```powershell
+.\mcp-console-sandbox.exe setup --managed-proxy
+.\mcp-console-sandbox.exe status
+```
+
+This is one UAC request for the complete pool: the elevated Console setup helper provisions the base accounts and launches its four slot setup operations without further elevation. Ordinary launches never invoke UAC, repair accounts, alter proxy ports/local-access policy, or fall back to unelevated execution. Missing accounts, stale setup records, failed logon, a missing pool marker, foreign ownership, occupied ports, and exhausted/quarantined slots fail with diagnostics. An existing plain `setup` installation needs this explicit refresh. Explicit `setup` refreshes records even when accounts still exist, so it can repair stale passwords; `status` never changes them. `managed_proxy_provisioned` reports the matching completed pool marker and owner, not current free-slot capacity or a live account health probe. Future changes to the fixed pool contract require a new pool marker before admission. Ship all three binaries together; workload environment overrides never choose these helpers.
+
+The bounded pool contains four account pairs (`McpConsoleProxyOff0`/`McpConsoleProxyOn0` through `3`) and TCP ports 43180–43187. Slots 0–1 deny local access; slots 2–3 permit it. Each companion leases one matching slot and binds exactly its HTTP/SOCKS pair, even when SOCKS is disabled. There is capacity for two concurrent sessions per local-access setting. Domain rules, mode, listeners and route identity remain private to that companion. Proxyless restricted execution uses the base offline account with no proxy exceptions. Accounts, helper names, WFP identifiers and locks are separate from Codex. Every Console account belongs to the common secrets-deny group; slot groups retain their other native roles.
+
+`allowLocalBinding: false` blocks direct IPv4/IPv6 TCP and UDP, loopback connects, TCP listeners and UDP receive admission. Explicitly allowed local destinations remain reachable through the managed proxy. True permits native loopback traffic and listeners; these direct local channels do not have domain filtering. External direct traffic remains blocked by the offline identity. Every Console account is forbidden from binding TCP ports 43180–43187, preventing a workload from impersonating a retired companion. A proxy connection must carry both its registered restricting SID and the owning dedicated account SID. A copied endpoint or forged route SID under another account cannot borrow policy.
+
+The public proxy object is `RemoteNetworkProxyConfig`. Full mode supports HTTP methods, CONNECT and SOCKS5 TCP; limited mode allows GET/HEAD/OPTIONS and rejects POST, CONNECT and SOCKS. Explicit denials take precedence. `enableSocks5Udp: true`, nonempty Unix-socket maps and `dangerouslyAllowAllUnixSockets: true` fail before launching a workload. HTTP/CONNECT upstream proxy selection uses the trusted companion environment; SOCKS keeps the existing direct connector. Managed environment values replace workload values case insensitively. The unversioned transport adds no listener/account selection fields.
+
+An administrator-protected HKLM ownership record binds the pool to one Windows user and canonical state directory. A cross-process admission mutex serializes setup and leasing. Named slot objects exclude concurrent owners; durable `.sandbox-secrets/proxy-slot-N.lease` files prevent automatic reuse after an owner disappears. Setup refuses outstanding leases. After native Job retirement, the companion stops the proxy, drops its runtime, removes private storage, verifies listener closure and removes the lease. Any failure prevents a successful receipt and retains the slot quarantine. Port conflicts fail before workload launch without choosing another port.
+
+There is deliberately no force-reclaim command. Never remove a lease merely because its companion PID disappeared: native retirement and cleanup may still be pending. For crash recovery, stop Console, reboot Windows to establish that old Jobs and listeners are gone, clean up the retained private directories identified in diagnostics, and remove only the corresponding lease files from the registered state directory. Then run explicit setup if its marker is absent. Do not copy state, change the owner record, or delete the whole state directory to bypass quarantine. An unrelated unrestricted process running as the trusted host user or an administrator remains outside this workload threat model.
+
+Opt-in acceptance uses provisioned dedicated accounts and the public environment transport, not only restricted-token proxy unit tests:
+
+```powershell
+$env:MCP_CONSOLE_SANDBOX_TEST_STATE_DIR = "$env:LOCALAPPDATA\mcp-console"
+# Optional non-loopback peer: accepts TCP and echoes UDP at this address.
+$env:MCP_CONSOLE_SANDBOX_TEST_ECHO_ADDR = '192.0.2.2:44090'
+just test --locked -p mcp-console-sandbox --test windows_proxy --run-ignored ignored-only --test-threads 1 --retries 0 --success-output immediate
+```
+
+Replace the example echo address with a reachable controlled peer or omit it; unavailable external controls are reported explicitly. Run acceptance serially against an idle pool. Tests never provision accounts. The adversarial cleanup tests independently observe their known fixture processes before removing their own deliberately retained leases; production launch has no such reclaim path. See [recorded validation](WINDOWS_PROXY_VALIDATION.md) for actual results and unavailable coverage.
 
 ## Command interface
 
@@ -86,11 +118,11 @@ Run `--help` for `setup` and `status`. Execute workloads only with `--config-env
 
 Targets still need host read/traverse permission. In particular, Python 3.14's private temporary directories can grant access only through owner/admin/system ACL entries that a restricted token cannot use. Ordinary directories inheriting the current user's access work without machine-wide ACL changes. Use native Windows paths with backslashes for `cmd.exe`. Targets also remain subject to host Application Control policy; error 4551 is a host policy rejection.
 
-Unelevated launches create capability SIDs and save mappings in `cap_sid`. Capability ACL entries persist on filesystem objects; deleting the state directory does not undo them. Elevated launches use provisioned accounts and refresh workspace ACLs. Backend upgrades or network-setting changes can require administrator repair.
+Console launches save capability mappings in `.sandbox-secrets/cap_sid`; elevated setup denies every Console account access to these records. This revision creates fresh protected mappings rather than trusting old unprotected `cap_sid` files. Capability ACL entries persist on filesystem objects; deleting the state directory does not undo them. Elevated launches use provisioned accounts and refresh workspace ACLs. Backend upgrades or network-setting changes can require administrator repair.
 
 ## Lifecycle
 
-Console's pipe-launched workloads enter a non-breakaway Job at process creation. After normal root exit, timeout, or cancellation, the backend terminates remaining members and confirms zero active processes before returning an exit receipt. A native Job completion port wakes the waiter; an accounting query confirms the barrier, with a five-second cleanup allowance. Failure uses reserved exit code 125. A missing exit receipt is distinct from a target exit code of `0xffffffff` (`-1`). Codex's default product continues to preserve descendants after normal root exit.
+Console's pipe-launched workloads enter a non-breakaway Job at process creation. After normal root exit, timeout, or cancellation, the backend terminates remaining members and confirms zero active processes before returning an exit receipt. A native Job completion port wakes the waiter; an accounting query confirms the barrier, with a five-second cleanup allowance. A missing native retirement receipt returns exit code 125 without claiming cleanup. Genuine target exit codes, including 125 and -1, remain distinct internally and permit cleanup only when a receipt exists. A missing exit receipt is distinct from a target exit code of `0xffffffff` (`-1`). Codex's default product continues to preserve descendants after normal root exit.
 
 The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. It removes private storage only after a confirmed receipt; startup errors and unconfirmed retirement retain storage with diagnostics. Private storage is not deleted while target descendants are known to remain.
 After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
