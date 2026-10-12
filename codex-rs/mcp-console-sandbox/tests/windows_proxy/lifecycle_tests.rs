@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_descendants_retire_before_slot_reuse() -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::io::FromRawHandle;
@@ -37,7 +37,7 @@ fn elevated_proxy_descendants_retire_before_slot_reuse() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_owner_death_cancels_and_releases_resources() -> Result<()> {
     let mut owner = Command::new("cmd.exe")
         .args(["/d", "/c", "pause"])
@@ -67,7 +67,7 @@ fn elevated_proxy_owner_death_cancels_and_releases_resources() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_companion_loss_retires_job_but_quarantines_its_slot() -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::io::FromRawHandle;
@@ -129,7 +129,7 @@ fn elevated_proxy_companion_loss_retires_job_but_quarantines_its_slot() -> Resul
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_cleanup_failure_quarantines_slot_until_resources_are_retired() -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
@@ -172,7 +172,7 @@ fn elevated_proxy_cleanup_failure_quarantines_slot_until_resources_are_retired()
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_helper_loss_withholds_retirement_receipt() -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::io::FromRawHandle;
@@ -219,7 +219,7 @@ fn elevated_proxy_helper_loss_withholds_retirement_receipt() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_prelaunch_failure_does_not_consume_a_slot() -> Result<()> {
     for _ in 0..3 {
         let error =
@@ -238,7 +238,7 @@ fn elevated_proxy_prelaunch_failure_does_not_consume_a_slot() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_nonzero_exit_receipts_release_the_same_slot() -> Result<()> {
     let mut expected = None;
     for code in [125, -1, 0] {

@@ -55,7 +55,7 @@ Run from an ordinary interactive PowerShell session:
 .\target\release\mcp-console-sandbox.exe status
 ```
 
-Explicit setup requests Windows UAC approval and refreshes the existing accounts and records. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule or managed-proxy slot.
+Explicit `setup` provisions or refreshes the base accounts and all managed-proxy slots under one Windows UAC approval. There is no separate proxy setup option; each session's policy still selects whether to use a proxy. Status prints JSON and exits zero when the base accounts have current records, are enabled, and adjacent helpers are present; `managed_proxy_provisioned` separately reports the completed proxy pool marker and owner. Status does not audit every firewall rule or managed-proxy slot.
 
 Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
@@ -85,11 +85,11 @@ The ordinary command arguments, cwd, and stdio remain the target's inputs. Envir
 Run the adjacent, matching binaries from this revision, then explicitly refresh the same state directory:
 
 ```powershell
-.\mcp-console-sandbox.exe setup --managed-proxy
+.\mcp-console-sandbox.exe setup
 .\mcp-console-sandbox.exe status
 ```
 
-This is one UAC request for the complete pool: the elevated Console setup helper provisions the base accounts and launches its four slot setup operations without further elevation. Ordinary launches never invoke UAC, repair accounts, alter proxy ports/local-access policy, or fall back to unelevated execution. Missing accounts, stale setup records, failed logon, a missing pool marker, foreign ownership, occupied ports, and exhausted/quarantined slots fail with diagnostics. An existing plain `setup` installation needs this explicit refresh. Explicit `setup` refreshes records even when accounts still exist, so it can repair stale passwords; `status` never changes them. `managed_proxy_provisioned` reports the matching completed pool marker and owner, not current free-slot capacity or a live account health probe. Future changes to the fixed pool contract require a new pool marker before admission. Ship all three binaries together; workload environment overrides never choose these helpers.
+This is one UAC request for the complete pool: the elevated Console setup helper provisions the base accounts and launches its four slot setup operations without further elevation. Ordinary launches never invoke UAC, repair accounts, alter proxy ports/local-access policy, or fall back to unelevated execution. Missing accounts, stale setup records, failed logon, a missing pool marker, foreign ownership, occupied ports, and exhausted/quarantined slots fail with diagnostics. Installations created by an older base-only setup need this explicit refresh using the same `setup` command. Explicit `setup` refreshes records even when accounts still exist, so it can repair stale passwords; `status` never changes them. `managed_proxy_provisioned` reports the matching completed pool marker and owner, not current free-slot capacity or a live account health probe. Future changes to the fixed pool contract require a new pool marker before admission. Ship all three binaries together; workload environment overrides never choose these helpers.
 
 The bounded pool contains four account pairs (`McpConsoleProxyOff0`/`McpConsoleProxyOn0` through `3`) and TCP ports 43180–43187. Slots 0–1 deny local access; slots 2–3 permit it. Each companion leases one matching slot and uses Codex's existing shared Windows ingress for its HTTP/SOCKS pair, even when SOCKS service is disabled. The ingress is shared within that companion process only. There is capacity for two concurrent sessions per local-access setting. Domain rules, mode and route identity remain private to that companion. Proxyless restricted execution uses the base offline account with no proxy exceptions. Accounts, helper names, WFP identifiers and locks are separate from Codex. Every Console account belongs to the common secrets-deny group; slot groups retain their other native roles.
 

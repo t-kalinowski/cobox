@@ -86,7 +86,7 @@ impl Lease {
         let _configuration = configuration_guard()?;
         ensure!(
             std::fs::read(pool_marker(state)).ok().as_deref() == Some(b"1\n"),
-            "Windows managed proxy setup is required; run `mcp-console-sandbox setup --managed-proxy` with the same state directory"
+            "Windows managed proxy setup is required; run `mcp-console-sandbox setup` with the same state directory"
         );
         ConsoleProxySlot::validate_owner(state)?;
         for index in 0..ConsoleProxySlot::COUNT {

@@ -34,12 +34,12 @@ pub(crate) fn run() -> Result<i32> {
             .join("mcp-console"),
         )?,
     };
-    let _configuration = if matches!(cli.action, Action::Setup { .. }) {
+    let _configuration = if matches!(cli.action, Action::Setup) {
         Some(crate::windows_proxy::configuration_guard()?)
     } else {
         None
     };
-    if matches!(cli.action, Action::Setup { .. }) {
+    if matches!(cli.action, Action::Setup) {
         for index in 0..codex_windows_sandbox::ConsoleProxySlot::COUNT {
             anyhow::ensure!(
                 !state_dir
@@ -91,7 +91,7 @@ pub(crate) fn run() -> Result<i32> {
             "setup requires adjacent mcp-console-sandbox-setup.exe and mcp-console-sandbox-runner.exe"
         );
     }
-    if matches!(cli.action, Action::Setup { .. }) {
+    if matches!(cli.action, Action::Setup) {
         // Create the helper directory as the caller, before UAC. Its owner
         // must be able to refresh the protected DACL on ordinary launches.
         std::fs::create_dir_all(codex_windows_sandbox::sandbox_bin_dir(state_dir.as_path()))
@@ -106,21 +106,12 @@ pub(crate) fn run() -> Result<i32> {
             codex_home: state_dir.as_path(),
             proxy_enforced: false,
         };
-        if matches!(
-            cli.action,
-            Action::Setup {
-                managed_proxy: true
-            }
-        ) {
-            let marker = crate::windows_proxy::pool_marker(state_dir.as_path());
-            if marker.exists() {
-                std::fs::remove_file(&marker)?;
-            }
-            codex_windows_sandbox::ConsoleProxySlot::provision_pool(request)?;
-            std::fs::write(marker, b"1\n")?;
-        } else {
-            codex_windows_sandbox::run_elevated_setup(request)?;
+        let marker = crate::windows_proxy::pool_marker(state_dir.as_path());
+        if marker.exists() {
+            std::fs::remove_file(&marker)?;
         }
+        codex_windows_sandbox::ConsoleProxySlot::provision_pool(request)?;
+        std::fs::write(marker, b"1\n")?;
     }
     if !codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())? {
         bail!("sandbox setup did not produce current records and enabled accounts");

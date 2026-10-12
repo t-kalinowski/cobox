@@ -51,7 +51,11 @@ fn proxy_capabilities_and_provisioning_are_checked_before_launch() -> Result<()>
             "unelevated",
             "managed proxy requires the elevated Windows sandbox",
         ),
-        (json!({}), "elevated", "proxy setup is required"),
+        (
+            json!({}),
+            "elevated",
+            "proxy setup is required; run `mcp-console-sandbox setup`",
+        ),
     ] {
         let mut policy = proxy();
         policy

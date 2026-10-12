@@ -476,7 +476,7 @@ fn run_automatic_setup(
 ) -> Result<()> {
     anyhow::ensure!(
         crate::WindowsSandboxProduct::current() != crate::WindowsSandboxProduct::Console,
-        "Console setup requires an explicit `mcp-console-sandbox setup` refresh (`setup --managed-proxy` for proxy sessions) against the base state directory; automatic provisioning is disabled"
+        "Console setup requires an explicit `mcp-console-sandbox setup` refresh against the base state directory; automatic provisioning is disabled"
     );
     let mut listeners = WindowsSandboxProxyListeners::from_proxy_environment(request.env_map);
     // Preserve-mode setup can use saved ports that differ from the current environment.
@@ -533,7 +533,7 @@ pub(crate) fn refresh_logon_sandbox_creds(
 ) -> Result<SandboxCreds> {
     anyhow::ensure!(
         crate::WindowsSandboxProduct::current() != crate::WindowsSandboxProduct::Console,
-        "Console sandbox login failed; run `mcp-console-sandbox setup` explicitly (`setup --managed-proxy` for proxy sessions) against the base state directory"
+        "Console sandbox login failed; run `mcp-console-sandbox setup` explicitly against the base state directory"
     );
     remove_sandbox_users_file(codex_home, "sandbox user login failed")?;
     require_logon_sandbox_creds(

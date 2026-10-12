@@ -2,7 +2,17 @@
 
 This is an implementation candidate, **not completed dedicated-account acceptance**. Do not enable Console's Windows proxy admission solely on the passing restricted-token or ordinary package tests. The final elevated refresh was canceled by Windows (1223), and no further provisioning attempts were made. The user's authorization had already been granted; the repeated prompts came from the original per-account implementation. Setup now batches the base identity and four slots under one elevation. That revised setup path has compiled but has not completed on this machine.
 
-The ownership simplification reuses Codex's shared Windows ingress and configuration APIs, removes duplicate per-slot mutexes and the added native IPC field, and checks provisioned settings before using native `Preserve`. Both ports remain reserved when SOCKS is disabled; any allocator fallback is rejected before route registration or launch. The four account pairs, protected installation owner and durable quarantine remain. One already-authorized setup invocation during this revision also returned 1223 before the helper started. It was not retried and no further approval was requested.
+The ownership simplification reuses Codex's shared Windows ingress and configuration APIs, removes duplicate per-slot mutexes and the added native IPC field, and checks provisioned settings before using native `Preserve`. Both ports remain reserved when SOCKS is disabled; any allocator fallback is rejected before route registration or launch. The four account pairs, protected installation owner and durable quarantine remain. One already-authorized setup invocation during the ownership simplification also returned 1223 before the helper started. It was not retried and no further approval was requested.
+
+Plain `setup` now always provisions the base accounts and proxy pool together. The optional proxy flag and base-only branch were removed; setup diagnostics, protocol guidance and acceptance prerequisites use the same command. This CLI simplification does not add a new provisioning attempt or establish the pending elevated acceptance.
+
+Validation of that CLI simplification:
+
+- `just test --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --retries 0`: 18 passed, 17 skipped in 6.681 s; run `1712b0d2-cade-4a26-92cb-310ea3997146`. The skips remain the 15 managed-proxy and 2 existing elevated network cases.
+- `just test --locked -p codex-windows-sandbox --lib -E 'test(identity)' --retries 0`: 13 passed in 0.194 s; run `6c040eac-7dbd-4aa0-9a59-60f86d950a56`. The 254 other native tests were filtered out or ignored.
+- `mcp-console-sandbox.exe setup --help`: passed; describes complete provisioning with one UAC approval and exposes only the state-directory and help options.
+- `cargo build --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --bins`: passed in 11.56 s.
+- `just fix -p mcp-console-sandbox -p mcp-console-sandbox-windows -p codex-windows-sandbox`: passed without warnings in 8.90 s; `just fmt` passed. Unrelated formatter line-ending rewrites were restored. Tests were not rerun after lint/format.
 
 ## Branch and verified starting point
 
@@ -61,7 +71,7 @@ The full change, including added files, was reviewed against the branch baseline
 | A confirmed target exit 125 looked like retirement failure                                 | Receipt presence is retained separately from all 32-bit exit codes.                                                                                                                             |
 | Prelaunch failures consumed durable slots                                                  | Lease drop rolls back before the native spawn boundary; post-spawn uncertainty remains quarantined.                                                                                             |
 | Explicit setup could not repair stale account passwords                                    | Explicit setup refreshes even when account records exist.                                                                                                                                       |
-| Slot recovery guidance referred only to plain setup                                        | Managed-session diagnostics now point to `setup --managed-proxy` against the original base state directory.                                                                                     |
+| Setup guidance differed between base and proxy installations                               | Plain `setup` now provisions both; every recovery diagnostic points to that command against the original base state directory.                                                                  |
 | Status overstated pool readiness                                                           | `managed_proxy_provisioned` reports the completed marker and registered owner; it makes no free-capacity/account-health claim.                                                                  |
 | Lifecycle tests could reuse a different slot or erase a quarantine without observing death | Tests derive the actual lease from the endpoint, assert exact-slot reuse, retain process handles, and serialize acceptance. Startup/reply/retirement waits are bounded.                         |
 | External UDP echo absence was presented as outbound enforcement                            | The test now reports external UDP egress as unestablished; receiver-side observation remains required.                                                                                          |
@@ -70,7 +80,7 @@ The feature exceeds the usual 800-line change guidance. The smallest independent
 
 ## Required setup and mcp-console follow-up
 
-1. Ship matching companion, setup, and runner binaries together. From an ordinary interactive terminal, explicitly run `mcp-console-sandbox.exe setup --managed-proxy` with the existing state directory. Expect **one** UAC request. Do not automate setup during worker launch.
+1. Ship matching companion, setup, and runner binaries together. From an ordinary interactive terminal, explicitly run `mcp-console-sandbox.exe setup` with the existing state directory. Expect **one** UAC request. Do not automate setup during worker launch.
 2. Run the serial acceptance recipe in [WINDOWS.md](WINDOWS.md#managed-proxy-ownership), including controlled external TCP/UDP peers and the untested signal case, before rollout.
 3. In mcp-console, update the companion pin to the reviewed final cobox commit only after that acceptance succeeds. Enable Windows configuration admission for the supported capability set, retain rejection of UDP/Unix options, and retain the unversioned environment transport.
 4. Surface setup-required, port-busy, pool-busy and quarantine diagnostics. Capacity is two strict and two local-enabled sessions; queue or report exhaustion without backend fallback. Treat failed cleanup as failed retirement, preserving replacement gating.

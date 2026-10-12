@@ -68,8 +68,9 @@ impl ConsoleProxySlot {
     }
 
     pub(crate) fn owner(state: &Path) -> Result<crate::installation_record::InstallationRecord> {
-        let record = crate::installation_record::load_from(OWNER_KEY)?
-            .context("Console proxy ownership is not provisioned; run `setup --managed-proxy`")?;
+        let record = crate::installation_record::load_from(OWNER_KEY)?.context(
+            "Console proxy ownership is not provisioned; run `mcp-console-sandbox setup`",
+        )?;
         ensure!(
             record.codex_home == std::fs::canonicalize(state)?,
             "Console proxy pool belongs to a different state directory"

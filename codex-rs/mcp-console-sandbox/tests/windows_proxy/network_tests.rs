@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_cannot_borrow_pool_secrets_through_a_write_grant() -> Result<()> {
     let state = std::path::PathBuf::from(
         std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR").context("state")?,
@@ -48,7 +48,7 @@ fn elevated_proxy_cannot_borrow_pool_secrets_through_a_write_grant() -> Result<(
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_transports_policies_and_isolated_companions() -> Result<()> {
     let address = origin()?;
     let mut allowed = Session::start(proxy())?;
@@ -180,7 +180,7 @@ fn elevated_proxy_transports_policies_and_isolated_companions() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_limited_mode_rejects_writes_and_tunnels() -> Result<()> {
     let address = origin()?;
     let mut policy = proxy();
@@ -208,7 +208,7 @@ fn elevated_proxy_limited_mode_rejects_writes_and_tunnels() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_direct_ipv4_ipv6_tcp_udp_and_local_access() -> Result<()> {
     let mut online = Session::start_with(Value::Null, json!({"network":"enabled"}), &[])?;
     let mut strict = Session::start(proxy())?;
@@ -303,7 +303,7 @@ fn elevated_proxy_direct_ipv4_ipv6_tcp_udp_and_local_access() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result<()> {
     let upstream = origin()?;
     let mut policy = proxy();
@@ -340,7 +340,7 @@ fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_port_conflict_and_pool_exhaustion_fail_closed() -> Result<()> {
     for enabled in [false, true] {
         let mut policy = proxy();
@@ -368,7 +368,7 @@ fn elevated_proxy_port_conflict_and_pool_exhaustion_fail_closed() -> Result<()> 
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_concurrent_admission_and_disabled_socks() -> Result<()> {
     let address = origin()?;
     let mut policy = proxy();
@@ -411,7 +411,7 @@ fn elevated_proxy_concurrent_admission_and_disabled_socks() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires explicit setup --managed-proxy, curl.exe, and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+#[ignore = "requires explicit setup, curl.exe, and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_https_connect_transfers_authenticated_tls() -> Result<()> {
     let generated = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_owned()])?;
     let key = rustls::pki_types::PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der());
