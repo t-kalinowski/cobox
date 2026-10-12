@@ -262,7 +262,8 @@ fn main() -> anyhow::Result<()> {
         "proxy-get" => {
             let url = args.next().context("URL")?;
             let address = std::env::var("HTTP_PROXY")?;
-            let mut stream = TcpStream::connect(address.trim_start_matches("http://"))?;
+            let mut stream = TcpStream::connect(address.trim_start_matches("http://"))
+                .with_context(|| format!("connect to HTTP proxy {address}"))?;
             let authority = url
                 .strip_prefix("http://")
                 .context("HTTP URL")?
@@ -272,8 +273,10 @@ fn main() -> anyhow::Result<()> {
             write!(
                 stream,
                 "GET {url} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
-            )?;
-            std::io::copy(&mut stream, &mut std::io::stdout())?;
+            )
+            .context("send HTTP request through proxy")?;
+            std::io::copy(&mut stream, &mut std::io::stdout())
+                .context("read HTTP response from proxy")?;
         }
         #[cfg(target_os = "macos")]
         "pty" => {

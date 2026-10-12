@@ -173,7 +173,7 @@ pub struct LandlockCommand {
 /// 2. Apply in-process restrictions (no_new_privs + seccomp).
 /// 3. `execvp` into the final command.
 pub fn run_main() -> ! {
-    run_main_with_target_setup(None)
+    run_main_with_target_setup(/*setup*/ None)
 }
 
 pub(crate) fn run_main_with_target_setup(

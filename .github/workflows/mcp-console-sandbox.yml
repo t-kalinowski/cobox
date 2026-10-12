@@ -1,6 +1,7 @@
-name: Native sandbox executable (Windows, macOS and Linux)
+name: Sandbox CI
 
 on:
+  pull_request: {}
   workflow_dispatch:
   push:
     branches:
@@ -9,8 +10,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sandbox-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
+    name: Windows contracts
     runs-on: windows-2025
     timeout-minutes: 45
     defaults:
@@ -41,6 +47,7 @@ jobs:
         run: cargo clippy --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --all-targets -- -D warnings
 
   linux-release:
+    name: Linux release (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -104,6 +111,7 @@ jobs:
               -E 'test(transport::) | test(lifecycle::)'
 
   contract:
+    name: macOS contracts
     runs-on: macos-14
     timeout-minutes: 45
     defaults:
@@ -148,6 +156,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   linux-contract:
+    name: Linux contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -158,6 +167,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Verify Cargo workspace manifests
+        run: python3 ../.github/scripts/verify_cargo_workspace_manifests.py
       - uses: ./.github/actions/setup-bazel-ci
         with:
           target: ${{ runner.os }}
@@ -220,3 +231,18 @@ jobs:
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+  required:
+    name: CI required
+    if: ${{ always() }}
+    needs: [windows, linux-release, contract, linux-contract]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Require successful sandbox checks
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/check_ci_results.py
