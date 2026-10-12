@@ -154,11 +154,11 @@ pub(crate) fn run() -> Result<i32> {
             )
             .await;
             // A missing receipt is distinct from every 32-bit target exit code.
-            Ok::<_, anyhow::Error>(result.unwrap_or(125))
+            Ok::<_, anyhow::Error>(result)
         });
     if let Some(storage) = storage {
-        // Code 125 is reserved for an unconfirmed native retirement.
-        if matches!(result, Ok(125) | Err(_)) {
+        // A missing native receipt is distinct from every target exit code.
+        if matches!(result, Ok(None) | Err(_)) {
             eprintln!(
                 "private storage retained after unconfirmed retirement: {}",
                 storage.display()
@@ -187,7 +187,7 @@ pub(crate) fn run() -> Result<i32> {
             }
         }
     }
-    result
+    result.map(|receipt| receipt.unwrap_or(125))
 }
 
 struct Parent {
