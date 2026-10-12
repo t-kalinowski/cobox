@@ -40,7 +40,7 @@ use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 pub(crate) fn restricting_sids_for_tcp_connection(
     accepted_local_addr: SocketAddr,
     accepted_peer_addr: SocketAddr,
-) -> io::Result<Vec<String>> {
+) -> io::Result<(String, Vec<String>)> {
     let (SocketAddr::V4(accepted_local_addr), SocketAddr::V4(accepted_peer_addr)) =
         (accepted_local_addr, accepted_peer_addr)
     else {
@@ -176,7 +176,7 @@ fn tcp_port(table_port: u32) -> u16 {
     u16::from_be(table_port as u16)
 }
 
-fn restricting_sids_for_process(process_id: u32) -> io::Result<Vec<String>> {
+fn restricting_sids_for_process(process_id: u32) -> io::Result<(String, Vec<String>)> {
     let process_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
     let process = owned_handle(process_handle, "open proxy client process")?;
 
@@ -221,10 +221,32 @@ fn restricting_sids_for_process(process_id: u32) -> io::Result<Vec<String>> {
         return Err(last_error("read proxy client restricting SIDs"));
     }
 
-    parse_token_groups(&buffer, byte_len as usize)?
+    let restricting_sids = parse_token_groups(&buffer, byte_len as usize)?
         .iter()
         .map(|entry| sid_to_string(entry.Sid))
-        .collect()
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut user = [0_usize; 128];
+    let mut needed = 0;
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle() as HANDLE,
+            windows_sys::Win32::Security::TokenUser,
+            user.as_mut_ptr().cast(),
+            std::mem::size_of_val(&user) as u32,
+            &mut needed,
+        )
+    } == 0
+    {
+        return Err(last_error("read proxy client account SID"));
+    }
+    let sid = unsafe {
+        (*(user
+            .as_ptr()
+            .cast::<windows_sys::Win32::Security::TOKEN_USER>()))
+        .User
+        .Sid
+    };
+    Ok((sid_to_string(sid)?, restricting_sids))
 }
 
 fn parse_token_groups(buffer: &[usize], byte_len: usize) -> io::Result<&[SID_AND_ATTRIBUTES]> {

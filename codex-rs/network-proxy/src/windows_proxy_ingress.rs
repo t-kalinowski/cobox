@@ -36,6 +36,7 @@ static SHARED_INGRESS: LazyLock<Mutex<Weak<WindowsProxyIngress>>> =
 
 #[derive(Clone)]
 struct RouteServices {
+    client_sid: Option<String>,
     http: WindowsRouteService,
     socks: Option<WindowsRouteService>,
 }
@@ -61,7 +62,8 @@ impl Service<TcpStream> for IngressDispatcher {
     async fn serve(&self, stream: TcpStream) -> Result<(), BoxError> {
         let local_addr = stream.local_addr()?;
         let peer_addr = stream.peer_addr()?;
-        let restricting_sids = restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
+        let (client_sid, restricting_sids) =
+            restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
         let route = {
             let routes = self
                 .routes
@@ -69,6 +71,17 @@ impl Service<TcpStream> for IngressDispatcher {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             registered_route_for_sids(&routes, &restricting_sids)?
         };
+        if route
+            .client_sid
+            .as_ref()
+            .is_some_and(|expected| expected != &client_sid)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "proxy client account does not own this route",
+            )
+            .into());
+        }
         let service = match self.protocol {
             ProxyProtocol::Http => route.http.clone(),
             ProxyProtocol::Socks => route.socks.clone().ok_or_else(|| {
@@ -133,6 +146,33 @@ impl WindowsProxyIngress {
             reserve_socks_listener,
         )
         .context("reserve shared managed Windows proxy ingress")?;
+        let ingress = Self::start(listeners, requested_socks_addr)?;
+        #[cfg(not(test))]
+        {
+            *shared = Some(Arc::clone(&ingress));
+        }
+        #[cfg(test)]
+        {
+            *shared = Arc::downgrade(&ingress);
+        }
+        Ok(ingress)
+    }
+
+    pub(crate) fn isolated(http: SocketAddr, socks: SocketAddr) -> Result<Arc<Self>> {
+        let http_listener = std::net::TcpListener::bind(http).context(
+            "provisioned Console proxy port is unavailable; no port fallback is permitted",
+        )?;
+        let socks_listener = std::net::TcpListener::bind(socks).context(
+            "provisioned Console proxy port is unavailable; no port fallback is permitted",
+        )?;
+        let listeners = crate::proxy::ReservedListenerSet::new(http_listener, Some(socks_listener));
+        Self::start(listeners, socks)
+    }
+
+    fn start(
+        listeners: crate::proxy::ReservedListenerSet,
+        requested_socks_addr: SocketAddr,
+    ) -> Result<Arc<Self>> {
         let http_addr = listeners.http_addr()?;
         let socks_addr = listeners.socks_addr(requested_socks_addr)?;
         let (http_listener, socks_listener) = listeners.into_listeners();
@@ -166,14 +206,6 @@ impl WindowsProxyIngress {
                 task: socks_task,
             }),
         });
-        #[cfg(not(test))]
-        {
-            *shared = Some(Arc::clone(&ingress));
-        }
-        #[cfg(test)]
-        {
-            *shared = Arc::downgrade(&ingress);
-        }
         Ok(ingress)
     }
 
@@ -204,8 +236,13 @@ impl WindowsProxyIngress {
         self: &Arc<Self>,
         http: WindowsRouteService,
         socks: Option<WindowsRouteService>,
+        client_sid: Option<String>,
     ) -> WindowsProxyRoute {
-        let services = Arc::new(RouteServices { http, socks });
+        let services = Arc::new(RouteServices {
+            http,
+            socks,
+            client_sid,
+        });
         let mut routes = self
             .routes
             .lock()

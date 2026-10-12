@@ -61,7 +61,7 @@ fn resolves_loopback_connection_to_current_process() -> io::Result<()> {
     let peer_addr = accepted.peer_addr()?;
 
     let process_id = owning_process_id(socket_addr_v4(local_addr)?, socket_addr_v4(peer_addr)?)?;
-    let restricting_sids = restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
+    let (_, restricting_sids) = restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
 
     assert_eq!(process_id, std::process::id());
     assert!(restricting_sids.iter().all(|sid| sid.starts_with("S-")));
