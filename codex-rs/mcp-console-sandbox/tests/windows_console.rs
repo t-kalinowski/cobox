@@ -27,7 +27,7 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
             ]}}),
             "cannot enforce read restrictions",
         ),
-        (json!({"proxy":{}}), "managed proxy configuration"),
+        (json!({"proxy":{}}), "invalid configuration JSON"),
         (
             json!({"linux_backend":"bubblewrap"}),
             "linux_backend is supported only",
@@ -91,9 +91,10 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
         "windows_state_dir": root.path().join("state"),
         "lifecycle": {"private_tmp": {"parent": root.path(), "environment": ["TMPDIR"]}},
     });
-    for code in [0i32, -1, -1_073_741_819] {
+    for code in [0i32, 125, -1, -1_073_741_819] {
         let mut child = Command::new(cargo_bin("mcp-console-sandbox")?)
             .env("CONSOLE_POLICY", config.to_string())
+            .env("CODEX_WINDOWS_REGISTERED_CORE", "1")
             .args([
                 "--config-env",
                 "CONSOLE_POLICY",

@@ -1,4 +1,4 @@
-//! Console's versioned policy transport, backed by the native Windows session.
+//! Console's unversioned policy transport, backed by the native Windows session.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -24,10 +24,9 @@ use windows_sys::Win32::System::Threading::*;
 
 pub(crate) fn run() -> Result<i32> {
     let crate::bootstrap::Input::Environment(mut request) = crate::bootstrap::take_input()?;
-    ensure!(
-        request.proxy.is_none(),
-        "managed proxy configuration is not supported on Windows"
-    );
+    if let Some(config) = &request.proxy {
+        crate::windows_proxy::validate(config)?;
+    }
     ensure!(
         request.macos_seatbelt_profile_extension.is_none(),
         "macos_seatbelt_profile_extension is supported only on macOS"
@@ -44,6 +43,10 @@ pub(crate) fn run() -> Result<i32> {
         level != WindowsSandboxLevel::Disabled,
         "windows_sandbox_level: disabled is not supported"
     );
+    ensure!(
+        request.proxy.is_none() || level == WindowsSandboxLevel::Elevated,
+        "managed proxy requires the elevated Windows sandbox"
+    );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
     ensure!(
         level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
@@ -55,7 +58,7 @@ pub(crate) fn run() -> Result<i32> {
                 && !filesystem.has_denied_read_restrictions()),
         "unelevated requires host reads and cannot enforce read restrictions"
     );
-    let state = match request.windows_state_dir.take() {
+    let mut state = match request.windows_state_dir.take() {
         Some(state) => state.into_path_buf(),
         None => {
             PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?)
@@ -63,10 +66,19 @@ pub(crate) fn run() -> Result<i32> {
         }
     };
     WindowsSandboxProduct::Console.initialize()?;
+    let mut lease = request
+        .proxy
+        .as_ref()
+        .map(|config| crate::windows_proxy::Lease::acquire(&state, config))
+        .transpose()?;
+    if let Some(lease) = &lease {
+        lease.slot.initialize()?;
+        state = lease.state.clone();
+    }
     let configured = codex_windows_sandbox::check_sandbox_setup(&state)?;
     ensure!(
         level != WindowsSandboxLevel::Elevated || configured,
-        "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the same state directory from an interactive terminal"
+        "Windows sandbox setup is required; run `mcp-console-sandbox setup` (or `setup --managed-proxy` for proxy sessions) with the original base state directory from an interactive terminal"
     );
     let parent = Parent::new(request.lifecycle.parent_pid)?;
     for name in &request.excluded_environment {
@@ -117,10 +129,34 @@ pub(crate) fn run() -> Result<i32> {
         .transpose()?;
     let profile = PermissionProfile::from_runtime_permissions(&filesystem, network);
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
+    let mut spawn_attempted = false;
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(async {
+            let proxy = if let Some(config) = request.proxy {
+                Some(
+                    crate::windows_proxy::prepare(
+                        config,
+                        lease.as_ref().context("Console proxy lease")?.slot,
+                        &mut request.environment,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+            // Projection precedes the final case-insensitive transport exclusion.
+            request.environment.retain(|name, _| {
+                !request
+                    .excluded_environment
+                    .iter()
+                    .any(|excluded| name.eq_ignore_ascii_case(excluded))
+            });
+            spawn_attempted = true;
+            if let Some(lease) = lease.as_mut() {
+                lease.mark_spawn_attempted();
+            }
             let spawned = codex_windows_sandbox::spawn_windows_sandbox_session_for_level(
                 WindowsSandboxSessionRequest {
                     permission_profile: &profile,
@@ -130,9 +166,11 @@ pub(crate) fn run() -> Result<i32> {
                     cwd: request.cwd.as_path(),
                     env_map: request.environment,
                     windows_sandbox_level: level,
-                    proxy_enforced: false,
-                    network_proxy_restricting_sid: None,
-                    proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
+                    proxy_enforced: proxy.is_some(),
+                    network_proxy_restricting_sid: proxy
+                        .as_ref()
+                        .map(|proxy| proxy.restricting_sid.clone()),
+                    proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
                     timeout_ms: None,
                     read_roots_override: None,
                     read_roots_include_platform_defaults: false,
@@ -153,12 +191,18 @@ pub(crate) fn run() -> Result<i32> {
                 cancellation,
             )
             .await;
+            if let Some(proxy) = proxy {
+                proxy
+                    .handle
+                    .shutdown()
+                    .await
+                    .context("stop retired Console proxy")?;
+            }
             // A missing receipt is distinct from every 32-bit target exit code.
-            Ok::<_, anyhow::Error>(result.unwrap_or(125))
+            Ok::<_, anyhow::Error>(result)
         });
     if let Some(storage) = storage {
-        // Code 125 is reserved for an unconfirmed native retirement.
-        if matches!(result, Ok(125) | Err(_)) {
+        if matches!(result, Ok(None) | Err(_)) {
             eprintln!(
                 "private storage retained after unconfirmed retirement: {}",
                 storage.display()
@@ -187,7 +231,25 @@ pub(crate) fn run() -> Result<i32> {
             }
         }
     }
-    result
+    // The runtime has dropped, including ingress and accepted connections. Only a confirmed
+    // native receipt and successful proxy/storage cleanup permit another process to use the slot.
+    if (!spawn_attempted || matches!(result, Ok(Some(_))))
+        && let Some(lease) = lease
+    {
+        // Do not publish a successful receipt if a listener outlived runtime teardown.
+        if spawn_attempted {
+            let ports = lease
+                .slot
+                .ports()
+                .map(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)))
+                .into_iter()
+                .collect::<std::io::Result<Vec<_>>>()
+                .context("verify retired Console proxy ports")?;
+            drop(ports);
+        }
+        lease.release()?;
+    }
+    result.map(|receipt| receipt.unwrap_or(125))
 }
 
 struct Parent {

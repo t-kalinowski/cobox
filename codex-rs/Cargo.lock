@@ -10144,6 +10144,8 @@ dependencies = [
  "libc",
  "openssl-sys",
  "pretty_assertions",
+ "rcgen",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
