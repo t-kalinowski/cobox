@@ -21,6 +21,7 @@ pub fn provision_sandbox_in_process(
     runtime: SetupRuntime,
 ) -> Result<()> {
     let payload = Payload {
+        console_proxy_pool: false,
         version: SETUP_VERSION,
         offline_username: crate::setup::OFFLINE_USERNAME.to_string(),
         online_username: crate::setup::ONLINE_USERNAME.to_string(),

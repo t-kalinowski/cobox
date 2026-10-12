@@ -288,6 +288,13 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             }
         }
     }?);
+    if let Some(observer) = &req.console_proxy_observer_sid {
+        anyhow::ensure!(
+            codex_windows_sandbox::ConsoleProxySlot::current().is_some(),
+            "proxy observer requires a Console proxy slot"
+        );
+        unsafe { codex_windows_sandbox::allow_console_proxy_observer(h_token.raw(), observer)? };
+    }
     unsafe {
         // These ACL adjustments need the raw SID values, but ownership stays with `cap_psids`.
         // We do not manually `LocalFree` anything here; the wrappers handle every return path.
@@ -738,7 +745,8 @@ pub fn main() -> Result<()> {
             },
         },
     };
-    if let Ok(mut guard) = pipe_write.lock()
+    if !retirement_failed
+        && let Ok(mut guard) = pipe_write.lock()
         && let Err(err) = write_frame(&mut *guard, &exit_msg)
     {
         log_note(&format!("runner exit write failed: {err}"), log_dir);

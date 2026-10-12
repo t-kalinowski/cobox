@@ -369,12 +369,16 @@ pub(crate) fn spawn_runner_transport(
         .to_str()
         .map(str::to_owned)
         .unwrap_or_else(|| "codex-command-runner.exe".to_string());
-    let runner_full_cmd = format!(
+    let mut runner_full_cmd = format!(
         "{} {} {}",
         quote_windows_arg(&runner_cmdline),
         quote_windows_arg(&format!("--pipe-in={pipe_in_name}")),
         quote_windows_arg(&format!("--pipe-out={pipe_out_name}"))
     );
+    if let Some(slot) = crate::ConsoleProxySlot::current() {
+        runner_full_cmd.push(' ');
+        runner_full_cmd.push_str(&slot.helper_argument());
+    }
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
     let cwd_w = to_wide(cwd);

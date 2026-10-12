@@ -474,6 +474,10 @@ fn run_automatic_setup(
     request: SandboxSetupRequest<'_>,
     settings: &OfflineProxySettings,
 ) -> Result<()> {
+    anyhow::ensure!(
+        crate::WindowsSandboxProduct::current() != crate::WindowsSandboxProduct::Console,
+        "Console setup requires an explicit `mcp-console-sandbox setup` refresh (`setup --managed-proxy` for proxy sessions) against the base state directory; automatic provisioning is disabled"
+    );
     let mut listeners = WindowsSandboxProxyListeners::from_proxy_environment(request.env_map);
     // Preserve-mode setup can use saved ports that differ from the current environment.
     listeners
@@ -503,6 +507,16 @@ fn desired_offline_proxy_settings(
     env_map: &HashMap<String, String>,
     network_identity: SandboxNetworkIdentity,
 ) -> crate::setup::OfflineProxySettings {
+    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+        let settings = crate::ConsoleProxySlot::current().map_or_else(
+            crate::WindowsSandboxProvisioningSettings::default,
+            crate::ConsoleProxySlot::settings,
+        );
+        return OfflineProxySettings {
+            proxy_ports: settings.proxy_ports,
+            allow_local_binding: settings.allow_local_binding,
+        };
+    }
     match (marker, proxy_settings_mode) {
         (Some(marker), crate::WindowsSandboxProxySettingsMode::Preserve)
             if marker.version_matches() =>
@@ -527,6 +541,10 @@ pub(crate) fn refresh_logon_sandbox_creds(
     proxy_enforced: bool,
     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
 ) -> Result<SandboxCreds> {
+    anyhow::ensure!(
+        crate::WindowsSandboxProduct::current() != crate::WindowsSandboxProduct::Console,
+        "Console sandbox login failed; run `mcp-console-sandbox setup` explicitly (`setup --managed-proxy` for proxy sessions) against the base state directory"
+    );
     remove_sandbox_users_file(codex_home, "sandbox user login failed")?;
     require_logon_sandbox_creds(
         permissions,

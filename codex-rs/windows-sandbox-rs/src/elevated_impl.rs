@@ -210,6 +210,7 @@ mod windows_impl {
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,
                 network_proxy_restricting_sid,
+                console_proxy_observer_sid: None,
                 timeout_ms,
                 tty: false,
                 stdin_open: false,

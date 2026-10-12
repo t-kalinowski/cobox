@@ -347,6 +347,7 @@ fn run_setup_refresh_inner(
     let offline_proxy_settings =
         offline_proxy_settings_for_request(&request, offline_proxy_settings_override);
     let payload = ElevationPayload {
+        console_proxy_pool: false,
         version: SETUP_VERSION,
         offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
         online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
@@ -699,6 +700,8 @@ pub(crate) fn effective_write_roots_for_permissions(
 
 #[derive(Serialize)]
 struct ElevationPayload {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    console_proxy_pool: bool,
     version: u32,
     offline_username: String,
     online_username: String,
@@ -1020,7 +1023,11 @@ fn run_setup_exe_payload(
     }
 
     let exe_w = crate::winutil::to_wide(&exe);
-    let params = quote_arg(payload_b64);
+    let mut params = quote_arg(payload_b64);
+    if let Some(slot) = crate::ConsoleProxySlot::current() {
+        params.push(' ');
+        params.push_str(&slot.helper_argument());
+    }
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
@@ -1070,7 +1077,11 @@ fn run_setup_exe_payload(
 }
 
 pub fn run_elevated_setup(request: SandboxSetupRequest<'_>) -> Result<()> {
-    run_elevated_setup_inner(request, /*offline_proxy_settings_override*/ None)
+    run_elevated_setup_inner(
+        request,
+        /*offline_proxy_settings_override*/ None,
+        SetupScope::SelectedIdentity,
+    )
 }
 
 pub(crate) fn run_elevated_setup_with_proxy_settings(
@@ -1106,12 +1117,22 @@ pub(crate) fn run_elevated_setup_with_proxy_settings(
         );
         return Ok(());
     }
-    run_elevated_setup_inner(request, Some(offline_proxy_settings))
+    run_elevated_setup_inner(
+        request,
+        Some(offline_proxy_settings),
+        SetupScope::SelectedIdentity,
+    )
 }
 
-fn run_elevated_setup_inner(
+pub(crate) enum SetupScope {
+    SelectedIdentity,
+    ConsoleProxyPool,
+}
+
+pub(crate) fn run_elevated_setup_inner(
     request: SandboxSetupRequest<'_>,
     offline_proxy_settings_override: Option<&OfflineProxySettings>,
+    scope: SetupScope,
 ) -> Result<()> {
     anyhow::ensure!(
         !registered_core_requested(),
@@ -1128,11 +1149,12 @@ fn run_elevated_setup_inner(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let payload = elevated_provisioning_payload(
+    let mut payload = elevated_provisioning_payload(
         &request,
         offline_proxy_settings_override,
         crate::runtime_ownership::current_setup_user()?,
     );
+    payload.console_proxy_pool = matches!(scope, SetupScope::ConsoleProxyPool);
     let needs_elevation = !is_elevated().map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorElevationCheckFailed,
@@ -1150,6 +1172,7 @@ fn elevated_provisioning_payload(
     let offline_proxy_settings =
         offline_proxy_settings_for_request(request, offline_proxy_settings_override);
     ElevationPayload {
+        console_proxy_pool: false,
         version: SETUP_VERSION,
         offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
         online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
@@ -1230,6 +1253,7 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
         ));
     }
     let payload = ElevationPayload {
+        console_proxy_pool: false,
         version: SETUP_VERSION,
         offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
         online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
@@ -1439,6 +1463,16 @@ fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
 }
 
 fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
+    if crate::ConsoleProxySlot::current().is_some()
+        && let Some(pool) = codex_home.parent().and_then(Path::parent)
+    {
+        let pool_key = canonical_path_key(pool);
+        let pool_prefix = format!("{}/", pool_key.trim_end_matches('/'));
+        roots.retain(|root| {
+            let key = canonical_path_key(root);
+            key != pool_key && !key.starts_with(&pool_prefix)
+        });
+    }
     // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox,
     // CODEX_HOME/.sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
     // control/state and helper binaries and must remain tamper-resistant.

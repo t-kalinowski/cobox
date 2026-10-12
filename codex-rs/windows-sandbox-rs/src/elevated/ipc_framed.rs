@@ -62,6 +62,9 @@ pub struct SpawnRequest {
     /// Optional managed-network identity added only to the child's restricting SID set.
     #[serde(default)]
     pub network_proxy_restricting_sid: Option<String>,
+    /// Trusted Console host identity; never derived from workload environment.
+    #[serde(default)]
+    pub console_proxy_observer_sid: Option<String>,
     pub timeout_ms: Option<u64>,
     pub tty: bool,
     #[serde(default)]
@@ -201,6 +204,7 @@ mod tests {
                     real_codex_home: PathBuf::from(r"C:\Users\codex"),
                     cap_sids: vec!["S-1-15-3-1024-1".to_string()],
                     network_proxy_restricting_sid: Some("S-1-5-21-100-200-300-400".to_string()),
+                    console_proxy_observer_sid: None,
                     timeout_ms: Some(1000),
                     tty: false,
                     stdin_open: false,

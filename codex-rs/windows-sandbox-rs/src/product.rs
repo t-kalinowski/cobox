@@ -52,6 +52,9 @@ impl WindowsSandboxProduct {
         if self == Self::Console {
             // Fixed namespace transform. Never change it after installation.
             key.data1 ^= 0xa71c_093e;
+            if let Some(slot) = crate::ConsoleProxySlot::current() {
+                key.data2 ^= 0xc000 | u16::from(slot.index());
+            }
         }
         key
     }
@@ -59,5 +62,8 @@ impl WindowsSandboxProduct {
 
 /// Resolves a backend resource name using the executable's immutable product selection.
 pub fn sandbox_name(name: &str) -> Cow<'_, str> {
-    WindowsSandboxProduct::current().name(name)
+    match crate::ConsoleProxySlot::current() {
+        Some(slot) => slot.name(name),
+        None => WindowsSandboxProduct::current().name(name),
+    }
 }

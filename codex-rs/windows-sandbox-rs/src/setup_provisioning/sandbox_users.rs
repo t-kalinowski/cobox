@@ -107,7 +107,9 @@ pub fn ensure_sandbox_user(
     log: &mut dyn Write,
 ) -> Result<()> {
     ensure_local_user(username, password, new_user_flags, log)?;
-    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+        && crate::ConsoleProxySlot::current().is_none()
+    {
         let display_name = match username {
             "McpConsoleSandboxOff" => "McpConsoleSandboxOffline",
             "McpConsoleSandboxOn" => "McpConsoleSandboxOnline",
@@ -132,6 +134,13 @@ pub fn ensure_sandbox_user(
         }
     }
     ensure_local_group_member(&crate::sandbox_name(SANDBOX_USERS_GROUP), username)?;
+    if crate::ConsoleProxySlot::current().is_some() {
+        // Every Console identity shares the deny ACE on every Console secrets directory.
+        ensure_local_group_member(
+            &crate::WindowsSandboxProduct::Console.name(SANDBOX_USERS_GROUP),
+            username,
+        )?;
+    }
     Ok(())
 }
 

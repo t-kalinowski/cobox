@@ -273,8 +273,8 @@ fn finalize_exit(
 
     if !retirement_failed {
         let _ = output_join.join();
+        let _ = exit_tx.send(exit_code);
     }
-    let _ = exit_tx.send(exit_code);
 
     unsafe {
         if thread_handle != 0 && thread_handle != INVALID_HANDLE_VALUE {

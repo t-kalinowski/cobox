@@ -86,6 +86,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows_sys::Win32::System::Threading::INFINITE;
 
 const DENY_ACCESS: i32 = 3;
@@ -106,6 +107,8 @@ use sandbox_users::sid_bytes_to_psid;
 // Legacy omits runtime; readers default its absence to Legacy.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
+    #[serde(default)]
+    console_proxy_pool: bool,
     version: u32,
     offline_username: String,
     online_username: String,
@@ -510,6 +513,9 @@ fn open_setup_log(sbx_dir: &Path, mode: SetupMode) -> Result<Box<dyn Write>> {
 
 fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
     let mut args = std::env::args().collect::<Vec<_>>();
+    if let Some(slot) = crate::ConsoleProxySlot::current() {
+        args.retain(|arg| arg != &slot.helper_argument());
+    }
     if args.len() != 2 {
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
@@ -564,15 +570,54 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
             "registered Core requires service-owned provisioning"
         );
         anyhow::ensure!(
-            crate::runtime_ownership::load_installation()?
-                .is_none_or(|record| record.runtime.is_none()),
+            crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+                || crate::runtime_ownership::load_installation()?
+                    .is_none_or(|record| record.runtime.is_none()),
             "registered Core owns these sandbox accounts; helper provisioning is not permitted"
         );
         Some(guard)
     } else {
         None
     };
-    run_payload(&payload)
+    if payload.console_proxy_pool {
+        anyhow::ensure!(
+            crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+                && crate::ConsoleProxySlot::current().is_none()
+                && payload.mode.provisions_accounts(payload.refresh_only),
+            "invalid Console proxy pool provisioning request"
+        );
+    }
+    run_payload(&payload)?;
+    if payload.console_proxy_pool {
+        for index in 0..crate::ConsoleProxySlot::COUNT {
+            let slot = crate::ConsoleProxySlot::new(index)?;
+            let mut child = payload.clone();
+            child.console_proxy_pool = false;
+            child.codex_home = payload
+                .codex_home
+                .join("proxy-slots")
+                .join(index.to_string());
+            child.command_cwd = child.codex_home.clone();
+            child.offline_username = slot.name(crate::OFFLINE_USERNAME).into_owned();
+            child.online_username = slot.name(crate::ONLINE_USERNAME).into_owned();
+            child.proxy_ports = slot.ports().to_vec();
+            child.allow_local_binding = slot.settings().allow_local_binding;
+            let status = Command::new(std::env::current_exe()?)
+                .arg(slot.helper_argument())
+                .arg(BASE64.encode(serde_json::to_vec(&child)?))
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?;
+            anyhow::ensure!(
+                status.success(),
+                "Console proxy slot {index} provisioning failed; inspect {}",
+                child.codex_home.join(".sandbox/setup_error.json").display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn run_payload(payload: &Payload) -> Result<()> {
@@ -627,6 +672,11 @@ fn run_payload(payload: &Payload) -> Result<()> {
 }
 
 fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
+    if crate::ConsoleProxySlot::current().is_some()
+        && payload.mode.provisions_accounts(payload.refresh_only)
+    {
+        crate::ConsoleProxySlot::provision_owner(&payload.codex_home, &payload.real_user)?;
+    }
     let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
     let marker = if writes_setup_marker {
         Some(prepare_setup_marker(
@@ -841,6 +891,13 @@ fn configure_offline_sandbox_network(
 }
 
 fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
+    let secrets_group = if crate::WindowsSandboxProduct::current()
+        == crate::WindowsSandboxProduct::Console
+    {
+        crate::resolve_sid(&crate::WindowsSandboxProduct::Console.name(crate::SANDBOX_USERS_GROUP))?
+    } else {
+        sandbox_group_sid.to_vec()
+    };
     lock_sandbox_dir(
         &sandbox_dir(&payload.codex_home),
         &payload.real_user,
@@ -863,7 +920,7 @@ fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> 
     lock_sandbox_dir(
         &sandbox_secrets_dir(&payload.codex_home),
         &payload.real_user,
-        sandbox_group_sid,
+        &secrets_group,
         DENY_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,

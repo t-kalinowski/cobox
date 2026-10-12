@@ -33,7 +33,11 @@ pub struct CapSids {
 }
 
 pub fn cap_sid_file(codex_home: &Path) -> PathBuf {
-    codex_home.join("cap_sid")
+    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+        crate::sandbox_secrets_dir(codex_home).join("cap_sid")
+    } else {
+        codex_home.join("cap_sid")
+    }
 }
 
 fn make_random_cap_sid_string() -> String {

@@ -371,10 +371,21 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     let logs_base_dir = Some(sandbox_base.clone());
     log_start(command, logs_base_dir.as_deref());
 
-    let uses_write_capabilities = permissions.uses_write_capabilities_for_cwd(cwd, env_map);
+    let trusted_environment;
+    let setup_environment =
+        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+            trusted_environment = std::env::vars()
+                .filter(|(key, _)| !key.starts_with('='))
+                .collect();
+            &trusted_environment
+        } else {
+            &*env_map
+        };
+    let uses_write_capabilities =
+        permissions.uses_write_capabilities_for_cwd(cwd, setup_environment);
 
     let AllowDenyPaths { allow, deny } =
-        compute_allow_paths_for_permissions(&permissions, cwd, env_map);
+        compute_allow_paths_for_permissions(&permissions, cwd, setup_environment);
     let write_roots: Vec<PathBuf> = allow.into_iter().collect();
     let deny_write_paths: Vec<PathBuf> = deny.into_iter().collect();
     let computed_write_roots_override = if uses_write_capabilities {
@@ -387,7 +398,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
         effective_write_roots_for_permissions(
             &permissions,
             cwd,
-            env_map,
+            setup_environment,
             codex_home,
             write_roots_for_setup,
         )
@@ -402,7 +413,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     let sandbox_creds = require_logon_sandbox_creds(
         &permissions,
         cwd,
-        env_map,
+        setup_environment,
         codex_home,
         read_roots_override,
         read_roots_include_platform_defaults,
