@@ -162,6 +162,8 @@ fn proxy_capabilities_and_provisioning_are_checked_before_launch() -> Result<()>
 #[path = "windows_proxy/support.rs"]
 mod support;
 use support::*;
+#[path = "windows_proxy/lifecycle_tests.rs"]
+mod lifecycle;
 #[path = "windows_proxy/mxc_tests.rs"]
 mod mxc;
 #[path = "windows_proxy/network_tests.rs"]
