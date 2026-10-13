@@ -6,10 +6,14 @@ use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
 
+#[path = "windows_proxy.rs"]
+mod proxy;
+
 pub(super) fn run() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let operation = args.next().context("fixture operation")?;
     match operation.to_str().context("UTF-8 fixture operation")? {
+        "proxy-session" => proxy::run()?,
         "arguments" => {
             println!(
                 "{}",

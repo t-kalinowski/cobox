@@ -110,6 +110,21 @@ rust_test(
 )
 
 rust_test(
+    name = "windows-proxy-probes-test",
+    srcs = ["tests/windows_proxy_probes.rs"],
+    crate_root = "tests/windows_proxy_probes.rs",
+    data = [":mcp-console-sandbox-fixture"],
+    edition = "2024",
+    env = {"CARGO_BIN_EXE_mcp-console-sandbox-fixture": "$(rlocationpath :mcp-console-sandbox-fixture)"},
+    tags = ["no-sandbox"],
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
+
+rust_test(
     name = "windows-proxy-test",
     srcs = [
         "src/windows_proxy_lock.rs",
