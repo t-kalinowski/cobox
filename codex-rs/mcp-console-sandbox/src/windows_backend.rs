@@ -60,7 +60,7 @@ pub(crate) fn select_windows_sandbox(
                 compatible,
                 "{}",
                 restriction
-                    .unwrap_or("MXC is unavailable for this filesystem policy on this executor")
+                    .unwrap_or("MXC is unavailable for this filesystem policy on this executor; update Windows to a build supporting native MXC and the requested filesystem permissions; see https://t-kalinowski.github.io/mcp-console/WINDOWS.html#native-sandbox")
             );
             Ok((SandboxType::WindowsMxc, WindowsSandboxLevel::Disabled))
         }
