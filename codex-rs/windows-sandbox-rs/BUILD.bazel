@@ -1,4 +1,6 @@
-load("//:defs.bzl", "codex_rust_crate")
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//:defs.bzl", "WINDOWS_RUSTC_LINK_FLAGS", "codex_rust_crate")
 
 # Cargo's build.rs emits rustc-link-arg-bin so only the setup helper gets the
 # asInvoker manifest. rules_rust warns on and drops that directive, so Bazel
@@ -59,4 +61,23 @@ codex_rust_crate(
     # cannot prevent exec-server's elevated filesystem tests from rotating them
     # between this crate's setup and logon. Windows tests execute locally in CI.
     test_tags = ["exclusive-if-local"],
+)
+
+rust_test(
+    name = "windows-sandbox-rs-console_proxy_native-test",
+    srcs = ["tests/console_proxy_native/main.rs"],
+    crate_root = "tests/console_proxy_native/main.rs",
+    data = [
+        "//codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-runner",
+        "//codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-setup",
+    ],
+    edition = "2024",
+    env = {
+        "CARGO_BIN_EXE_mcp-console-sandbox-runner": "$(rlocationpath //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-runner)",
+        "CARGO_BIN_EXE_mcp-console-sandbox-setup": "$(rlocationpath //codex-rs/mcp-console-sandbox-windows:mcp-console-sandbox-setup)",
+    },
+    rustc_flags = WINDOWS_RUSTC_LINK_FLAGS,
+    tags = ["exclusive-if-local"],
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [":windows-sandbox-rs"] + all_crate_deps(normal = True, normal_dev = True),
 )
