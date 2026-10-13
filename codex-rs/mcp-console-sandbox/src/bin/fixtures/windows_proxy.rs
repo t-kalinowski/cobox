@@ -202,15 +202,19 @@ fn probe(request: &Value) -> Result<Value> {
         stream
             .read_exact(&mut response)
             .context("SOCKS connect response")?;
-        if response[1] != 0 {
-            return Ok(json!({"socks": response[1]}));
-        }
+        anyhow::ensure!(
+            response[0] == 5 && response[1] <= 8 && response[2] == 0,
+            "invalid SOCKS connect response: {response:?}"
+        );
         let length = match response[3] {
             1 => 6,
             4 => 18,
             3 => {
                 let mut size = [0];
-                stream.read_exact(&mut size)?;
+                stream
+                    .read_exact(&mut size)
+                    .context("SOCKS bound domain length")?;
+                anyhow::ensure!(size[0] != 0, "empty SOCKS bound domain");
                 usize::from(size[0]) + 2
             }
             _ => anyhow::bail!("invalid SOCKS bound address: {response:?}"),
@@ -219,6 +223,9 @@ fn probe(request: &Value) -> Result<Value> {
         stream
             .read_exact(&mut rest)
             .context("SOCKS bound address")?;
+        if response[1] != 0 {
+            return Ok(json!({"socks": response[1]}));
+        }
     } else if operation == "connect" {
         write!(
             stream,

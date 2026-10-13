@@ -103,6 +103,60 @@ fn socks_probe_encodes_bracketed_ipv6_as_an_ip_address() -> Result<()> {
 }
 
 #[test]
+fn socks_probe_requires_a_complete_valid_connect_reply() -> Result<()> {
+    let mut ipv6_denial = vec![5, 2, 0, 4];
+    ipv6_denial.extend([0; 18]);
+    for (reply, expected) in [
+        (vec![5, 2, 0, 1, 0, 0, 0, 0, 0, 0], Some(2)),
+        (ipv6_denial, Some(2)),
+        (vec![5, 8, 0, 3, 1, b'a', 0, 0], Some(8)),
+        (vec![5, 2], None),
+        (vec![4, 2, 0, 1, 0, 0, 0, 0, 0, 0], None),
+        (vec![5, 9, 0, 1, 0, 0, 0, 0, 0, 0], None),
+        (vec![5, 2, 1, 1, 0, 0, 0, 0, 0, 0], None),
+        (vec![5, 2, 0, 2], None),
+        (vec![5, 2, 0, 1, 0, 0, 0, 0, 0], None),
+        (vec![5, 2, 0, 4, 0], None),
+        (vec![5, 2, 0, 3], None),
+        (vec![5, 2, 0, 3, 0, 0, 0], None),
+        (vec![5, 2, 0, 3, 2, b'a'], None),
+        (vec![5, 2, 0, 3, 1, b'a', 0], None),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let endpoint = format!("socks5://{}", listener.local_addr()?);
+        let server_reply = reply.clone();
+        let server = std::thread::spawn(move || -> Result<()> {
+            let mut stream = accept(listener)?;
+            stream.set_read_timeout(Some(Duration::from_secs(/*secs*/ 2)))?;
+            let mut greeting = [0; 3];
+            stream.read_exact(&mut greeting)?;
+            assert_eq!(greeting, [5, 1, 0]);
+            stream.write_all(&[5, 0])?;
+            let mut request = [0; 10];
+            stream.read_exact(&mut request)?;
+            assert_eq!(request, [5, 1, 0, 1, 127, 0, 0, 1, 0, 80]);
+            stream.write_all(&server_reply)?;
+            Ok(())
+        });
+        let response = probe(json!({"op":"socks", "endpoint":endpoint, "address":"127.0.0.1:80"}))?;
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("SOCKS reply server panicked"))??;
+        match expected {
+            Some(code) => assert_eq!(response, json!({"socks":code})),
+            None => assert!(
+                response["socks"].is_null()
+                    && response["error"]
+                        .as_str()
+                        .is_some_and(|error| error.contains("SOCKS")),
+                "malformed reply {reply:?} was not rejected: {response}"
+            ),
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn head_probe_ignores_content_length_but_get_reads_the_body() -> Result<()> {
     for (method, expected_body) in [("HEAD", ""), ("GET", "body")] {
         let listener = TcpListener::bind("127.0.0.1:0")?;
