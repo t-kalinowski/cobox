@@ -59,3 +59,41 @@ async fn framed_connection_receives_registered_execution_state() -> Result<(), B
     assert_eq!(actual.execution_id().as_deref(), Some("execution-1"));
     Ok(())
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn job_admission_rejects_an_outsider_before_reading_routing_metadata() -> Result<(), BoxError>
+{
+    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::OwnedHandle;
+    use std::time::Duration;
+    use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job == 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let mut state = network_proxy_state_for_policy(NetworkProxyConfig::default());
+    state.set_windows_client_job(unsafe { OwnedHandle::from_raw_handle(job as _) });
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let client = TcpStream::connect(listener.local_addr()?).await?;
+    let (stream, _) = listener.accept().await?;
+    let service = BindConnectionAttribution::new(
+        service_fn(|_: RamaTcpStream| async { Ok::<_, io::Error>(()) }),
+        Arc::new(state),
+        /*environment_id*/ None,
+    );
+    // The unauthorized client sends nothing: admission must not wait for a frame.
+    let error = tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 1),
+        service.serve(RamaTcpStream::new(stream)),
+    )
+    .await?
+    .expect_err("a client outside the Job must be rejected");
+    assert_eq!(
+        error.downcast_ref::<io::Error>().map(io::Error::kind),
+        Some(io::ErrorKind::PermissionDenied)
+    );
+    drop(client);
+    Ok(())
+}

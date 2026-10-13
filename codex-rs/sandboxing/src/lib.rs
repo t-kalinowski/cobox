@@ -57,6 +57,10 @@ pub use windows::resolve_windows_elevated_filesystem_overrides;
 pub use windows::resolve_windows_restricted_token_filesystem_overrides;
 pub use windows::unsupported_windows_restricted_token_sandbox_reason;
 pub use windows::windows_sandbox_uses_elevated_backend;
+#[cfg(windows)]
+pub use windows_mxc::WindowsSandboxPreference;
+#[cfg(windows)]
+pub use windows_mxc::select_windows_sandbox;
 
 use codex_protocol::error::CodexErr;
 
