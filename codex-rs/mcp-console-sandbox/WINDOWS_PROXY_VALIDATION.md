@@ -15,6 +15,10 @@ No additional setup or UAC ran for these follow-up repairs. The completed instal
 
 The observer acceptance first failed because its chosen recovery helper uses fixed Codex account names (`5f9edd8b-b6ad-40fb-8bfa-86c096d34520`). It now obtains the unrelated account through the existing Console-aware launch reader with `Preserve`, scoped filesystem preparation and no automatic provisioning. A second run (`a8f361d7-a8af-4a93-9e33-b3d21f21fa5d`) exposed an invalid test assumption: the trusted launcher already had token duplication rights. The observer adds query access while preserving existing native ACEs; it does not revoke the launcher's existing authority. The corrected negative control checks the unrelated account's rights instead. Neither failed run is counted as passing; no production ACL behavior was weakened.
 
+After these checks, scoped `just fix` passed for the network proxy (20.30 s), native sandbox (41.15 s) and companion (35.04 s), without warnings. `just fmt` passed; unrelated Windows line-ending/Starlark rewrites were inspected and restored. Tests were not rerun after lint/format.
+
+The rejected first environment case conservatively retained `legacy-session-KObNiO.lease`. Source tracing and the native log independently established that its exact root-read diagnostic occurred before setup-helper or runner creation. With no Console sandbox processes remaining, the test record's exact creation time and one-byte length were checked under the protected configuration lock, then only that record was truncated to zero. No unconfirmed workload lease was reclaimed, and no additional provisioning occurred.
+
 The unchanged coverage limits below still apply. Selected tests do not replace the blocked complete workspace run or establish Windows Bazel execution.
 
 ## Current explicit setup and native acceptance
