@@ -67,7 +67,7 @@ pub(crate) fn run() -> Result<i32> {
             "setup requires adjacent mcp-console-sandbox-setup.exe and mcp-console-sandbox-runner.exe"
         );
     }
-    if !configured {
+    if matches!(cli.action, Action::Setup) {
         // Create the helper directory as the caller, before UAC. Its owner
         // must be able to refresh the protected DACL on ordinary launches.
         std::fs::create_dir_all(codex_windows_sandbox::sandbox_bin_dir(state_dir.as_path()))

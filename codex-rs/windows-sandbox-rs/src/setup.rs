@@ -41,6 +41,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use rand::RngCore;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -347,6 +348,8 @@ fn run_setup_refresh_inner(
     let offline_proxy_settings =
         offline_proxy_settings_for_request(&request, offline_proxy_settings_override);
     let payload = ElevationPayload {
+        console_proxy_pool: false,
+        console_proxy_pool_nonce: None,
         version: SETUP_VERSION,
         offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
         online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
@@ -706,6 +709,10 @@ pub(crate) fn effective_write_roots_for_permissions(
 
 #[derive(Serialize)]
 struct ElevationPayload {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    console_proxy_pool: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    console_proxy_pool_nonce: Option<String>,
     version: u32,
     offline_username: String,
     online_username: String,
@@ -1085,7 +1092,11 @@ fn run_setup_exe_payload(
 }
 
 pub fn run_elevated_setup(request: SandboxSetupRequest<'_>) -> Result<()> {
-    run_elevated_setup_inner(request, /*offline_proxy_settings_override*/ None)
+    run_elevated_setup_inner(
+        request,
+        /*offline_proxy_settings_override*/ None,
+        SetupScope::SelectedIdentity,
+    )
 }
 
 pub(crate) fn run_elevated_setup_with_proxy_settings(
@@ -1121,12 +1132,22 @@ pub(crate) fn run_elevated_setup_with_proxy_settings(
         );
         return Ok(());
     }
-    run_elevated_setup_inner(request, Some(offline_proxy_settings))
+    run_elevated_setup_inner(
+        request,
+        Some(offline_proxy_settings),
+        SetupScope::SelectedIdentity,
+    )
 }
 
-fn run_elevated_setup_inner(
+pub(crate) enum SetupScope {
+    SelectedIdentity,
+    ConsoleProxyPool,
+}
+
+pub(crate) fn run_elevated_setup_inner(
     request: SandboxSetupRequest<'_>,
     offline_proxy_settings_override: Option<&OfflineProxySettings>,
+    scope: SetupScope,
 ) -> Result<()> {
     anyhow::ensure!(
         !registered_core_requested(),
@@ -1143,18 +1164,28 @@ fn run_elevated_setup_inner(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let payload = elevated_provisioning_payload(
+    let mut payload = elevated_provisioning_payload(
         &request,
         offline_proxy_settings_override,
         crate::runtime_ownership::current_setup_user()?,
     );
+    payload.console_proxy_pool = matches!(scope, SetupScope::ConsoleProxyPool);
+    if payload.console_proxy_pool {
+        let mut nonce = [0_u8; 16];
+        rand::rngs::OsRng.try_fill_bytes(&mut nonce)?;
+        payload.console_proxy_pool_nonce = Some(BASE64_STANDARD.encode(nonce));
+    }
     let needs_elevation = !is_elevated().map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorElevationCheckFailed,
             format!("failed to determine elevation state: {err}"),
         )
     })?;
-    run_setup_exe(&payload, needs_elevation, request.codex_home, &[])
+    run_setup_exe(&payload, needs_elevation, request.codex_home, &[])?;
+    if let Some(nonce) = payload.console_proxy_pool_nonce {
+        crate::ConsoleProxySlot::verify_completion(request.codex_home, &nonce)?;
+    }
+    Ok(())
 }
 
 fn elevated_provisioning_payload(
@@ -1165,6 +1196,8 @@ fn elevated_provisioning_payload(
     let offline_proxy_settings =
         offline_proxy_settings_for_request(request, offline_proxy_settings_override);
     ElevationPayload {
+        console_proxy_pool: false,
+        console_proxy_pool_nonce: None,
         version: SETUP_VERSION,
         offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
         online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),
@@ -1245,6 +1278,8 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
         ));
     }
     let payload = ElevationPayload {
+        console_proxy_pool: false,
+        console_proxy_pool_nonce: None,
         version: SETUP_VERSION,
         offline_username: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
         online_username: crate::sandbox_name(ONLINE_USERNAME).into_owned(),

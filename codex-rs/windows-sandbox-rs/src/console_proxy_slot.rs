@@ -12,6 +12,42 @@ use std::sync::OnceLock;
 static SLOT: OnceLock<ConsoleProxySlot> = OnceLock::new();
 const OWNER_KEY: &str = r"SOFTWARE\McpConsole\SandboxProxy";
 const COMPLETED_VALUE: &str = "PoolSetupComplete";
+pub(crate) const COMPLETION_FILE: &str = "console-proxy-pool-completion";
+
+/// Reservation prevents conflicting setup; only completed provisioning admits MXC.
+pub(crate) enum PoolSetupState {
+    Pending,
+    Complete,
+}
+
+impl PoolSetupState {
+    pub(crate) fn persist(self) -> Result<()> {
+        self.persist_at(
+            windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+            OWNER_KEY,
+        )
+    }
+
+    fn persist_at(self, root: windows_sys::Win32::System::Registry::HKEY, key: &str) -> Result<()> {
+        use windows_sys::Win32::System::Registry::*;
+        let value = match self {
+            Self::Pending => 0_u32,
+            Self::Complete => 1,
+        };
+        let status = unsafe {
+            RegSetKeyValueW(
+                root,
+                crate::to_wide(key).as_ptr(),
+                crate::to_wide(COMPLETED_VALUE).as_ptr(),
+                REG_DWORD,
+                (&raw const value).cast(),
+                std::mem::size_of_val(&value) as u32,
+            )
+        };
+        ensure!(status == 0, "persist Console pool setup state: {status}");
+        Ok(())
+    }
+}
 
 fn require_completed_pool(
     root: windows_sys::Win32::System::Registry::HKEY,
@@ -137,6 +173,116 @@ impl ConsoleProxySlot {
         Ok(record)
     }
 
+    /// Explicitly provision the complete pool with one UAC request.
+    pub fn provision_pool(request: crate::SandboxSetupRequest<'_>) -> Result<()> {
+        ensure!(
+            WindowsSandboxProduct::current() == WindowsSandboxProduct::Console
+                && Self::current().is_none(),
+            "Console pool setup requires the base Console identity"
+        );
+        if crate::installation_record::load_from(OWNER_KEY)?.is_some() {
+            Self::validate_owner(request.codex_home)?;
+        }
+        for index in 0..Self::COUNT {
+            let state = request
+                .codex_home
+                .join("proxy-slots")
+                .join(index.to_string());
+            std::fs::create_dir_all(crate::sandbox_bin_dir(&state))?;
+        }
+        crate::setup::run_elevated_setup_inner(
+            request,
+            /*offline_proxy_settings_override*/ None,
+            crate::setup::SetupScope::ConsoleProxyPool,
+        )
+    }
+
+    pub(crate) fn verify_completion(state: &Path, nonce: &str) -> Result<()> {
+        ensure!(
+            std::fs::read(crate::sandbox_secrets_dir(state).join(COMPLETION_FILE))
+                .ok()
+                .as_deref()
+                == Some(nonce.as_bytes()),
+            "Console proxy setup helper did not confirm this pool request; replace adjacent Console helpers and run explicit setup again"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn check_setup_exit(
+        self,
+        base: &Path,
+        status: std::process::ExitStatus,
+    ) -> Result<()> {
+        if status.success() {
+            return Ok(());
+        }
+        let child = base.join("proxy-slots").join(self.index().to_string());
+        let (code, detail) = match crate::read_setup_error_report(&child) {
+            Ok(Some(report)) => (report.code, report.message),
+            Ok(None) => (
+                crate::SetupErrorCode::OrchestratorHelperExitNonzero,
+                "helper did not write a setup error report".to_owned(),
+            ),
+            Err(error) => (
+                crate::SetupErrorCode::OrchestratorHelperReportReadFailed,
+                error.to_string(),
+            ),
+        };
+        let report = crate::SetupErrorReport {
+            code,
+            message: format!(
+                "Console proxy slot {} provisioning failed ({status}); inspect {}: {detail}",
+                self.index(),
+                crate::setup_error_path(&child).display(),
+            ),
+        };
+        crate::write_setup_error_report(base, &report)?;
+        Err(crate::SetupFailure::from_report(report).into())
+    }
+
+    pub(crate) fn provision_owner(base: &Path, real_user: &str) -> Result<()> {
+        let base = std::fs::canonicalize(base)?;
+        let user_sid = crate::string_from_sid_bytes(&crate::resolve_sid(real_user)?)
+            .map_err(anyhow::Error::msg)?;
+        if let Some(record) = crate::installation_record::load_from(OWNER_KEY)? {
+            ensure!(
+                record.user_sid == user_sid && record.codex_home == base,
+                "Console proxy pool belongs to a different user or state directory; preserve its lease records"
+            );
+            return Ok(());
+        }
+        use windows_sys::Win32::System::Registry::*;
+        let mut key = 0;
+        let status = unsafe {
+            RegCreateKeyExW(
+                HKEY_LOCAL_MACHINE,
+                crate::to_wide(OWNER_KEY).as_ptr(),
+                /*reserved*/ 0,
+                std::ptr::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                std::ptr::null(),
+                &mut key,
+                std::ptr::null_mut(),
+            )
+        };
+        ensure!(
+            status == 0,
+            "create Console proxy ownership record: {status}"
+        );
+        unsafe { RegCloseKey(key) };
+        crate::installation_record::save_to(
+            OWNER_KEY,
+            &crate::installation_record::InstallationRecord {
+                user_sid,
+                codex_home: base,
+                session_id: 0,
+                desktop_installation: None,
+                runtime: None,
+            },
+        )
+    }
+
     pub(crate) fn helper_argument(self) -> String {
         format!("--console-proxy-slot={}", self.0)
     }
@@ -166,3 +312,7 @@ impl ConsoleProxySlot {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "console_proxy_slot_tests.rs"]
+mod tests;

@@ -67,6 +67,10 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 Console's native proxy-slot identity is selected once by the trusted launcher and passed directly to its helpers. Base and slot identities exclude write grants overlapping their pool state, including ancestors, and share a mandatory secrets-deny group. Required group enrollment errors fail setup instead of leaving an account outside that protection. Ordinary Console launches cannot repair or reconcile account provisioning automatically.
 
+The native Console proxy-pool API additionally provisions four isolated account pairs with fixed ports and local-access settings. Pool setup claims its protected machine owner under the native setup lock before changing any base or slot account. A failed first setup keeps that owner registration so only the same user and state directory can retry. Completion requires the helper to return this invocation's random nonce in protected state after all four slots finish; an older adjacent helper or an earlier receipt cannot report success. A failing slot's diagnostic, index, and report path are also saved to the base setup report consumed by the launcher. Codex's setup version is unchanged. Replace Console's companion and both adjacent helpers together when upgrading. Companion transport admission for this pool is introduced separately in the stack.
+
+Owner reservation does not admit MXC: a separate administrator-protected registry value stays pending during provisioning and becomes complete only after the helper's receipt is written. Failed first migrations and interrupted refreshes remain unavailable to host-identity launches; this prevents old, copied credentials from remaining usable outside the protected registered directory. Older registrations without completion tracking require one explicit setup refresh.
+
 ## Console transport
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
