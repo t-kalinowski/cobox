@@ -19,6 +19,10 @@ After these checks, scoped `just fix` passed for the network proxy (20.30 s), na
 
 The rejected first environment case conservatively retained `legacy-session-KObNiO.lease`. Source tracing and the native log independently established that its exact root-read diagnostic occurred before setup-helper or runner creation. With no Console sandbox processes remaining, the test record's exact creation time and one-byte length were checked under the protected configuration lock, then only that record was truncated to zero. No unconfirmed workload lease was reclaimed, and no additional provisioning occurred.
 
+A final sweep also found a published conversation comment on #21. Its size concern is covered by the separate route-probe stage #27 (now 489 lines) and account acceptance #21 (791 lines). Its unavailable-endpoint finding was valid: the executable stopped-listener regression failed with a false denial before the repair (`d7918296-923d-4516-bca6-bcfdd79b532c`). Commit `96c144e2f944a8e0a8e4887e84b792a8504e73e2` accepts only native `PermissionDenied` at connect as policy denial; refused connections, timeouts and other setup errors now fail the probe. All eight `windows_proxy_probes` cases passed (`338d3c1c-748a-43d0-96e9-87b8572f20c0`, 4.171 s), followed by clean scoped lint and formatting.
+
+After integrating that changed probe, `just test --locked -p mcp-console-sandbox --test windows_proxy --run-ignored all -E 'test(network::elevated_proxy_transports_policies_and_isolated_companions)' --test-threads 1 --retries 0 --success-output immediate` passed its one selected native case, with 34 filtered (`97a9be0d-c9fa-4835-bb34-cc7c105dd119`, 7.987 s), at `9d5c4dc66dcf880d903f402dbe9e1437a91c12d3`. The host forged-token origin control and live proxy rejection passed; the already-restricted account still reported unavailable foreign-SID construction separately. No provisioning was needed.
+
 The unchanged coverage limits below still apply. Selected tests do not replace the blocked complete workspace run or establish Windows Bazel execution.
 
 ## Current explicit setup and native acceptance
