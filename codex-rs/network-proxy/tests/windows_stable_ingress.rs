@@ -304,45 +304,56 @@ async fn dedicated_listeners_admit_only_clients_in_the_required_job() -> anyhow:
         .build()
         .await?;
     let handle = proxy.run().await?;
-    for membership in ["inside", "outside"] {
-        let mut child = tokio::process::Command::new(std::env::current_exe()?)
-            .args([
-                "--exact",
-                "job_child_exercises_http_and_socks",
-                "--nocapture",
-            ])
-            .env(JOB_CHILD_ENV, membership)
-            .env(HTTP_ADDR_ENV, proxy.http_addr().to_string())
-            .env(SOCKS_ADDR_ENV, proxy.socks_addr().to_string())
-            .env(ORIGIN_PORT_ENV, origin_port.to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-        if membership == "inside" {
+    for environment in [None, Some("local")] {
+        let prepared = proxy.prepare_for_optional_environment(HashMap::new(), environment)?;
+        let http_addr = prepared.env["HTTP_PROXY"]
+            .strip_prefix("http://")
+            .context("prepared HTTP URL")?
+            .parse::<SocketAddr>()?;
+        let socks_addr = prepared.env["ALL_PROXY"]
+            .strip_prefix("socks5h://")
+            .context("prepared SOCKS URL")?
+            .parse::<SocketAddr>()?;
+        for membership in ["inside", "outside"] {
+            let mut child = tokio::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "job_child_exercises_http_and_socks",
+                    "--nocapture",
+                ])
+                .env(JOB_CHILD_ENV, membership)
+                .env(HTTP_ADDR_ENV, http_addr.to_string())
+                .env(SOCKS_ADDR_ENV, socks_addr.to_string())
+                .env(ORIGIN_PORT_ENV, origin_port.to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()?;
+            if membership == "inside" {
+                anyhow::ensure!(
+                    unsafe {
+                        AssignProcessToJobObject(
+                            job.as_raw_handle() as _,
+                            child.raw_handle().unwrap() as _,
+                        )
+                    } != 0,
+                    "assign client to Job: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            // The child cannot open its client sockets until assignment is complete.
+            child.stdin.take().unwrap().write_all(b"x").await?;
+            let output = tokio::time::timeout(
+                Duration::from_millis(u64::from(CHILD_TIMEOUT_MS)),
+                child.wait_with_output(),
+            )
+            .await??;
             anyhow::ensure!(
-                unsafe {
-                    AssignProcessToJobObject(
-                        job.as_raw_handle() as _,
-                        child.raw_handle().unwrap() as _,
-                    )
-                } != 0,
-                "assign client to Job: {}",
-                std::io::Error::last_os_error()
+                output.status.success(),
+                "{environment:?} {membership} Job client: {output:?}"
             );
         }
-        // The child cannot open its client sockets until assignment is complete.
-        child.stdin.take().unwrap().write_all(b"x").await?;
-        let output = tokio::time::timeout(
-            Duration::from_millis(u64::from(CHILD_TIMEOUT_MS)),
-            child.wait_with_output(),
-        )
-        .await??;
-        anyhow::ensure!(
-            output.status.success(),
-            "{membership} Job client: {output:?}"
-        );
     }
     assert_bridge_authentication(&proxy, origin_port).await?;
     handle.shutdown().await?;
