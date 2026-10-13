@@ -27,6 +27,7 @@ use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_GROUPS;
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::Security::TokenRestrictedSids;
+use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 use windows_sys::Win32::System::Threading::OpenProcess;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
@@ -51,6 +52,48 @@ pub(crate) fn restricting_sids_for_tcp_connection(
 
     let process_id = owning_process_id(accepted_local_addr, accepted_peer_addr)?;
     restricting_sids_for_process(process_id)
+}
+
+/// Authorizes the kernel-observed client independently of peer-supplied route tokens.
+pub(crate) fn require_client_job(
+    local: SocketAddr,
+    peer: SocketAddr,
+    job: &OwnedHandle,
+) -> io::Result<()> {
+    let (SocketAddr::V4(local), SocketAddr::V4(peer)) = (local, peer) else {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "proxy Job attribution requires IPv4",
+        ));
+    };
+    let pid = owning_process_id(local, peer)?;
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            /*binherithandle*/ 0,
+            pid,
+        )
+    };
+    let process = owned_handle(process, "open proxy client process")?;
+    let mut member = 0;
+    if unsafe {
+        IsProcessInJob(
+            process.as_raw_handle(),
+            job.as_raw_handle(),
+            &mut member,
+        )
+    } == 0
+    {
+        return Err(last_error("query proxy client Job membership"));
+    }
+    // Retain the exact process handle and verify that it still owns this connection.
+    if member == 0 || owning_process_id(local, peer)? != pid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "proxy client belongs to a different Job",
+        ));
+    }
+    Ok(())
 }
 
 fn owning_process_id(

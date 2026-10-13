@@ -37,6 +37,15 @@ pub fn run_main() -> ! {
     linux_run_main::run_main();
 }
 
+/// Run native namespace, mount, proxy and enforcement setup, then hand the
+/// command and hidden `--target-setup-fd` descriptor to `setup` when selected.
+/// The hook owns target execution and namespace-init lifetime and must not return.
+/// Without a setup descriptor, ordinary native fork/exec/wait behavior applies.
+#[cfg(target_os = "linux")]
+pub fn run_main_with_target_setup(setup: fn(Vec<String>, std::os::fd::OwnedFd) -> !) -> ! {
+    linux_run_main::run_main_with_target_setup(Some(setup));
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn run_main() -> ! {
     panic!("codex-linux-sandbox is only supported on Linux");

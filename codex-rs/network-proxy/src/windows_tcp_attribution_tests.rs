@@ -4,6 +4,43 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 
 #[test]
+fn job_admission_rejects_unrelated_jobs_and_failed_native_queries() -> io::Result<()> {
+    use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    let job = owned_handle(job, "create unrelated Job")?;
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            /*binherithandle*/ 0,
+            std::process::id(),
+        )
+    };
+    let process = owned_handle(process, "open current process")?;
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let client = TcpStream::connect(listener.local_addr()?)?;
+    let (accepted, _) = listener.accept()?;
+    let local = accepted.local_addr()?;
+    let peer = accepted.peer_addr()?;
+    assert_eq!(
+        require_client_job(local, peer, &job)
+            .expect_err("unrelated Job must fail closed")
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    // A process handle is valid ownership, but cannot authorize as a Job handle.
+    assert!(require_client_job(local, peer, &process).is_err());
+    assert_eq!(
+        require_client_job(local, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), &job)
+            .expect_err("nonexistent client must fail closed")
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    drop(client);
+    Ok(())
+}
+
+#[test]
 fn parses_owner_table_and_matches_reversed_client_tuple() -> io::Result<()> {
     let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3128);
     let client_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 49152);
