@@ -5,6 +5,10 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSandboxMode {
+    /// Prefer native MXC when the policy and host support it.
+    Auto,
+    /// Require native MXC; never retry through a legacy backend.
+    Mxc,
     Disabled,
     /// Administrator-approved setup with dedicated sandbox accounts.
     Elevated,
@@ -13,12 +17,18 @@ pub enum WindowsSandboxMode {
 }
 
 #[cfg(windows)]
-impl From<WindowsSandboxMode> for codex_protocol::config_types::WindowsSandboxLevel {
-    fn from(mode: WindowsSandboxMode) -> Self {
+impl TryFrom<WindowsSandboxMode> for codex_sandboxing::WindowsSandboxPreference {
+    type Error = anyhow::Error;
+
+    fn try_from(mode: WindowsSandboxMode) -> Result<Self, Self::Error> {
         match mode {
-            WindowsSandboxMode::Disabled => Self::Disabled,
-            WindowsSandboxMode::Elevated => Self::Elevated,
-            WindowsSandboxMode::Unelevated => Self::RestrictedToken,
+            WindowsSandboxMode::Disabled => {
+                anyhow::bail!("windows_sandbox_level: disabled is not supported")
+            }
+            WindowsSandboxMode::Auto => Ok(Self::Auto),
+            WindowsSandboxMode::Mxc => Ok(Self::Mxc),
+            WindowsSandboxMode::Elevated => Ok(Self::Elevated),
+            WindowsSandboxMode::Unelevated => Ok(Self::Unelevated),
         }
     }
 }

@@ -1,8 +1,10 @@
 # Windows native sandbox
 
-The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
+The Windows executable uses Codex's shared sandbox selection, policy conversion, and launch APIs without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
 
-The public backend names are `elevated` and `unelevated`, in the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
+The JSON `windows_sandbox_level` field accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto prefers native MXC when the Windows build and policy support it, otherwise selects elevated. Explicit selections fail closed; launch failures never trigger a backend retry. MXC requires no setup. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup.
+
+Existing Console sandbox accounts keep Auto on the legacy elevated backend. Old setup does not register every directory containing account credentials, so MXC's host identity cannot safely protect those unknown locations. This patch does not migrate or remove those accounts; explicit MXC reports the incompatibility. `setup` and `status` continue to manage only the legacy backend.
 
 ## Build and distribute
 
@@ -13,7 +15,7 @@ cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-win
 just test --locked --release -p mcp-console-sandbox --retries 0
 ```
 
-Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
+Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by MXC and the unelevated backend.
 
 For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged.
 
@@ -69,14 +71,16 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
-- `windows_sandbox_level` defaults to `elevated`. `unelevated` is explicit; `disabled` is rejected.
-- Targets run on a private Windows desktop, matching upstream behavior, with Console-specific desktop names.
-- `windows_state_dir` optionally selects an absolute persistent state directory.
+- Omitted or null `windows_sandbox_level` means `auto`. Consumers requiring the previous default must send `elevated`; `disabled` is rejected.
+- Legacy targets run on a private Windows desktop with Console-specific names; MXC uses the native backend's desktop isolation.
+- `windows_state_dir` optionally selects an absolute persistent legacy state directory. MXC does not inspect its setup records.
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
-- Managed proxy configuration, custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
+- MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto falls back when local binding is disallowed; legacy Windows retains its existing managed-proxy rejection. SOCKS5 UDP and Unix sockets are unsupported.
+- Custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
 - The selected configuration and reserved transport variable are removed from the target environment case insensitively. Excluded variables cannot be reused as private temporary environment names.
+- With a managed proxy, the selected configuration variable must not collide case insensitively with generated proxy variables such as `HTTP_PROXY` or `NODE_USE_ENV_PROXY`; such requests fail before creating resources.
 
 The ordinary command arguments, cwd, and stdio remain the target's inputs. Environment inheritance and overrides retain the shared protocol rules. Private storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
 
@@ -92,7 +96,7 @@ Unelevated launches create capability SIDs and save mappings in `cap_sid`. Capab
 
 Console's pipe-launched workloads enter a non-breakaway Job at process creation. After normal root exit, timeout, or cancellation, the backend terminates remaining members and confirms zero active processes before returning an exit receipt. A native Job completion port wakes the waiter; an accounting query confirms the barrier, with a five-second cleanup allowance. Failure uses reserved exit code 125. A missing exit receipt is distinct from a target exit code of `0xffffffff` (`-1`). Codex's default product continues to preserve descendants after normal root exit.
 
-The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. It removes private storage only after a confirmed receipt; startup errors and unconfirmed retirement retain storage with diagnostics. Private storage is not deleted while target descendants are known to remain.
+The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. Failed preflight removes temporary storage; after a launch attempt, cleanup requires a confirmed receipt. Unconfirmed retirement retains storage with diagnostics. A target exit code of 125 is a valid receipt and still permits cleanup.
 After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
 
 Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner loss does not guarantee storage deletion. A forcibly killed waiting Console frontend is not evidence of completed native retirement and cannot admit a replacement. Windows console signals and desktop behavior are not Unix terminal semantics.

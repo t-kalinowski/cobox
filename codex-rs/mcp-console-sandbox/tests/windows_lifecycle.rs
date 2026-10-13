@@ -96,6 +96,20 @@ fn ready(child: &mut Child) -> Result<Value> {
     serde_json::from_str(&line).context("fixture readiness")
 }
 
+fn require_mxc_without_legacy_accounts() -> Result<()> {
+    anyhow::ensure!(
+        codex_sandboxing::windows_mxc_available(),
+        "MXC is unavailable"
+    );
+    for account in ["McpConsoleSandboxOff", "McpConsoleSandboxOn"] {
+        anyhow::ensure!(
+            codex_windows_sandbox::local_user_flags(account)?.is_none(),
+            "public MXC lifecycle tests require a host without legacy Console accounts"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn binary_stdin_is_preserved_through_eof() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -147,8 +161,23 @@ fn target_uses_a_private_desktop() -> Result<()> {
 
 #[test]
 fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
+    assert_root_exit_retires_descendants("unelevated")
+}
+
+#[test]
+#[ignore = "requires native MXC and a host without legacy Console accounts"]
+fn mxc_root_exit_retires_descendants_before_removing_storage() -> Result<()> {
+    require_mxc_without_legacy_accounts()?;
+    assert_root_exit_retires_descendants("mxc")
+}
+
+fn assert_root_exit_retires_descendants(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let mut config = configuration(root.path());
+    config["windows_sandbox_level"] = json!(mode);
+    let mut child = runner(root.path(), "tree")?
+        .env("CONSOLE_POLICY", config.to_string())
+        .spawn()?;
     let process = Process::open(child.id())?;
     let receipt = ready(&mut child)?;
     let descendant =
@@ -168,7 +197,10 @@ fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
         (Some(42), vec![], vec![])
     );
     assert!(!temporary.exists());
-    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    assert_eq!(
+        std::fs::read_dir(root.path())?.count(),
+        usize::from(mode == "unelevated")
+    );
     Ok(())
 }
 
@@ -244,20 +276,34 @@ fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
 
 #[test]
 fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
+    assert_caller_death_retires_workload("unelevated")
+}
+
+#[test]
+#[ignore = "requires native MXC and a host without legacy Console accounts"]
+fn mxc_direct_caller_death_retires_workload_and_storage() -> Result<()> {
+    require_mxc_without_legacy_accounts()?;
+    assert_caller_death_retires_workload("mxc")
+}
+
+fn assert_caller_death_retires_workload(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
+    let mut config = configuration(root.path());
+    config["windows_sandbox_level"] = json!(mode);
     let mut owner = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
         .arg("owner")
         .arg(cargo_bin("mcp-console-sandbox")?)
         .current_dir(root.path())
-        .env("CONSOLE_POLICY", configuration(root.path()).to_string())
+        .env("CONSOLE_POLICY", config.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
     let owner_process = Process::open(owner.id())?;
     let receipt = ready(&mut owner)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
     let processes = ["runner", "root", "descendant"]
-        .map(|name| Process::open(receipt[name].as_u64().expect("fixture pid") as u32));
+        .map(|name| Process::open(receipt[name].as_u64().context("fixture pid")? as u32));
     let [runner, target, descendant] = processes;
     let (runner, target, descendant) = (runner?, target?, descendant?);
     owner.kill()?;
@@ -267,7 +313,11 @@ fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
     descendant.wait();
     let output = owner.wait_with_output()?;
     assert_eq!(output.stderr, Vec::<u8>::new());
-    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    assert!(!temporary.exists());
+    assert_eq!(
+        std::fs::read_dir(root.path())?.count(),
+        usize::from(mode == "unelevated")
+    );
     Ok(())
 }
 

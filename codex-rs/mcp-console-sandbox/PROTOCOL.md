@@ -1,6 +1,8 @@
 # Bootstrap protocol
 
-Windows implements the environment transport with native Job retirement. Its `windows_sandbox_level` and `windows_state_dir` fields, explicit setup requirement, unsupported policy features, and owner/storage semantics are specified in [Windows support](WINDOWS.md#console-transport). The descriptor transport and Unix-specific signal/terminal behavior below do not apply to Windows.
+Windows implements the environment transport with native Job retirement. Its `windows_sandbox_level` and `windows_state_dir` fields, backend-specific setup requirements, unsupported policy features, and owner/storage semantics are specified in [Windows support](WINDOWS.md#console-transport). The descriptor transport and Unix-specific signal/terminal behavior below do not apply to Windows.
+
+Windows backend selection defaults to `auto`, preferring compatible native MXC. Explicit `mxc`, `elevated`, and `unelevated` selections remain available. MXC supports managed proxies only with `allowLocalBinding: true`; other proxy requests retain the legacy rejection. Existing Console sandbox accounts keep Auto on legacy until a future credential-state migration. Consumers requiring the former default must explicitly send `windows_sandbox_level: "elevated"`.
 
 This private protocol is unversioned. MCP Console is its single consumer and pins the runner revision; the consumer and runner are updated in lockstep. Do not send a `version` field: unknown top-level fields are rejected. There is no version negotiation or compatibility execution mode.
 
