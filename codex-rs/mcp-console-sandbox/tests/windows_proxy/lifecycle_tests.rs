@@ -78,6 +78,11 @@ fn elevated_proxy_owner_death_cancels_and_releases_resources() -> Result<()> {
     )?;
     let endpoint = session.http_endpoint()?.to_owned();
     let lease_path = session.lease_path()?;
+    let temporary = std::path::PathBuf::from(
+        session.ready["environment"]["TMPDIR"]
+            .as_str()
+            .context("temporary")?,
+    );
     let child = session.probe(json!({"op":"descendant"}))?;
     let processes = observe_processes(&[&session.ready["pid"], &child["pid"]])?;
     owner.kill()?;
@@ -91,6 +96,10 @@ fn elevated_proxy_owner_death_cancels_and_releases_resources() -> Result<()> {
     assert_eq!(std::fs::read_to_string(session.error.path())?, "");
     assert_processes_retired(&processes);
     assert!(TcpStream::connect(endpoint.strip_prefix("http://").unwrap()).is_err());
+    assert!(
+        !temporary.exists(),
+        "owner-death cleanup retained private storage"
+    );
     let replacement = Session::start(proxy())?;
     assert_eq!(replacement.lease_path()?, lease_path);
     replacement.finish()
@@ -231,16 +240,20 @@ fn elevated_proxy_helper_loss_withholds_retirement_receipt() -> Result<()> {
 #[test]
 #[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_prelaunch_failure_does_not_consume_a_slot() -> Result<()> {
+    // Fixed-port validation runs after lease acquisition but before native spawn.
+    let conflict = TcpListener::bind("127.0.0.1:43180")?;
     for _ in 0..3 {
-        let error =
-            Session::start_with(proxy(), json!({"lifecycle":{"parent_pid":2147483647}}), &[])
-                .err()
-                .context("invalid owner accepted")?;
+        let error = Session::start(proxy())
+            .err()
+            .context("occupied proxy port accepted")?;
         assert!(
-            error.to_string().contains("cannot monitor sandbox owner"),
+            error
+                .to_string()
+                .contains("provisioned Console proxy port is unavailable"),
             "{error:#}"
         );
     }
+    drop(conflict);
     let first = Session::start(proxy())?;
     let second = Session::start(proxy())?;
     second.finish()?;
