@@ -135,7 +135,11 @@ fn managed_proxy_smoke(level: &str) -> Result<()> {
         .env("CODEX_NETWORK_PROXY_ATTRIBUTION", "inherited-token")
         .env(
             "CODEX_NETWORK_PROXY_BROKERED_CREDENTIALS",
-            json!([["OPENAI_API_KEY", "inherited-dummy"], ["GH_TOKEN", "other-dummy"]]).to_string(),
+            json!([
+                ["OPENAI_API_KEY", "inherited-dummy"],
+                ["GH_TOKEN", "other-dummy"]
+            ])
+            .to_string(),
         )
         .env("oPeNaI_ApI_kEy", "inherited-dummy")
         .env("GH_TOKEN", "workload-override")
