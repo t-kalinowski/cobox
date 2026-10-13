@@ -75,6 +75,8 @@ pub(crate) fn run() -> Result<i32> {
                 "mxc_available": mxc_available,
                 "mxc_state_error": mxc_state_protection.err().map(|error| error.to_string()),
                 "helpers_available": helpers_available,
+                "managed_proxy_provisioned": std::fs::read(crate::windows_proxy::pool_marker(state_dir.as_path())).ok().as_deref() == Some(b"1\n")
+                    && codex_windows_sandbox::ConsoleProxySlot::validate_owner(state_dir.as_path()).is_ok(),
                 "offline_account": codex_windows_sandbox::sandbox_name("CodexSandboxOffline"),
                 "online_account": codex_windows_sandbox::sandbox_name("CodexSandboxOnline"),
             })
@@ -91,6 +93,18 @@ pub(crate) fn run() -> Result<i32> {
         );
     }
     if matches!(cli.action, Action::Setup) {
+        std::fs::create_dir_all(state_dir.as_path().join(".sandbox-secrets"))?;
+        let _configuration = crate::windows_proxy_lock::configuration_guard(state_dir.as_path())?;
+        for index in 0..codex_windows_sandbox::ConsoleProxySlot::COUNT {
+            anyhow::ensure!(
+                !state_dir
+                    .as_path()
+                    .join(".sandbox-secrets")
+                    .join(format!("proxy-slot-{index}.lease"))
+                    .exists(),
+                "proxy slot {index} is leased or quarantined; setup cannot replace an unretired workload"
+            );
+        }
         // Create the helper directory as the caller, before UAC. Its owner
         // must be able to refresh the protected DACL on ordinary launches.
         std::fs::create_dir_all(codex_windows_sandbox::sandbox_bin_dir(state_dir.as_path()))
@@ -105,7 +119,12 @@ pub(crate) fn run() -> Result<i32> {
             codex_home: state_dir.as_path(),
             proxy_enforced: false,
         };
+        let marker = crate::windows_proxy::pool_marker(state_dir.as_path());
+        if marker.exists() {
+            std::fs::remove_file(&marker)?;
+        }
         codex_windows_sandbox::ConsoleProxySlot::provision_pool(request)?;
+        std::fs::write(marker, b"1\n")?;
     }
     if !codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())? {
         bail!("sandbox setup did not produce current records and enabled accounts");

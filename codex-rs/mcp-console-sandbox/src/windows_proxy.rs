@@ -142,3 +142,7 @@ fn validate_grants(
         .context("MXC workload grants must not reopen Console control state")?;
     Ok(())
 }
+
+pub(crate) fn pool_marker(state: &Path) -> PathBuf {
+    state.join(".sandbox-secrets").join("console-proxy-pool-v1")
+}

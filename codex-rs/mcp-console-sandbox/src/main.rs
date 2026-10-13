@@ -28,6 +28,8 @@ mod windows_cli;
 mod windows_console;
 #[cfg(windows)]
 mod windows_proxy;
+#[cfg(windows)]
+mod windows_proxy_lock;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {
