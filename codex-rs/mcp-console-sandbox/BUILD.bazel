@@ -116,6 +116,8 @@ rust_test(
 rust_test(
     name = "windows-mxc-native-test",
     srcs = [
+        "src/windows_backend.rs",
+        "src/windows_backend_tests.rs",
         "src/windows_proxy.rs",
         "tests/windows_mxc_native.rs",
     ],

@@ -16,7 +16,6 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SpawnRequest;
 use codex_sandboxing::WindowsSandboxLaunchContext;
-use codex_sandboxing::WindowsSandboxPreference;
 use codex_sandboxing::WindowsSandboxSpawnRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_windows_sandbox::WindowsSandboxProduct;
@@ -29,6 +28,8 @@ use std::time::Duration;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::Threading::*;
+
+use crate::windows_backend::WindowsSandboxPreference;
 
 pub(crate) fn run() -> Result<i32> {
     let crate::bootstrap::Input::Environment(mut request) = crate::bootstrap::take_input()?;
@@ -79,7 +80,7 @@ pub(crate) fn run() -> Result<i32> {
         }
     }
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
-    let (sandbox, level) = codex_sandboxing::select_windows_sandbox(
+    let (sandbox, level) = crate::windows_backend::select_windows_sandbox(
         preference,
         &PermissionProfile::from_runtime_permissions(&filesystem, network)
             .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace)),

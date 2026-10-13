@@ -17,7 +17,7 @@ pub enum WindowsSandboxMode {
 }
 
 #[cfg(windows)]
-impl TryFrom<WindowsSandboxMode> for codex_sandboxing::WindowsSandboxPreference {
+impl TryFrom<WindowsSandboxMode> for crate::windows_backend::WindowsSandboxPreference {
     type Error = anyhow::Error;
 
     fn try_from(mode: WindowsSandboxMode) -> Result<Self, Self::Error> {

@@ -14,6 +14,8 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+#[path = "../src/windows_backend.rs"]
+mod windows_backend;
 #[path = "../src/windows_proxy.rs"]
 mod windows_proxy;
 

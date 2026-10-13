@@ -1,6 +1,6 @@
 # Windows native sandbox
 
-The Windows executable uses Codex's shared sandbox selection, policy conversion, and launch APIs without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
+The Windows executable uses Codex's shared capability, policy conversion, and launch APIs without `codex-core` or a running Codex application. Console's backend preferences and proxy-mode validation live in this leaf crate. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
 
 The JSON `windows_sandbox_level` field accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto prefers native MXC when the Windows build and policy support it, otherwise selects elevated. Explicit selections fail closed; launch failures never trigger a backend retry. MXC requires no setup. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup.
 
@@ -77,7 +77,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
-- MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto falls back when local binding is disallowed; legacy Windows retains its existing managed-proxy rejection. SOCKS5 UDP and Unix sockets are unsupported.
+- MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto falls back when local binding is disallowed; legacy Windows retains its existing managed-proxy rejection. Active SOCKS5 UDP and Unix-socket configurations fail preflight for every backend because neither Console path supports them. An unused UDP flag is accepted when SOCKS5 is disabled.
 - Custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
 - The selected configuration and reserved transport variable are removed from the target environment case insensitively. Excluded variables cannot be reused as private temporary environment names.
 - With a managed proxy, the selected configuration variable must not collide case insensitively with generated proxy variables such as `HTTP_PROXY` or `NODE_USE_ENV_PROXY`; such requests fail before creating resources.

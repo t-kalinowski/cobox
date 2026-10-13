@@ -1,8 +1,6 @@
 #![cfg(windows)]
 
 use anyhow::Result;
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::*;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
@@ -73,32 +71,54 @@ fn public_backend_selection_preserves_legacy_ownership_without_provisioning() ->
         }
         assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     }
-    let strict = serde_json::from_value(proxy(
-        /*allow_local_binding*/ false, /*allow_destination*/ true,
-    ))?;
-    assert_eq!(
-        select_windows_sandbox(
-            WindowsSandboxPreference::Auto,
-            &PermissionProfile::read_only(),
-            Some(&strict),
-            /*host_mxc_restriction*/ None
-        )?,
+    Ok(())
+}
+
+#[test]
+fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    for (key, value, diagnostic) in [
+        ("enableSocks5Udp", json!(true), "SOCKS5 UDP"),
         (
-            SandboxType::WindowsRestrictedToken,
-            WindowsSandboxLevel::Elevated
-        )
-    );
-    assert!(
-        select_windows_sandbox(
-            WindowsSandboxPreference::Mxc,
-            &PermissionProfile::read_only(),
-            Some(&strict),
-            /*host_mxc_restriction*/ None
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("allow_local_binding=false")
-    );
+            "dangerouslyAllowAllUnixSockets",
+            json!(true),
+            "Unix sockets",
+        ),
+        (
+            "unixSockets",
+            json!({"/tmp/proxy.sock": "allow"}),
+            "Unix sockets",
+        ),
+    ] {
+        let mut proxy = proxy(
+            /*allow_local_binding*/ true, /*allow_destination*/ true,
+        );
+        proxy[key] = value;
+        for mode in ["auto", "mxc", "elevated", "unelevated"] {
+            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+                .env(
+                    "CONSOLE_POLICY",
+                    json!({"extends":":read-only", "windows_sandbox_level":mode,
+                        "windows_state_dir":root.path().join("state"), "proxy":proxy,
+                        "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["TMP"]}}})
+                    .to_string(),
+                )
+                .args([
+                    "--config-env",
+                    "CONSOLE_POLICY",
+                    "--",
+                    "cmd.exe",
+                    "/d",
+                    "/c",
+                    "echo launched",
+                ])
+                .output()?;
+            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+            let error = String::from_utf8(output.stderr)?;
+            assert!(error.contains(diagnostic), "{mode}: {error}");
+            assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+        }
+    }
     Ok(())
 }
 
