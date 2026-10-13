@@ -167,7 +167,7 @@ pub(crate) fn run() -> Result<i32> {
                     windows_sandbox_level: level,
                     proxy_enforced: false,
                     network_proxy_restricting_sid: None,
-                    proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
+                    proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
                     timeout_ms: None,
                     read_roots_override: None,
                     read_roots_include_platform_defaults: false,
