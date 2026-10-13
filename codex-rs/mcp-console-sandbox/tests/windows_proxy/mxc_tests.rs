@@ -136,20 +136,23 @@ fn mxc_policies_and_cross_process_proxy_ownership() -> Result<()> {
             );
         }
         let response = denied.probe(json!({"op":op,"address":address.to_string()}))?;
-        assert!(
-            !response["headers"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("HTTP/1.1 200")),
-            "{op}: {response}"
-        );
+        match op {
+            "http" | "connect" => {
+                let headers = response["headers"]
+                    .as_str()
+                    .context("proxy denial response")?;
+                assert!(
+                    headers.starts_with("HTTP/1.1 403") && headers.contains("blocked-by-denylist"),
+                    "{op}: {response}"
+                );
+            }
+            "socks" => assert!(
+                response["socks"].as_u64().is_some_and(|reply| reply != 0),
+                "SOCKS rejection reply: {response}"
+            ),
+            _ => unreachable!(),
+        }
     }
-    let response = denied.probe(json!({"op":"http","address":address.to_string()}))?;
-    assert!(
-        response["headers"]
-            .as_str()
-            .context("denial")?
-            .contains("blocked-by-denylist")
-    );
     let socks = allowed.ready["environment"]
         .as_object()
         .context("environment")?
@@ -286,23 +289,22 @@ fn mxc_direct_network_and_local_binding_controls() -> Result<()> {
                 "UDP {address}"
             );
             let incoming = session.probe(json!({"op":"udp-listen","address":address}))?;
-            if let Some(target) = incoming["address"].as_str() {
-                udp.send_to(b"probe", target)?;
-                let received = session.probe(json!({"op":"udp-receive"}))?;
-                let received = received["received"].as_bool().context("UDP receipt")?;
-                if name == "online" {
-                    if !received {
-                        eprintln!("UNAVAILABLE MXC inbound UDP positive control: {address}");
-                    }
-                    inbound_controls.as_mut().context("TCP control")?.1 = received;
-                } else {
-                    assert_eq!(
-                        received,
-                        permitted && inbound_controls.context("inbound control")?.1
-                    );
+            let target = incoming["address"]
+                .as_str()
+                .with_context(|| format!("MXC UDP bind/listen {name} {address}: {incoming}"))?;
+            udp.send_to(b"probe", target)?;
+            let received = session.probe(json!({"op":"udp-receive"}))?;
+            let received = received["received"].as_bool().context("UDP receipt")?;
+            if name == "online" {
+                if !received {
+                    eprintln!("UNAVAILABLE MXC inbound UDP positive control: {address}");
                 }
+                inbound_controls.as_mut().context("TCP control")?.1 = received;
             } else {
-                assert!(!permitted, "UDP positive control: {incoming}");
+                assert_eq!(
+                    received,
+                    permitted && inbound_controls.context("inbound control")?.1
+                );
             }
         }
     }
