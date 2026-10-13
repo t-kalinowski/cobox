@@ -205,7 +205,8 @@ pub(super) fn probe_route() -> Result<()> {
     let mut stream = match std::net::TcpStream::connect_timeout(&endpoint, timeout) {
         Ok(stream) => stream,
         // Account firewall enforcement can deny before the ingress accepts a socket.
-        Err(_) => std::process::exit(0),
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => std::process::exit(0),
+        Err(error) => return Err(error).context("connect route endpoint"),
     };
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;

@@ -253,6 +253,19 @@ fn route_probe_does_not_count_invalid_inputs_as_denial() -> Result<()> {
 }
 
 #[test]
+fn route_probe_does_not_count_a_stopped_listener_as_denial() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = listener.local_addr()?.to_string();
+    drop(listener);
+    let output = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+        .args(["probe-route", &endpoint, "example.test:80"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(String::from_utf8(output.stderr)?.contains("connect route endpoint"));
+    Ok(())
+}
+
+#[test]
 fn route_probe_distinguishes_admission_close_from_broken_http() -> Result<()> {
     for (response, code) in [
         (Some(""), 0),
