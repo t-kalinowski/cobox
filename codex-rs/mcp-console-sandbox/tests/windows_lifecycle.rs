@@ -33,7 +33,7 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 fn configuration(root: &Path) -> Value {
     json!({
         "extends": ":read-only", "network": "enabled",
-        "windows_sandbox_level": "unelevated",
+        "windows_backend": "unelevated",
         "windows_state_dir": root.join("state"),
         "lifecycle": {"private_tmp": {"parent": root, "environment": ["TMPDIR"]}},
     })
@@ -143,12 +143,12 @@ fn assert_read_only_policy_denies_target_writes(mode: Option<&str>) -> Result<()
     let root = tempfile::tempdir()?;
     let mut config = configuration(root.path());
     if let Some(mode) = mode {
-        config["windows_sandbox_level"] = json!(mode);
+        config["windows_backend"] = json!(mode);
     } else {
         config
             .as_object_mut()
             .context("configuration object")?
-            .remove("windows_sandbox_level");
+            .remove("windows_backend");
     }
     let forbidden = root.path().join("forbidden");
     let output = runner(root.path(), "probe-write")?
@@ -193,7 +193,7 @@ fn assert_root_exit_retires_descendants(mode: &str) -> Result<()> {
     if mode == "external" {
         config["filesystem"] = json!({"kind":"external-sandbox"});
     } else {
-        config["windows_sandbox_level"] = json!(mode);
+        config["windows_backend"] = json!(mode);
     }
     let mut child = runner(root.path(), "tree")?
         .env("CONSOLE_POLICY", config.to_string())
@@ -314,7 +314,7 @@ fn assert_caller_death_retires_workload(mode: &str) -> Result<()> {
     if mode == "external" {
         config["filesystem"] = json!({"kind":"external-sandbox"});
     } else {
-        config["windows_sandbox_level"] = json!(mode);
+        config["windows_backend"] = json!(mode);
     }
     let mut owner = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
         .arg("owner")
@@ -377,7 +377,7 @@ fn elevated_offline_account_denies_loopback_tcp() -> Result<()> {
         for (network, expected) in [("enabled", "connected\n"), ("restricted", "blocked\n")] {
             let config = json!({
                 "extends":":read-only", "network":network,
-                "windows_sandbox_level":"elevated",
+                "windows_backend":"elevated",
                 "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
                     .map(PathBuf::from),
             });
@@ -411,7 +411,7 @@ fn elevated_offline_account_denies_loopback_udp() -> Result<()> {
         for network in ["enabled", "restricted"] {
             let config = json!({
                 "extends":":read-only", "network":network,
-                "windows_sandbox_level":"elevated",
+                "windows_backend":"elevated",
                 "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
                     .map(PathBuf::from),
             });

@@ -6,6 +6,36 @@ use serde_json::json;
 use std::process::Command;
 
 #[test]
+fn windows_backend_accepts_the_legacy_field_name() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    for field in ["windows_backend", "windows_sandbox_level"] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env(
+                "CONSOLE_POLICY",
+                json!({"extends":":read-only", "network":"enabled",
+                    (field):"unelevated", "windows_state_dir":root.path().join("state")})
+                .to_string(),
+            )
+            .args([
+                "--config-env",
+                "CONSOLE_POLICY",
+                "--",
+                "cmd.exe",
+                "/d",
+                "/c",
+                "echo BACKEND_OK",
+            ])
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), b"BACKEND_OK\r\n".to_vec(), vec![]),
+            "{field}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn external_enforcement_delegates_network_without_legacy_state() -> anyhow::Result<()> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     for mode in ["auto", "mxc", "elevated", "unelevated"] {
@@ -14,7 +44,7 @@ fn external_enforcement_delegates_network_without_legacy_state() -> anyhow::Resu
             .env(
                 "CONSOLE_POLICY",
                 json!({"filesystem":{"kind":"external-sandbox"},
-                "network":"restricted", "windows_sandbox_level":mode})
+                "network":"restricted", "windows_backend":mode})
                 .to_string(),
             )
             .args(["--config-env", "CONSOLE_POLICY", "--"])
@@ -36,11 +66,11 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
     let root = tempfile::tempdir()?;
     for (overrides, diagnostic) in [
         (
-            json!({"windows_sandbox_level":"disabled"}),
+            json!({"windows_backend":"disabled"}),
             "disabled is not supported",
         ),
         (
-            json!({"windows_sandbox_level":"elevated"}),
+            json!({"windows_backend":"elevated"}),
             "mcp-console-sandbox setup",
         ),
         (
@@ -84,7 +114,7 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
     ] {
         let mut config = json!({
             "extends":":read-only", "network":"enabled",
-            "windows_sandbox_level":"unelevated",
+            "windows_backend":"unelevated",
             "windows_state_dir":root.path().join("state"),
         });
         if let (Some(config), Some(overrides)) = (config.as_object_mut(), overrides.as_object()) {
@@ -120,7 +150,7 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let config = json!({
         "extends": ":read-only", "network": "enabled",
-        "windows_sandbox_level": "unelevated",
+        "windows_backend": "unelevated",
         "windows_state_dir": root.path().join("state"),
         "lifecycle": {"private_tmp": {"parent": root.path(), "environment": ["TMPDIR"]}},
     });
@@ -165,7 +195,7 @@ fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
     let config = json!({
         "extends": ":read-only",
         "network": "enabled",
-        "windows_sandbox_level": "unelevated",
+        "windows_backend": "unelevated",
         "windows_state_dir": root.path().join("state"),
         "environment": { "test_case_value": "target" },
         "lifecycle": { "private_tmp": { "parent": root.path(), "environment": ["TMPDIR", "TEMP", "TMP"] } },
@@ -204,7 +234,7 @@ fn environment_transport_preserves_target_arguments() -> anyhow::Result<()> {
             "CONSOLE_POLICY",
             json!({
                 "extends": ":read-only", "network": "enabled",
-                "windows_sandbox_level": "unelevated",
+                "windows_backend": "unelevated",
                 "windows_state_dir": root.path().join("state"),
             })
             .to_string(),
@@ -227,6 +257,12 @@ fn invalid_configuration_fails_before_creating_state() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     for (payload, diagnostic) in [
         ("not-json".to_owned(), "invalid configuration JSON (Syntax"),
+        (
+            json!({"extends":":read-only", "windows_backend":"unelevated",
+                "windows_sandbox_level":"mxc"})
+            .to_string(),
+            "invalid configuration JSON (Data",
+        ),
         (
             json!({"extends": ":read-only", "windows_state_dir": "relative"}).to_string(),
             "invalid configuration JSON (Data",

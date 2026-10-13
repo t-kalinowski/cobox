@@ -35,7 +35,7 @@ fn console(policy: Value) -> Result<Command> {
 fn mxc_does_not_require_localappdata_or_a_state_directory() -> Result<()> {
     let available = mxc_support::available()?;
     for mode in ["auto", "mxc"] {
-        let output = console(json!({"extends":":read-only", "windows_sandbox_level":mode}))?
+        let output = console(json!({"extends":":read-only", "windows_backend":mode}))?
             .env_remove("LOCALAPPDATA")
             .arg("echo MXC_OK")
             .output()?;
@@ -82,7 +82,7 @@ fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result
         Ok(())
     });
     for allowed in [true, false] {
-        let output = console(json!({"extends":":read-only", "windows_sandbox_level":"mxc",
+        let output = console(json!({"extends":":read-only", "windows_backend":"mxc",
                 "proxy":proxy(/*allow_local_binding*/ true, allowed)}))?
             .env_remove("LOCALAPPDATA")
             .env("hTtP_pRoXy", "http://127.0.0.1:1")
@@ -124,7 +124,7 @@ fn public_backend_selection_preserves_legacy_ownership_without_provisioning() ->
         let mut policy = json!({"extends":":read-only","network":"restricted",
             "windows_state_dir":root.path().join("unprovisioned")});
         if let Some(mode) = mode {
-            policy["windows_sandbox_level"] = json!(mode);
+            policy["windows_backend"] = json!(mode);
         }
         if strict_proxy {
             policy["proxy"] = proxy(
@@ -177,7 +177,7 @@ fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> 
         );
         proxy[key] = value;
         for mode in ["auto", "mxc", "elevated", "unelevated"] {
-            let output = console(json!({"extends":":read-only", "windows_sandbox_level":mode,
+            let output = console(json!({"extends":":read-only", "windows_backend":mode,
                         "windows_state_dir":root.path().join("state"), "proxy":proxy,
                         "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["TMP"]}}}))?
             .arg("echo launched")
@@ -209,7 +209,7 @@ fn disabled_proxy_matches_absent_proxy_across_backends() -> Result<()> {
                     .env(
                         "hTtP_pRoXy",
                         json!({"extends":":read-only", "network":"enabled",
-                            "filesystem":{"kind":filesystem}, "windows_sandbox_level":mode,
+                            "filesystem":{"kind":filesystem}, "windows_backend":mode,
                             "windows_state_dir":root.path().join("state"), "proxy":proxy})
                         .to_string(),
                     )
@@ -252,7 +252,7 @@ fn managed_proxy_rejects_configuration_transport_collisions_before_launch() -> R
         let output = Command::new(cargo_bin("mcp-console-sandbox")?)
             .env(
                 name,
-                json!({"extends":":read-only", "windows_sandbox_level":"mxc",
+                json!({"extends":":read-only", "windows_backend":"mxc",
                     "windows_state_dir":root.path().join("state"),
                     "proxy":proxy(/*allow_local_binding*/ true, /*allow_destination*/ true)})
                 .to_string(),
@@ -295,7 +295,7 @@ fn mxc_does_not_validate_unused_legacy_setup_records() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     let available = accounts.iter().all(Option::is_none) && windows_mxc_available();
     for mode in ["mxc", "elevated"] {
-        let output = console(json!({"extends":":read-only", "windows_sandbox_level":mode,
+        let output = console(json!({"extends":":read-only", "windows_backend":mode,
                     "windows_state_dir":root.path()}))?
         .arg("echo MXC_OK")
         .output()?;

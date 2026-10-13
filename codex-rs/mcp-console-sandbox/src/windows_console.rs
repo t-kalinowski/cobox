@@ -52,7 +52,7 @@ pub(crate) fn run() -> Result<i32> {
         "cleanup_timeout_ms is not configurable on Windows"
     );
     let preference = request
-        .windows_sandbox_level
+        .windows_backend
         .map(WindowsSandboxPreference::try_from)
         .transpose()?
         .unwrap_or_default();
