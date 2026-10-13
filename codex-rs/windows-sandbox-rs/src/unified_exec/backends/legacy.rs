@@ -479,7 +479,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         drop(token_handle);
         let retirement_failed =
             if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
-                if let Err(error) = crate::retire_console_job(&job_for_wait) {
+                if let Err(error) = codex_utils_pty::retire_job(&job_for_wait) {
                     eprintln!("Console Job retirement failed: {error:#}");
                     true
                 } else {

@@ -687,7 +687,7 @@ pub fn main() -> Result<()> {
     let retirement_failed = if codex_windows_sandbox::WindowsSandboxProduct::current()
         == codex_windows_sandbox::WindowsSandboxProduct::Console
     {
-        if let Err(error) = codex_windows_sandbox::retire_console_job(&job) {
+        if let Err(error) = codex_utils_pty::retire_job(&job) {
             log_note(
                 &format!("Console Job retirement failed: {error:#}"),
                 log_dir,

@@ -45,7 +45,7 @@ pub struct Bootstrap {
     pub linux_backend: Option<crate::config::LinuxBackend>,
     #[cfg(windows)]
     #[serde(alias = "windows_sandbox_level")]
-    pub windows_backend: Option<crate::config::WindowsBackend>,
+    pub windows_backend: Option<crate::windows_backend::WindowsSandboxPreference>,
     #[cfg(windows)]
     pub windows_state_dir: Option<AbsolutePathBuf>,
 }
@@ -67,7 +67,7 @@ struct EnvironmentConfiguration {
     linux_backend: Option<crate::config::LinuxBackend>,
     #[cfg(windows)]
     #[serde(alias = "windows_sandbox_level")]
-    windows_backend: Option<crate::config::WindowsBackend>,
+    windows_backend: Option<crate::windows_backend::WindowsSandboxPreference>,
     #[cfg(windows)]
     windows_state_dir: Option<AbsolutePathBuf>,
     #[serde(default = "inherit_environment")]
@@ -267,10 +267,6 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
     ensure!(
         cfg!(target_os = "linux") || request.linux_backend.is_none(),
         "linux_backend is supported only on Linux"
-    );
-    ensure!(
-        request.linux_backend != Some(crate::config::LinuxBackend::RemovedLandlock),
-        "linux_backend landlock has been removed; omit linux_backend or use bubblewrap"
     );
     request
         .excluded_environment

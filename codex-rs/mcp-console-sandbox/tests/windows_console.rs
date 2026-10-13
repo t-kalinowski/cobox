@@ -66,10 +66,6 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
     let root = tempfile::tempdir()?;
     for (overrides, diagnostic) in [
         (
-            json!({"windows_backend":"disabled"}),
-            "disabled is not supported",
-        ),
-        (
             json!({"windows_backend":"elevated"}),
             "mcp-console-sandbox setup",
         ),

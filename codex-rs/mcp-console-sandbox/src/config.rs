@@ -1,38 +1,6 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
-#[cfg(windows)]
-#[derive(Clone, Copy, Debug, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub enum WindowsBackend {
-    /// Prefer native MXC when the policy and host support it.
-    Auto,
-    /// Require native MXC; never retry through a legacy backend.
-    Mxc,
-    Disabled,
-    /// Administrator-approved setup with dedicated sandbox accounts.
-    Elevated,
-    /// No administrator setup; restricted token under the current user.
-    Unelevated,
-}
-
-#[cfg(windows)]
-impl TryFrom<WindowsBackend> for crate::windows_backend::WindowsSandboxPreference {
-    type Error = anyhow::Error;
-
-    fn try_from(mode: WindowsBackend) -> Result<Self, Self::Error> {
-        match mode {
-            WindowsBackend::Disabled => {
-                anyhow::bail!("windows_backend: disabled is not supported")
-            }
-            WindowsBackend::Auto => Ok(Self::Auto),
-            WindowsBackend::Mxc => Ok(Self::Mxc),
-            WindowsBackend::Elevated => Ok(Self::Elevated),
-            WindowsBackend::Unelevated => Ok(Self::Unelevated),
-        }
-    }
-}
-
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Lifecycle {
@@ -87,12 +55,8 @@ impl Lifecycle {
     }
 }
 
-#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
+#[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinuxBackend {
-    #[default]
     Bubblewrap,
-    // Parse the removed value only to give a clear error before native setup.
-    #[serde(rename = "landlock")]
-    RemovedLandlock,
 }
