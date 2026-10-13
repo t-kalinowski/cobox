@@ -8,12 +8,15 @@ use std::process::Stdio;
 
 #[path = "windows_proxy.rs"]
 mod proxy;
+#[path = "windows_proxy_identity.rs"]
+mod proxy_identity;
 
 pub(super) fn run() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let operation = args.next().context("fixture operation")?;
     match operation.to_str().context("UTF-8 fixture operation")? {
         "proxy-session" => proxy::run()?,
+        "probe-route" => proxy_identity::probe_route()?,
         "arguments" => {
             println!(
                 "{}",

@@ -98,6 +98,16 @@ fn probe(request: &Value) -> Result<Value> {
         anyhow::ensure!(found, "find fixture process");
         return Ok(json!(entry.th32ParentProcessID));
     }
+    if operation == "route-sids" {
+        return Ok(json!(super::proxy_identity::restricting_sids()?));
+    }
+    if operation == "forge-route" {
+        return super::proxy_identity::forge(
+            request["sid"].as_str().context("sid")?,
+            request["endpoint"].as_str().context("endpoint")?,
+            request["address"].as_str().context("address")?,
+        );
+    }
     if operation == "descendant" {
         let mut child = std::process::Command::new(std::env::current_exe()?)
             .arg("hold")

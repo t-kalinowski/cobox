@@ -26,13 +26,16 @@ rust_binary(
     srcs = glob(["src/bin/**/*.rs"]),
     crate_root = "src/bin/mcp_console_sandbox_fixture.rs",
     edition = "2024",
-    # The target probe needs no sandbox or proxy dependencies.
+    # Native route forgery reuses the Windows sandbox's token construction.
     deps = [
         "@crates//:anyhow",
         "@crates//:libc",
         "@crates//:serde_json",
     ] + select({
-        "@platforms//os:windows": ["@crates//:windows-sys-0.61.2"],
+        "@platforms//os:windows": [
+            "//codex-rs/windows-sandbox-rs",
+            "@crates//:windows-sys-0.61.2",
+        ],
         "//conditions:default": [],
     }),
 )
@@ -113,9 +116,15 @@ rust_test(
     name = "windows-proxy-probes-test",
     srcs = ["tests/windows_proxy_probes.rs"],
     crate_root = "tests/windows_proxy_probes.rs",
-    data = [":mcp-console-sandbox-fixture"],
+    data = [
+        ":mcp-console-sandbox",
+        ":mcp-console-sandbox-fixture",
+    ],
     edition = "2024",
-    env = {"CARGO_BIN_EXE_mcp-console-sandbox-fixture": "$(rlocationpath :mcp-console-sandbox-fixture)"},
+    env = {
+        "CARGO_BIN_EXE_mcp-console-sandbox": "$(rlocationpath :mcp-console-sandbox)",
+        "CARGO_BIN_EXE_mcp-console-sandbox-fixture": "$(rlocationpath :mcp-console-sandbox-fixture)",
+    },
     tags = ["no-sandbox"],
     target_compatible_with = ["@platforms//os:windows"],
     deps = all_crate_deps(

@@ -198,3 +198,156 @@ fn http_probe_requires_complete_headers_and_obeys_head() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn route_probe_distinguishes_allowed_and_denied_for_bare_and_url_endpoints() -> Result<()> {
+    for (url, status, code) in [(false, 200, 91), (true, 200, 91), (false, 403, 0)] {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let endpoint = if url {
+            format!("http://{address}/")
+        } else {
+            address.to_string()
+        };
+        let server = std::thread::spawn(move || -> Result<()> {
+            let mut stream = accept(listener)?;
+            assert!(
+                read_headers(&mut stream)?.starts_with("GET http://example.test:80/ HTTP/1.1\r\n")
+            );
+            write!(
+                stream,
+                "HTTP/1.1 {status} response\r\nContent-Length: 0\r\n\r\n"
+            )?;
+            Ok(())
+        });
+        let output = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+            .args(["probe-route", &endpoint, "example.test:80"])
+            .output()?;
+        let served = server
+            .join()
+            .map_err(|_| anyhow::anyhow!("route probe server panicked"))?;
+        assert_eq!(output.status.code(), Some(code), "{output:?}");
+        served?;
+    }
+    Ok(())
+}
+
+#[test]
+fn route_probe_does_not_count_invalid_inputs_as_denial() -> Result<()> {
+    for (endpoint, destination) in [
+        ("invalid", "example.test:80"),
+        ("http://not-a-socket", "example.test:80"),
+        ("http://127.0.0.1:bad", "example.test:80"),
+        ("127.0.0.1:9", "invalid-destination"),
+    ] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+            .args(["probe-route", endpoint, destination])
+            .output()?;
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            !output.stderr.is_empty(),
+            "missing invalid endpoint diagnostic"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn route_probe_distinguishes_admission_close_from_broken_http() -> Result<()> {
+    for (response, code) in [
+        (Some(""), 0),
+        (Some("HTTP/1.1 403"), 1),
+        (Some("HTTP/1.1 403 Forbidden\r\n"), 1),
+        (
+            Some("HTTP/1.1 403 Forbidden\r\nContent-Length: 4\r\n\r\nx"),
+            1,
+        ),
+        (
+            Some("HTTP/1.1 403 Forbidden\r\nContent-Length: 4\r\n\r\ndeny"),
+            0,
+        ),
+        (Some("HTTP/1.1 500 Error\r\nContent-Length: 0\r\n\r\n"), 1),
+        (Some("invalid response\r\n\r\n"), 1),
+        (None, 1),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let endpoint = listener.local_addr()?.to_string();
+        let server = std::thread::spawn(move || -> Result<()> {
+            let mut stream = accept(listener)?;
+            read_headers(&mut stream)?;
+            match response {
+                Some(response) => stream.write_all(response.as_bytes())?,
+                None => std::thread::sleep(Duration::from_secs(/*secs*/ 3)),
+            }
+            Ok(())
+        });
+        let output = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+            .args(["probe-route", &endpoint, "example.test:80"])
+            .output()?;
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("route server panicked"))??;
+        assert_eq!(output.status.code(), Some(code), "{response:?}: {output:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn host_forgery_reaches_the_route_with_the_requested_sid() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = listener.local_addr()?.to_string();
+    let server = std::thread::spawn(move || -> Result<()> {
+        let mut stream = accept(listener)?;
+        read_headers(&mut stream)?;
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")?;
+        Ok(())
+    });
+    let result = probe(json!({"op":"forge-route", "sid":"S-1-5-21-1-2-3-43180",
+        "endpoint":endpoint, "address":"example.test:80"}))?;
+    let served = server
+        .join()
+        .map_err(|_| anyhow::anyhow!("forgery server panicked"))?;
+    assert_eq!(result, json!({"code":91}));
+    served?;
+    Ok(())
+}
+
+#[test]
+fn restricted_token_reports_unavailable_forged_identity_separately() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let policy = json!({"extends":":read-only", "network":"enabled",
+        "windows_sandbox_level":"unelevated", "windows_state_dir":directory.path().join("state")});
+    let mut command = Command::new(cargo_bin("mcp-console-sandbox")?);
+    command
+        .env("CONSOLE_POLICY", policy.to_string())
+        .args(["--config-env", "CONSOLE_POLICY", "--"])
+        .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg("proxy-session");
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = listener.local_addr()?.to_string();
+    let server = std::thread::spawn(move || -> Result<()> {
+        let mut stream = accept(listener)?;
+        read_headers(&mut stream)?;
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")?;
+        Ok(())
+    });
+    let control = probe_with_command(
+        &mut command,
+        json!({"op":"forge-route", "sid":"S-1-1-0", "endpoint":endpoint, "address":"example.test:80"}),
+    )?;
+    let served = server
+        .join()
+        .map_err(|_| anyhow::anyhow!("restricted route server panicked"))?;
+    assert_eq!(control, json!({"code":91}));
+    served?;
+    let result = probe_with_command(
+        &mut command,
+        json!({"op":"forge-route", "sid":"S-1-5-21-1-2-3-43180",
+            "endpoint":"127.0.0.1:9", "address":"example.test:80"}),
+    )?;
+    assert_eq!(
+        result,
+        json!({"identity_created":false, "reason":"restricting-sid-intersection"})
+    );
+    Ok(())
+}
