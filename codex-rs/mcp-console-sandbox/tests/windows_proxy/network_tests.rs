@@ -223,6 +223,10 @@ pub(super) fn limited_mode(backend: &str) -> Result<()> {
         );
     }
     let response = session.probe(json!({"op":"socks", "address":address.to_string()}))?;
-    assert_eq!(response, json!({"socks":2}), "limited-mode SOCKS policy denial");
+    assert_eq!(
+        response,
+        json!({"socks":2}),
+        "limited-mode SOCKS policy denial"
+    );
     session.finish()
 }
