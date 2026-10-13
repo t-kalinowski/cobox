@@ -20,13 +20,17 @@ ROOT = Path(__file__).resolve().parents[2]
 CARGO_RS_ROOT = ROOT / "codex-rs"
 WORKSPACE_PACKAGE_FIELDS = ("version", "edition", "license")
 TOP_LEVEL_NAME_EXCEPTIONS = {
+    # Package-local instructions override the inherited prefix rule:
+    # codex-rs/mcp-console-sandbox/AGENTS.md
+    # codex-rs/mcp-console-sandbox-windows/AGENTS.md
+    "mcp-console-sandbox": "mcp-console-sandbox",
+    "mcp-console-sandbox-windows": "mcp-console-sandbox-windows",
     "windows-sandbox-rs": "codex-windows-sandbox",
 }
 UTILITY_NAME_EXCEPTIONS = {
     "path-utils": "codex-utils-path",
 }
 MANIFEST_FEATURE_EXCEPTIONS = {
-    "codex-rs/code-mode/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
     "codex-rs/v8-poc/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
 }
 OPTIONAL_DEPENDENCY_EXCEPTIONS = set()
