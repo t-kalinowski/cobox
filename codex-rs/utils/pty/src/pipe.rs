@@ -128,8 +128,9 @@ enum PipeStdinMode {
     Null,
 }
 
-/// On Windows, process-tree containment is best-effort because Tokio returns
-/// only after the root process starts, so job assignment cannot be atomic.
+/// A supplied Windows Job requires atomic containment and confirmed retirement.
+/// Other callers retain best-effort containment and surviving descendants.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_process_with_stdin_mode(
     program: &OsStr,
     args: &[String],
@@ -138,6 +139,7 @@ async fn spawn_process_with_stdin_mode(
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
     inherited_fds: &[i32],
+    #[cfg(windows)] owned_job: Option<Arc<crate::JobObject>>,
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
@@ -171,7 +173,13 @@ async fn spawn_process_with_stdin_mode(
         });
 
     #[cfg(windows)]
-    let job = crate::win::JobObject::create().map(Arc::new);
+    let job = match &owned_job {
+        Some(job) => {
+            command.windows_job = Some(Arc::clone(job));
+            Ok(Arc::clone(job))
+        }
+        None => crate::win::JobObject::create().map(Arc::new),
+    };
     #[cfg(target_os = "linux")]
     let mut child =
         match crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await? {
@@ -188,6 +196,9 @@ async fn spawn_process_with_stdin_mode(
             .id()
             .ok_or_else(|| io::Error::other("missing child pid"))?;
         let assigned_job = job.and_then(|job| {
+            if owned_job.is_some() {
+                return Ok(job);
+            }
             let crate::child::ChildKind::Tokio(child) = &child.inner;
             let process_handle = child
                 .raw_handle()
@@ -198,6 +209,9 @@ async fn spawn_process_with_stdin_mode(
         match assigned_job {
             Ok(job) => WindowsChildTerminator::Job(job),
             Err(err) => {
+                if owned_job.is_some() {
+                    return Err(err.into());
+                }
                 log::warn!(
                     "Windows pipe process tree containment unavailable for pid {pid}: {err}"
                 );
@@ -264,12 +278,23 @@ async fn spawn_process_with_stdin_mode(
     let exit_code = Arc::new(StdMutex::new(None));
     let wait_exit_code = Arc::clone(&exit_code);
     #[cfg(windows)]
-    let wait_job = match &windows_terminator {
-        WindowsChildTerminator::Job(job) => Some(Arc::clone(job)),
-        WindowsChildTerminator::Process(_) => None,
+    let wait_job = match (&windows_terminator, owned_job.is_none()) {
+        (WindowsChildTerminator::Job(job), true) => Some(Arc::clone(job)),
+        (WindowsChildTerminator::Job(_), false) | (WindowsChildTerminator::Process(_), _) => None,
     };
     let wait_handle: JoinHandle<()> = tokio::spawn(async move {
-        let code = match child.wait().await {
+        let status = child.wait().await;
+        #[cfg(windows)]
+        if let Some(job) = owned_job {
+            // Root-wait failure must still stop descendants behind retained handles.
+            let retired = tokio::task::spawn_blocking(move || crate::retire_job(&job)).await;
+            if !matches!(retired, Ok(Ok(()))) || status.is_err() {
+                log::error!("Windows supervised wait failed: {status:?}; retirement: {retired:?}");
+                // Neither the channel nor the cached exit code may claim retirement.
+                return;
+            }
+        }
+        let code = match status {
             Ok(status) => {
                 #[cfg(windows)]
                 if let Some(job) = wait_job
@@ -334,6 +359,9 @@ pub async fn spawn_process(
         arg0,
         PipeStdinMode::Piped,
         inherited_fds,
+        #[cfg(windows)]
+        /*owned_job*/
+        None,
     )
     .await
 }
@@ -357,6 +385,65 @@ pub async fn spawn_process_no_stdin(
         arg0,
         PipeStdinMode::Null,
         inherited_fds,
+        #[cfg(windows)]
+        /*owned_job*/
+        None,
+    )
+    .await
+}
+
+/// Launches once inside a caller-owned non-breakaway Job before the child runs.
+/// Exit receipts require confirmed retirement of every descendant. Keep the Job
+/// alive until dependent resources close; no process-only fallback is permitted.
+#[cfg(windows)]
+pub async fn spawn_process_in_job(
+    program: impl AsRef<OsStr>,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    job: Arc<crate::JobObject>,
+) -> Result<SpawnedProcess> {
+    use std::os::windows::io::AsRawHandle;
+    use winapi::um::jobapi2::QueryInformationJobObject;
+    use winapi::um::winnt::JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+    use winapi::um::winnt::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    use winapi::um::winnt::JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+    use winapi::um::winnt::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+    use winapi::um::winnt::JobObjectExtendedLimitInformation;
+    anyhow::ensure!(
+        !job.supervised_launch_claimed
+            .swap(/*val*/ true, std::sync::atomic::Ordering::AcqRel),
+        "a supervised Windows Job can only launch one workload"
+    );
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    anyhow::ensure!(
+        unsafe {
+            QueryInformationJobObject(
+                job.as_raw_handle().cast(),
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of_val(&limits) as u32,
+                std::ptr::null_mut(),
+            )
+        } != 0,
+        "query supervised Windows Job limits: {}",
+        io::Error::last_os_error()
+    );
+    let flags = limits.BasicLimitInformation.LimitFlags;
+    anyhow::ensure!(
+        flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK) == 0
+            && flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0,
+        "supervised Windows Job must disable breakaway and kill all members on close"
+    );
+    spawn_process_with_stdin_mode(
+        program.as_ref(),
+        args,
+        cwd,
+        env,
+        /*arg0*/ &None,
+        PipeStdinMode::Piped,
+        &[],
+        Some(job),
     )
     .await
 }

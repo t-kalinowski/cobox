@@ -57,6 +57,8 @@ pub use win::PsuedoCon;
 #[cfg(windows)]
 pub use win::conpty::RawConPty;
 #[cfg(windows)]
+pub use win::retire_job;
+#[cfg(windows)]
 pub use windows_input::WindowsTtyInputNormalizer;
 
 #[cfg(target_os = "linux")]
