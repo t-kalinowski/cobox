@@ -4,6 +4,7 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::RawHandle;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use tokio::process::Child;
 use tokio::process::Command;
 use winapi::shared::ntdef::NT_SUCCESS;
@@ -34,6 +35,8 @@ unsafe extern "system" {
 #[derive(Debug)]
 pub struct JobObject {
     handle: OwnedHandle,
+    // Supervised pipe roots must not independently retire the same Job.
+    pub(crate) supervised_launch_claimed: AtomicBool,
     // A mutex makes the state check, Job Object API call, and state update
     // atomic with respect to concurrent preserve and terminate requests.
     preserve_descendants: Mutex<bool>,
@@ -55,6 +58,7 @@ impl JobObject {
 
         Ok(Self {
             handle,
+            supervised_launch_claimed: AtomicBool::new(/*v*/ false),
             preserve_descendants: Mutex::new(false),
         })
     }

@@ -23,39 +23,44 @@ use winapi::um::winnt::JobObjectBasicAccountingInformation;
 /// Callers must report failure instead of a successful cleanup receipt on error.
 pub fn retire_job(job: &JobObject) -> Result<()> {
     let job_handle = job.as_raw_handle();
-    let port = unsafe {
-        CreateIoCompletionPort(
-            INVALID_HANDLE_VALUE,
-            std::ptr::null_mut(),
-            /*CompletionKey*/ 0,
-            /*NumberOfConcurrentThreads*/ 1,
-        )
-    };
-    ensure!(
-        !port.is_null(),
-        "create Job completion port: {}",
-        std::io::Error::last_os_error()
-    );
-    let port = unsafe { OwnedHandle::from_raw_handle(port as _) };
-    let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
-        CompletionKey: job_handle,
-        CompletionPort: port.as_raw_handle() as _,
-    };
-    ensure!(
-        unsafe {
-            SetInformationJobObject(
-                job_handle as _,
-                JobObjectAssociateCompletionPortInformation,
-                (&association as *const JOBOBJECT_ASSOCIATE_COMPLETION_PORT)
-                    .cast_mut()
-                    .cast(),
-                std::mem::size_of_val(&association) as u32,
+    let port = (|| -> Result<OwnedHandle> {
+        let port = unsafe {
+            CreateIoCompletionPort(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null_mut(),
+                /*CompletionKey*/ 0,
+                /*NumberOfConcurrentThreads*/ 1,
             )
-        } != 0,
-        "associate Job completion port: {}",
-        std::io::Error::last_os_error()
-    );
+        };
+        ensure!(
+            !port.is_null(),
+            "create Job completion port: {}",
+            std::io::Error::last_os_error()
+        );
+        let port = unsafe { OwnedHandle::from_raw_handle(port as _) };
+        let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+            CompletionKey: job_handle,
+            CompletionPort: port.as_raw_handle() as _,
+        };
+        ensure!(
+            unsafe {
+                SetInformationJobObject(
+                    job_handle as _,
+                    JobObjectAssociateCompletionPortInformation,
+                    (&association as *const JOBOBJECT_ASSOCIATE_COMPLETION_PORT)
+                        .cast_mut()
+                        .cast(),
+                    std::mem::size_of_val(&association) as u32,
+                )
+            } != 0,
+            "associate Job completion port: {}",
+            std::io::Error::last_os_error()
+        );
+        Ok(port)
+    })();
+    // Setup failures withhold the receipt, but must still stop the workload.
     job.terminate().context("terminate Job")?;
+    let port = port?;
     let deadline = Instant::now() + Duration::from_secs(/*secs*/ 5);
     loop {
         let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
