@@ -71,6 +71,18 @@ The native Console proxy-pool API additionally provisions four isolated account 
 
 Owner reservation does not admit MXC: a separate administrator-protected registry value stays pending during provisioning and becomes complete only after the helper's receipt is written. Failed first migrations and interrupted refreshes remain unavailable to host-identity launches; this prevents old, copied credentials from remaining usable outside the protected registered directory. Older registrations without completion tracking require one explicit setup refresh.
 
+The opt-in native provisioning regression changes machine accounts and firewall rules. Run this multi-refresh acceptance from one explicitly approved elevated shell to avoid repeated UAC prompts. Build current Console helpers, put their directory on `PATH`, select the stable state directory explicitly, and run only after all Console workers have retired:
+
+```powershell
+cargo build --locked -p mcp-console-sandbox-windows
+$helperDirectory = if ($env:CARGO_TARGET_DIR) { "$env:CARGO_TARGET_DIR\debug" } else { "$PWD\target\debug" }
+$env:PATH = "$helperDirectory;$env:PATH"
+$env:MCP_CONSOLE_SANDBOX_TEST_STATE_DIR = "$env:LOCALAPPDATA\mcp-console"
+just test --locked -p codex-windows-sandbox --test console_proxy_pool --run-ignored only --test-threads 1 --retries 0
+```
+
+The regression drives the real native setup API and audits enabled account identities, shared secrets-deny membership/ACLs, fixed firewall exceptions, wrong-state rejection, and repeated explicit refresh. It injects a final-slot setup failure only when that slot has no secrets yet, then checks partial progress and retry; an existing installation reports that injection unavailable and preserves its credentials. It does not establish network enforcement, which requires the later dedicated-account workload acceptance. Different-user rejection still requires a separate Windows-user control. Ordinary tests never invoke provisioning.
+
 ## Console transport
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
