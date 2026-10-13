@@ -13,6 +13,7 @@ use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::Foundation::ERROR_MEMBER_IN_ALIAS;
 use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
@@ -107,7 +108,9 @@ pub fn ensure_sandbox_user(
     log: &mut dyn Write,
 ) -> Result<()> {
     ensure_local_user(username, password, new_user_flags, log)?;
-    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+        && crate::ConsoleProxySlot::current().is_none()
+    {
         let display_name = match username {
             "McpConsoleSandboxOff" => "McpConsoleSandboxOffline",
             "McpConsoleSandboxOn" => "McpConsoleSandboxOnline",
@@ -132,6 +135,13 @@ pub fn ensure_sandbox_user(
         }
     }
     ensure_local_group_member(&crate::sandbox_name(SANDBOX_USERS_GROUP), username)?;
+    if crate::ConsoleProxySlot::current().is_some() {
+        // Every Console identity shares the deny ACE on every Console secrets directory.
+        ensure_local_group_member(
+            &crate::WindowsSandboxProduct::Console.name(SANDBOX_USERS_GROUP),
+            username,
+        )?;
+    }
     Ok(())
 }
 
@@ -206,22 +216,24 @@ pub fn ensure_local_user(
 }
 
 pub fn ensure_local_group_member(group_name: &str, member_name: &str) -> Result<()> {
-    // If the member is already in the group, NetLocalGroupAddMembers may
-    // return an error code. We don't care.
     let group_w = to_wide(OsStr::new(group_name));
     let member_w = to_wide(OsStr::new(member_name));
-    unsafe {
+    let status = unsafe {
         let member = LOCALGROUP_MEMBERS_INFO_3 {
             lgrmi3_domainandname: member_w.as_ptr() as *mut u16,
         };
-        let _ = NetLocalGroupAddMembers(
+        NetLocalGroupAddMembers(
             std::ptr::null(),
             group_w.as_ptr(),
-            3,
+            /*level*/ 3,
             &member as *const _ as *mut u8,
-            1,
-        );
-    }
+            /*totalentries*/ 1,
+        )
+    };
+    anyhow::ensure!(
+        status == NERR_Success || status == ERROR_MEMBER_IN_ALIAS,
+        "failed to enroll {member_name} in required sandbox group {group_name}: {status}"
+    );
     Ok(())
 }
 

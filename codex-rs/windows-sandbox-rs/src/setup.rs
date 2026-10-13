@@ -694,7 +694,14 @@ pub(crate) fn effective_write_roots_for_permissions(
     let write_roots = filter_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root_exclusions(write_roots);
     let write_roots = filter_ssh_config_dependency_roots(write_roots);
-    filter_sensitive_write_roots(write_roots, codex_home)
+    let console_proxy_pool = match crate::WindowsSandboxProduct::current() {
+        crate::WindowsSandboxProduct::Codex => None,
+        crate::WindowsSandboxProduct::Console => match crate::ConsoleProxySlot::current() {
+            Some(_) => codex_home.parent().and_then(Path::parent),
+            None => Some(codex_home),
+        },
+    };
+    filter_sensitive_write_roots(write_roots, codex_home, console_proxy_pool)
 }
 
 #[derive(Serialize)]
@@ -930,6 +937,10 @@ fn verify_setup_completed(codex_home: &Path) -> Result<()> {
 #[path = "setup_refresh_tests.rs"]
 mod refresh_tests;
 
+#[cfg(test)]
+#[path = "setup_console_proxy_tests.rs"]
+mod console_proxy_tests;
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -1020,7 +1031,11 @@ fn run_setup_exe_payload(
     }
 
     let exe_w = crate::winutil::to_wide(&exe);
-    let params = quote_arg(payload_b64);
+    let mut params = quote_arg(payload_b64);
+    if let Some(slot) = crate::ConsoleProxySlot::current() {
+        params.push(' ');
+        params.push_str(&slot.helper_argument());
+    }
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
@@ -1438,7 +1453,20 @@ fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
+fn filter_sensitive_write_roots(
+    mut roots: Vec<PathBuf>,
+    codex_home: &Path,
+    console_proxy_pool: Option<&Path>,
+) -> Vec<PathBuf> {
+    if let Some(pool) = console_proxy_pool {
+        let pool_key = canonical_path_key(pool);
+        let pool_prefix = format!("{}/", pool_key.trim_end_matches('/'));
+        roots.retain(|root| {
+            let key = canonical_path_key(root);
+            let root_prefix = format!("{}/", key.trim_end_matches('/'));
+            key != pool_key && !key.starts_with(&pool_prefix) && !pool_key.starts_with(&root_prefix)
+        });
+    }
     // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox,
     // CODEX_HOME/.sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
     // control/state and helper binaries and must remain tamper-resistant.
@@ -2365,7 +2393,11 @@ mod tests {
         let user_profile_key = super::canonical_path_key(&user_profile);
         roots.retain(|root| super::canonical_path_key(root) != user_profile_key);
         roots.retain(|root| !super::is_user_profile_root_exclusion(root, &user_profile));
-        let roots = super::filter_sensitive_write_roots(roots, &codex_home);
+        let roots = super::filter_sensitive_write_roots(
+            roots,
+            &codex_home,
+            /*console_proxy_pool*/ None,
+        );
 
         assert_eq!(vec![documents], roots);
     }

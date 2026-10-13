@@ -510,6 +510,9 @@ fn open_setup_log(sbx_dir: &Path, mode: SetupMode) -> Result<Box<dyn Write>> {
 
 fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
     let mut args = std::env::args().collect::<Vec<_>>();
+    if let Some(slot) = crate::ConsoleProxySlot::current() {
+        args.retain(|arg| arg != &slot.helper_argument());
+    }
     if args.len() != 2 {
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
@@ -564,8 +567,9 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
             "registered Core requires service-owned provisioning"
         );
         anyhow::ensure!(
-            crate::runtime_ownership::load_installation()?
-                .is_none_or(|record| record.runtime.is_none()),
+            crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+                || crate::runtime_ownership::load_installation()?
+                    .is_none_or(|record| record.runtime.is_none()),
             "registered Core owns these sandbox accounts; helper provisioning is not permitted"
         );
         Some(guard)
@@ -841,6 +845,13 @@ fn configure_offline_sandbox_network(
 }
 
 fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> Result<()> {
+    let secrets_group = if crate::WindowsSandboxProduct::current()
+        == crate::WindowsSandboxProduct::Console
+    {
+        crate::resolve_sid(&crate::WindowsSandboxProduct::Console.name(crate::SANDBOX_USERS_GROUP))?
+    } else {
+        sandbox_group_sid.to_vec()
+    };
     lock_sandbox_dir(
         &sandbox_dir(&payload.codex_home),
         &payload.real_user,
@@ -863,7 +874,7 @@ fn lock_persistent_sandbox_dirs(payload: &Payload, sandbox_group_sid: &[u8]) -> 
     lock_sandbox_dir(
         &sandbox_secrets_dir(&payload.codex_home),
         &payload.real_user,
-        sandbox_group_sid,
+        &secrets_group,
         DENY_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,

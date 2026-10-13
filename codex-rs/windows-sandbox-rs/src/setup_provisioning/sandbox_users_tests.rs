@@ -1,5 +1,7 @@
-//! Native account repair regression; uses a disposable account and requires elevation.
+//! Native enrollment failure and account repair regressions. Only the ignored
+//! account repair test creates a disposable account and requires elevation.
 
+use super::ensure_local_group_member;
 use super::ensure_local_user;
 use crate::local_user_flags;
 use crate::set_local_user_flags;
@@ -16,6 +18,35 @@ use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_4;
 
 struct TestAccount(String);
+
+#[test]
+fn group_enrollment_failure_is_not_reported_as_success() -> Result<()> {
+    use windows_sys::Win32::NetworkManagement::NetManagement::NERR_GroupNotFound;
+    use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupGetInfo;
+    let directory = tempfile::tempdir()?;
+    let group = format!(
+        "CoboxMissing{}",
+        directory.path().file_name().unwrap().to_string_lossy()
+    );
+    let mut info = std::ptr::null_mut();
+    let status = unsafe {
+        NetLocalGroupGetInfo(
+            std::ptr::null(),
+            to_wide(&group).as_ptr(),
+            /*level*/ 0,
+            &mut info,
+        )
+    };
+    if !info.is_null() {
+        unsafe { NetApiBufferFree(info.cast()) };
+    }
+    assert_eq!(status, NERR_GroupNotFound);
+    // This API cannot create the verified missing group or change any membership.
+    let error = ensure_local_group_member(&group, &crate::runtime_ownership::current_setup_user()?)
+        .expect_err("missing deny group must fail provisioning");
+    assert!(error.to_string().contains(&group), "{error:#}");
+    Ok(())
+}
 
 impl Drop for TestAccount {
     fn drop(&mut self) {

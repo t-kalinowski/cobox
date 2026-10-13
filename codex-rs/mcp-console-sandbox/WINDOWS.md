@@ -65,6 +65,8 @@ State defaults to `%LOCALAPPDATA%\mcp-console`; `setup` and `status` accept an a
 
 Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOnline**; login names are `McpConsoleSandboxOff` and `McpConsoleSandboxOn` to fit Windows' 20-character limit. Setup also uses `ConsoleSandboxUsers`, protected credentials in `.sandbox-secrets`, and versioned records under `.sandbox`.
 
+Console's native proxy-slot identity is selected once by the trusted launcher and passed directly to its helpers. Base and slot identities exclude write grants overlapping their pool state, including ancestors, and share a mandatory secrets-deny group. Required group enrollment errors fail setup instead of leaving an account outside that protection. Ordinary Console launches cannot repair or reconcile account provisioning automatically.
+
 ## Console transport
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:

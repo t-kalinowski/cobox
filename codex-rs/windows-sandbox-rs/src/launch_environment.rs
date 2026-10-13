@@ -17,6 +17,9 @@ pub(crate) fn needs_environment(payload: &str) -> bool {
 
 #[cfg(windows)]
 pub(crate) fn configure_command(command: &mut std::process::Command, payload: &str) -> Result<()> {
+    if let Some(slot) = crate::ConsoleProxySlot::current() {
+        command.arg(slot.helper_argument());
+    }
     // A wrapper may itself carry a payload. Never inherit its chunks into setup.
     for (key, _) in std::env::vars_os() {
         if environment_transport::is_key(&key) {
