@@ -39,6 +39,8 @@ jobs:
         run: just test --locked -p mcp-console-sandbox --retries 0
       - name: Check shared bridge and product identity
         run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(stdio_bridge::) | test(wfp::product_tests::)'
+      - name: Check MXC process lifetime and proxy admission
+        run: just test --locked -p codex-utils-pty -p codex-network-proxy --retries 0 -E 'test(supervised_job_) | test(job_admission_)'
       - name: Build standalone release executable and companions
         run: cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
       - name: Exercise release artifacts

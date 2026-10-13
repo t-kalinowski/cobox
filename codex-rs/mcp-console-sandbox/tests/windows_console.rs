@@ -27,7 +27,14 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
             ]}}),
             "cannot enforce read restrictions",
         ),
-        (json!({"proxy":{}}), "managed proxy configuration"),
+        (
+            json!({"proxy":{
+                "enabled":true,"enableSocks5":true,"enableSocks5Udp":false,
+                "allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,
+                "mode":"full","domains":null,"unixSockets":null,"allowLocalBinding":false
+            }}),
+            "managed proxy configuration",
+        ),
         (
             json!({"linux_backend":"bubblewrap"}),
             "linux_backend is supported only",

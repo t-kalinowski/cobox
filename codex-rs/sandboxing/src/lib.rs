@@ -37,8 +37,12 @@ pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
 pub use manager::with_managed_mitm_ca_readable_root;
 pub use spawn::SpawnRequest;
+#[cfg(windows)]
+pub use spawn::WindowsSandboxLaunchContext;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;
+#[cfg(windows)]
+pub use spawn::spawn_process_with_windows_context;
 pub use violation::FileSystemSandboxViolation;
 pub use violation::FileSystemSandboxViolationReason;
 pub use violation::NetworkSandboxViolation;
@@ -53,6 +57,10 @@ pub use windows::resolve_windows_elevated_filesystem_overrides;
 pub use windows::resolve_windows_restricted_token_filesystem_overrides;
 pub use windows::unsupported_windows_restricted_token_sandbox_reason;
 pub use windows::windows_sandbox_uses_elevated_backend;
+#[cfg(windows)]
+pub use windows_mxc::WindowsSandboxPreference;
+#[cfg(windows)]
+pub use windows_mxc::select_windows_sandbox;
 
 use codex_protocol::error::CodexErr;
 

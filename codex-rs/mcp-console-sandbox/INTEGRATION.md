@@ -6,9 +6,11 @@ The package-local instructions for the [cross-platform runner](AGENTS.md) and [W
 
 ## What the patch carries
 
+Windows MXC integration uses `codex-sandboxing::select_windows_sandbox`, policy transformation, and host-context spawning. The opt-in shared pipe path owns a non-breakaway Job through confirmed retirement; dedicated proxy listeners authenticate clients against that Job. The legacy retirement export forwards to the shared implementation. These APIs preserve existing Codex callers and require no `codex-core` changes. Console keeps legacy-account discovery at its boundary and falls back while old credentials have no registered location.
+
 Upstream already supplies filesystem/network policy, the managed proxy, Seatbelt, seccomp, bubblewrap, and namespace-init cleanup. The patch adds a [standalone configuration boundary](PROTOCOL.md), target-environment isolation, optional trusted Seatbelt extensions, and one [supervised lifetime](LIFECYCLE.md) with cancellation, caller-death observation, private storage, and cleanup-error reporting. Native Linux waiting helpers also release target stdin promptly. These additions do not imply that every other upstream execution path lacks process management or cleanup.
 
-The shared policy models, Seatbelt policy files, seccomp rules, proxy implementation, vendored bubblewrap, and helper build recipe remain unchanged. No Console-specific policy defaults, sideband framing, application restart, or watchdog are included. Behavioral contracts and their tests are maintained in [PROTOCOL.md](PROTOCOL.md) and [LIFECYCLE.md](LIFECYCLE.md#executable-acceptance-tests); historical handoffs do not override them.
+The shared policy models, Seatbelt policy files, seccomp rules, proxy destination policies, vendored bubblewrap, and helper build recipe remain unchanged. No Console-specific policy defaults, sideband framing, application restart, or watchdog are included. Behavioral contracts and their tests are maintained in [PROTOCOL.md](PROTOCOL.md) and [LIFECYCLE.md](LIFECYCLE.md#executable-acceptance-tests); historical handoffs do not override them.
 
 ## Files outside the runner package
 

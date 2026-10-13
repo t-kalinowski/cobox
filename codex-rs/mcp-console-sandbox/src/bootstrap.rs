@@ -4,12 +4,12 @@ use crate::config::Lifecycle;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
+#[cfg(windows)]
+use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
-#[cfg(windows)]
-use serde_json::Value as RemoteNetworkProxyConfig;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::fs::File;
