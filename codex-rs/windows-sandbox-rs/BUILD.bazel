@@ -79,5 +79,8 @@ rust_test(
     rustc_flags = WINDOWS_RUSTC_LINK_FLAGS,
     tags = ["exclusive-if-local"],
     target_compatible_with = ["@platforms//os:windows"],
-    deps = [":windows-sandbox-rs"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [":windows-sandbox-rs"] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
