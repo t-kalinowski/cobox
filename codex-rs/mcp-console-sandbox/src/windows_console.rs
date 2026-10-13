@@ -51,11 +51,7 @@ pub(crate) fn run() -> Result<i32> {
         request.lifecycle.cleanup_timeout_ms.is_none(),
         "cleanup_timeout_ms is not configurable on Windows"
     );
-    let preference = request
-        .windows_backend
-        .map(WindowsSandboxPreference::try_from)
-        .transpose()?
-        .unwrap_or_default();
+    let preference = request.windows_backend.unwrap_or_default();
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network)

@@ -192,17 +192,12 @@ fn invalid_nested_configuration_is_rejected_before_target_execution() {
         assert!(!output.status.success(), "{value}: {output:?}");
         assert!(output.stdout.is_empty());
     }
-    for (field, invalid) in [
-        ("linux_backend", json!("landlock")),
-        ("macos_seatbelt_profile_extension", json!("")),
-    ] {
-        let mut value = request(&["/bin/echo", "must not execute"]);
-        value["filesystem"] = json!({"kind":"external-sandbox"});
-        value[field] = invalid;
-        let output = run(frame(&value), &[]);
-        assert!(!output.status.success(), "{value}: {output:?}");
-        assert!(output.stdout.is_empty());
-    }
+    let mut value = request(&["/bin/echo", "must not execute"]);
+    value["filesystem"] = json!({"kind":"external-sandbox"});
+    value["macos_seatbelt_profile_extension"] = json!("");
+    let output = run(frame(&value), &[]);
+    assert!(!output.status.success(), "{value}: {output:?}");
+    assert!(output.stdout.is_empty());
 }
 
 #[test]

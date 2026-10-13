@@ -3,8 +3,6 @@
 
 #[path = "lifecycle/cancellation_tests.rs"]
 mod cancellation;
-#[path = "../src/codex.rs"]
-mod codex;
 #[path = "lifecycle/config_tests.rs"]
 mod configuration;
 #[path = "lifecycle/lifecycle_tests.rs"]
@@ -34,7 +32,7 @@ mod terminal;
 #[path = "transport/transport_tests.rs"]
 mod transport;
 
-use crate::codex::cargo_bin;
+use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -426,7 +424,7 @@ fn managed_proxy_applies_the_upstream_allowlist() {
 #[cfg(target_os = "macos")]
 #[test]
 fn ordinary_seatbelt_profile_retains_native_sysctl_denials() {
-    // The removed application profile allowed this query. The ordinary process
+    // The ordinary process
     // profile permits hw.ncpu but denies kern.boottime.
     for (name, allowed) in [("hw.ncpu", true), ("kern.boottime", false)] {
         let output = run(frame(&fixture("sysctl", &[name])), &[]);

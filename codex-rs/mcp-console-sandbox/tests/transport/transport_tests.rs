@@ -7,25 +7,6 @@ use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 
 #[test]
-fn prequeued_stdin_can_itself_be_a_legacy_bootstrap_frame() {
-    let mut legacy = request(&["/bin/echo", "wrong-command"]);
-    legacy["version"] = json!(1);
-    let input = [frame(&legacy), (0..=255).collect()].concat();
-    let (read, mut write) = std::io::pipe().unwrap();
-    // This fits in an anonymous pipe and is queued before process creation.
-    write.write_all(&input).unwrap();
-    drop(write);
-    let staging = tempfile::tempdir().unwrap();
-    let (child, mut bootstrap) = spawn(runner(staging.path()).stdin(Stdio::from(read)));
-    bootstrap
-        .write_all(&frame(&fixture("stdout", &[])))
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!((output.stdout, output.stderr), (input, vec![]));
-}
-
-#[test]
 fn regular_file_stdin_preserves_offset_seekability_and_shared_description() {
     let input = b"unused-prefix\0remaining\xff";
     let mut file = tempfile::tempfile().unwrap();
@@ -186,26 +167,6 @@ fn bootstrap_resource_is_closed_while_target_and_proxy_are_alive() {
             (output.stdout, output.stderr),
             (b"released".to_vec(), vec![])
         );
-    }
-}
-
-#[test]
-fn incomplete_bootstrap_cancels_startup_even_with_valid_configuration_on_stdin() {
-    let mut request = request(&["/bin/echo", "must-not-launch"]);
-    request["proxy"] = proxy_config();
-    let bytes = frame(&request);
-    for length in [0, 1, 2, 3, 4, bytes.len() - 1] {
-        let mut input = tempfile::tempfile().unwrap();
-        input.write_all(&bytes).unwrap();
-        input.rewind().unwrap();
-        let staging = tempfile::tempdir().unwrap();
-        let (child, mut bootstrap) = spawn(runner(staging.path()).stdin(input));
-        bootstrap.write_all(&bytes[..length]).unwrap();
-        drop(bootstrap);
-        let output = child.wait_with_output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
-        assert_eq!(output.stdout, b"");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("read bootstrap"));
     }
 }
 

@@ -4,7 +4,7 @@ The Windows executable uses Codex's shared capability, policy conversion, and la
 
 The JSON `windows_backend` field accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto prefers native MXC when the Windows build and policy support it, otherwise selects elevated. Explicit selections fail closed; launch failures never trigger a backend retry. MXC requires no setup. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup.
 
-The previous field name, `windows_sandbox_level`, remains accepted as an alias. Supply only one of the two names; a configuration containing both is rejected.
+`windows_sandbox_level` is an alias for `windows_backend`. Supply only one of the two names; a configuration containing both is rejected.
 
 Existing Console sandbox accounts keep Auto on the legacy elevated backend. Old setup does not register every directory containing account credentials, so MXC's host identity cannot safely protect those unknown locations. This patch does not migrate or remove those accounts; explicit MXC reports the incompatibility. `setup` and `status` continue to manage only the legacy backend.
 
@@ -61,7 +61,7 @@ Run from an ordinary interactive PowerShell session:
 
 Setup requests Windows UAC approval when provisioning is needed. Repeating it reuses current setup records and enabled accounts. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule.
 
-Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
+Setup version 6 installs account-scoped WFP loopback filters; installations with an older setup version require an approved refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
 The launcher creates `.sandbox-bin` as the caller before elevation, so ordinary launches can refresh its protected DACL. An older installation whose helper directory is administrator-owned can fail with `helper_sandbox_lock_failed`; it needs an ownership repair before ordinary launches will work.
 
@@ -73,11 +73,11 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
-- Omitted or null `windows_backend` means `auto`. Consumers requiring the previous default must send `elevated`; `disabled` is rejected.
+- Omitted or null `windows_backend` means `auto`. Explicit backend names are `auto`, `mxc`, `elevated`, and `unelevated`.
 - Legacy targets run on a private Windows desktop with Console-specific names; MXC uses the native backend's desktop isolation.
 - `windows_state_dir` optionally selects an absolute persistent legacy state directory. Only legacy backends resolve its `LOCALAPPDATA` default; MXC needs neither and does not inspect setup records.
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
-- Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
+- Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but deletion outside writable roots is not reliably denied; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
 - `external-sandbox` delegates enforcement to the caller's outer sandbox when no managed proxy is requested. Codex's selection rules omit native restrictions, while the runner uses the existing supervised Job helper for descendant retirement and private-storage cleanup.
 - MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto falls back when local binding is disallowed; legacy Windows retains its existing managed-proxy rejection. Active SOCKS5 UDP and Unix-socket configurations fail preflight for every backend because neither Console path supports them. An unused UDP flag is accepted when SOCKS5 is disabled.
@@ -89,7 +89,7 @@ The ordinary command arguments, cwd, and stdio remain the target's inputs. Envir
 
 ## Command interface
 
-Run `--help` for `setup` and `status`. Execute workloads only with `--config-env NAME -- command [args...]`. The former `run` subcommand and its permission, environment, root-override, proxy, and desktop arguments are removed; they fail with a CLI diagnostic and exit 2. They are not mapped onto JSON fields. The shared configuration has no version field; cwd comes from the caller, environment follows its inheritance/override rules, and policy uses its existing profile and filesystem fields. Target arguments after `--` pass through unchanged, including names that used to be runner options. Ordinary launches require explicit initial provisioning for elevated mode.
+Run `--help` for `setup` and `status`. Execute workloads with `--config-env NAME -- command [args...]`. Arguments after `--` pass through unchanged. Cwd comes from the caller; target environment and policy use the shared JSON fields. Elevated mode requires explicit initial provisioning.
 
 Targets still need host read/traverse permission. In particular, Python 3.14's private temporary directories can grant access only through owner/admin/system ACL entries that a restricted token cannot use. Ordinary directories inheriting the current user's access work without machine-wide ACL changes. Use native Windows paths with backslashes for `cmd.exe`. Targets also remain subject to host Application Control policy; error 4551 is a host policy rejection.
 
@@ -105,22 +105,16 @@ Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner
 
 ## Validation limits
 
-The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) records the current builds, runtime checks, restored files, counts, and provisioning/Bazel limits.
+Unelevated token/ACL enforcement does not reliably deny deletion outside writable roots, including with `:read-only`. Broadly writable inherited ACLs can also permit elevated-account deletion. File-creation denial does not establish deletion isolation; the runner retains the native token/ACL model.
 
-The public environment-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation; transport regressions cover JSON/path validation and exact target argument forwarding. Rejection of the removed CLI was verified separately during the migration, without retaining a test for unsupported options. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
+The ordinary Windows suite covers environment transport, policy rejection, private desktops, binary stdin, exit codes, Job retirement, owner death, and runner loss. Public MXC contracts return early with a diagnostic when the native runtime is unavailable or existing Console accounts prevent MXC selection. The fixed-command native MXC proxy contract also runs on provisioned hosts. These tests never provision, migrate, or delete accounts.
+
+Elevated TCP/UDP regressions require interactive administrator setup and are opt-in:
 
 ```powershell
 just test --locked -p mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
 ```
 
-MXC descendant-retirement, caller-death, and public managed-proxy allow/deny tests run in the ordinary Windows suite. They return early with a diagnostic only when native MXC is unavailable or legacy Console accounts prevent public MXC execution. The fixed-command native MXC proxy test also runs on provisioned hosts. These tests never provision, migrate, or delete accounts.
+These tests use IPv4/IPv6 host listeners and a compiled target fixture, first verifying online connectivity and then offline denial. UDP checks actual receipt. For a nondefault provisioned directory, set `MCP_CONSOLE_SANDBOX_TEST_STATE_DIR` to its absolute path. Missing setup or skipped runtime contracts must be reported separately from passing checks.
 
-The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. For a nondefault provisioned directory, set `MCP_CONSOLE_SANDBOX_TEST_STATE_DIR` to its absolute path; this supplies `windows_state_dir` without changing the test harness's `LOCALAPPDATA`. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
-
-On the Windows host tested on 2026-10-02, the unelevated backend allowed deletion outside the writable roots, including with the `:read-only` profile. The upstream `legacy_workspace_write_delete_is_limited_to_writable_roots` test also failed at the unmodified `rust-v0.154.0` release. Successful file-creation denial does not establish deletion isolation. This is an unresolved native enforcement limitation, not a passing security gate; this branch does not replace the upstream token/ACL model to conceal the failure.
-
-Before the WFP correction, the elevated offline account connected to loopback listeners despite enabled firewall profiles and installed Console rules. Account-scoped filters at the ALE connect layers now enforce the existing offline loopback policy. After an approved setup refresh, the IPv4/IPv6 TCP and UDP regressions passed with online positive controls. External offline TCP remained blocked. Elevated stdio, exit codes, denied file creation, descendant retirement, caller death, and private cleanup also passed. The [dated audit](VALIDATION_2026_10_02.md) records the complete scope.
-
-Direct comparison with the installed official `codex-cli 0.160.0` reproduced the original loopback connection and unelevated deletion failures. After the correction, the official executable still delivered offline loopback TCP/UDP while Console blocked them. Both elevated implementations denied external TCP connections and protected files in a directory whose ACL gave sandbox accounts read/execute access. Both allowed deletion in the Public directory's broadly writable inherited ACLs. These results distinguish native backend and host-ACL limits from extraction differences; they do not certify the remaining deletion boundary. The extraction's disabled private-desktop default was a separate defect and is corrected with executable desktop-identity tests.
-
-The upstream control-pipe regression invokes `python` by name. On this host the Windows app execution alias started a descendant outside the tested Job; placing the actual Python installation on the test process's `PATH` made the same test pass. The standalone lifecycle contracts use the compiled fixture directly.
+The upstream control-pipe fixture invokes `python` by name; use an actual Python installation on the test process's `PATH`, since the Windows app execution alias can create a descendant outside the tested Job. Standalone lifecycle contracts use the compiled fixture directly.

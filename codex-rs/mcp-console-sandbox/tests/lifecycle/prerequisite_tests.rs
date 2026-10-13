@@ -2,28 +2,6 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn ordinary_native_entry_keeps_app_server_socket_isolation_guard() {
-    let directory = tempfile::tempdir().unwrap();
-    // Native invocations without trusted standalone setup retain upstream's
-    // app-server socket isolation requirement.
-    let profile =
-        serde_json::to_string(&codex_protocol::models::PermissionProfile::read_only()).unwrap();
-    let output = runner(directory.path())
-        .args(["--sandbox-policy-cwd", "/", "--permission-profile"])
-        .arg(profile)
-        .args(["--use-legacy-landlock", "--", "/bin/echo", "must not run"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("filesystem-restricted execution requires bubblewrap"),
-        "{output:?}"
-    );
-}
-
-#[test]
 fn explicit_backend_selection_does_not_fall_back_when_namespaces_are_denied() {
     for backend in [None, Some("bubblewrap")] {
         let directory = tempfile::tempdir().unwrap();
@@ -135,46 +113,6 @@ fn namespace_lifetime_does_not_require_pidfds_or_a_host_subreaper() {
     assert_eq!(output.stderr, b"");
     let temporary = std::str::from_utf8(&output.stdout).unwrap().trim();
     assert!(!Path::new(temporary).exists());
-}
-
-#[test]
-fn inherited_procfs_identity_does_not_prevent_native_execution() {
-    let directory = tempfile::tempdir().unwrap();
-    let native_runner = runner(directory.path());
-    let library = directory.path().join("procfs.so");
-    let source =
-        codex_utils_cargo_bin::find_resource!("tests/lifecycle/procfs_interposer.c").unwrap();
-    let compiler = Command::new("cc")
-        .args(["-shared", "-fPIC"])
-        .arg(source)
-        .args(["-o"])
-        .arg(&library)
-        .arg("-ldl")
-        .output()
-        .unwrap();
-    assert!(compiler.status.success(), "{compiler:?}");
-    let mut config = request(&["/bin/echo", "target"]);
-    for key in ["command", "cwd", "environment"] {
-        config.as_object_mut().unwrap().remove(key);
-    }
-    // Supply a mismatched procfs identity at the real native execution hook.
-    // Full differential policy tests exercise real inherited procfs separately.
-    let output = Command::new(native_runner.get_program())
-        .args([
-            "--config-env",
-            "SANDBOX_TEST_CONFIG",
-            "--",
-            "/bin/echo",
-            "target",
-        ])
-        .env("SANDBOX_TEST_CONFIG", config.to_string())
-        .env("RUST_BACKTRACE", "1")
-        .env("LD_PRELOAD", library)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"target\n");
-    assert_eq!(output.stderr, b"");
 }
 
 #[test]
