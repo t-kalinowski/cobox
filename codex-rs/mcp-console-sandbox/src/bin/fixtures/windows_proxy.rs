@@ -61,6 +61,10 @@ fn headers(stream: &mut TcpStream) -> Result<String> {
         stream.read_exact(&mut byte)?;
         result.push(byte[0]);
     }
+    anyhow::ensure!(
+        result.ends_with(b"\r\n\r\n"),
+        "HTTP response headers exceed 16384 bytes"
+    );
     Ok(String::from_utf8(result)?)
 }
 

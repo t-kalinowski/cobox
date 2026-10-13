@@ -157,18 +157,29 @@ fn socks_probe_requires_a_complete_valid_connect_reply() -> Result<()> {
 }
 
 #[test]
-fn head_probe_ignores_content_length_but_get_reads_the_body() -> Result<()> {
-    for (method, expected_body) in [("HEAD", ""), ("GET", "body")] {
+fn http_probe_requires_complete_headers_and_obeys_head() -> Result<()> {
+    let ordinary = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+    let prefix = "HTTP/1.1 200 OK\r\nX-Padding: ";
+    let padded = format!("{prefix}{}", "x".repeat(16380 - prefix.len()));
+    let complete = format!("{padded}\r\n\r\n");
+    let incomplete = format!("{padded}xxxx");
+    for (method, headers, expected_body) in [
+        ("HEAD", ordinary, Some("")),
+        ("GET", ordinary, Some("body")),
+        ("HEAD", complete.as_str(), Some("")),
+        ("HEAD", incomplete.as_str(), None),
+    ] {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let endpoint = format!("http://{}", listener.local_addr()?);
+        let server_headers = headers.to_owned();
         let server = std::thread::spawn(move || -> Result<()> {
             let mut stream = accept(listener)?;
             assert!(
                 read_headers(&mut stream)?
                     .starts_with(&format!("{method} http://example.test:80/ HTTP/1.1\r\n"))
             );
-            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")?;
-            stream.write_all(expected_body.as_bytes())?;
+            stream.write_all(server_headers.as_bytes())?;
+            stream.write_all(expected_body.unwrap_or("").as_bytes())?;
             Ok(())
         });
         let response = probe(
@@ -177,10 +188,13 @@ fn head_probe_ignores_content_length_but_get_reads_the_body() -> Result<()> {
         server
             .join()
             .map_err(|_| anyhow::anyhow!("HTTP probe server panicked"))??;
-        assert_eq!(
-            response,
-            json!({"headers":"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", "body":expected_body})
-        );
+        match expected_body {
+            Some(body) => assert_eq!(response, json!({"headers":headers, "body":body})),
+            None => assert_eq!(
+                response,
+                json!({"error":"destination HTTP response: HTTP response headers exceed 16384 bytes"})
+            ),
+        }
     }
     Ok(())
 }
