@@ -10,6 +10,9 @@ use std::process::Command;
 #[path = "../src/windows_proxy_lock.rs"]
 mod windows_proxy_lock;
 
+#[path = "windows_proxy/smoke_tests.rs"]
+mod smoke;
+
 #[test]
 fn legacy_environment_admission_observes_the_setup_barrier() -> anyhow::Result<()> {
     use codex_utils_cargo_bin::cargo_bin;

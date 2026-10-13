@@ -115,6 +115,7 @@ rust_test(
         "src/windows_proxy_lock.rs",
         "src/windows_proxy_tests.rs",
         "tests/windows_proxy.rs",
+        "tests/windows_proxy/smoke_tests.rs",
     ],
     crate_root = "tests/windows_proxy.rs",
     data = [
