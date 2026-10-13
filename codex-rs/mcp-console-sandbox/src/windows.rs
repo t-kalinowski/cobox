@@ -46,11 +46,20 @@ pub(crate) fn run() -> Result<i32> {
     .iter()
     .all(|name| directory.join(name).is_file());
     if matches!(cli.action, Action::Status) {
+        let (mut filesystem, network) = PermissionProfile::read_only().to_runtime_permissions();
+        let mxc_state_protection =
+            crate::windows_proxy::protect_state(&mut filesystem, state_dir.as_path());
+        let mxc_available = mxc_state_protection.is_ok()
+            && codex_sandboxing::windows_mxc_available_for(
+                &PermissionProfile::from_runtime_permissions(&filesystem, network),
+            );
         println!(
             "{}",
             serde_json::json!({
                 "state_dir": state_dir,
                 "configured": configured,
+                "mxc_available": mxc_available,
+                "mxc_state_error": mxc_state_protection.err().map(|error| error.to_string()),
                 "helpers_available": helpers_available,
                 "offline_account": "McpConsoleSandboxOff",
                 "online_account": "McpConsoleSandboxOn",

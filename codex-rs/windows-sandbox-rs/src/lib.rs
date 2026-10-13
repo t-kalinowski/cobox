@@ -107,6 +107,10 @@ mod process;
 mod product;
 #[cfg(windows)]
 pub use console_proxy_slot::ConsoleProxySlot;
+#[cfg(windows)]
+mod proxy_observer;
+#[cfg(windows)]
+pub use proxy_observer::allow_console_proxy_observer;
 #[cfg(target_os = "windows")]
 mod retirement;
 #[cfg(target_os = "windows")]

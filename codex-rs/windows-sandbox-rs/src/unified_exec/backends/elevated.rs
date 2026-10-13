@@ -200,7 +200,12 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         permissions,
         codex_home: codex_home.to_path_buf(),
         cwd: cwd.to_path_buf(),
-        env_map: env_map.clone(),
+        env_map: if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console
+        {
+            crate::env::console_host_environment(std::env::vars_os())?
+        } else {
+            env_map.clone()
+        },
         logs_base_dir: elevated.logs_base_dir,
         spawn_request: SpawnRequest {
             command,

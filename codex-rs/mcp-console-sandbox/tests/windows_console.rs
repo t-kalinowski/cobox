@@ -94,6 +94,7 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
     for code in [0i32, 125, -1, -1_073_741_819] {
         let mut child = Command::new(cargo_bin("mcp-console-sandbox")?)
             .env("CONSOLE_POLICY", config.to_string())
+            .env("CODEX_WINDOWS_REGISTERED_CORE", "1")
             .args([
                 "--config-env",
                 "CONSOLE_POLICY",

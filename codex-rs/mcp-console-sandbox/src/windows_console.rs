@@ -115,6 +115,41 @@ pub(crate) fn run() -> Result<i32> {
             Ok(directory.keep())
         })
         .transpose()?;
+    // Resolve only the policy's explicit temporary-directory grants from target inputs.
+    // Provisioning still receives the trusted host environment; neither backend may
+    // substitute the host's temp path for a target override (or an omitted target value).
+    let temporary_paths = request
+        .environment
+        .iter()
+        .filter(|(key, value)| {
+            (key.eq_ignore_ascii_case("TEMP") || key.eq_ignore_ascii_case("TMP"))
+                && std::path::Path::new(value).is_absolute()
+        })
+        .map(|(_, value)| AbsolutePathBuf::from_absolute_path(value))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    filesystem.entries = filesystem
+        .entries
+        .into_iter()
+        .flat_map(|entry| {
+            if matches!(
+                &entry.path,
+                FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::Tmpdir,
+                }
+            ) {
+                temporary_paths
+                    .iter()
+                    .map(|path| {
+                        let mut entry = entry.clone();
+                        entry.path = path.clone().into();
+                        entry
+                    })
+                    .collect()
+            } else {
+                vec![entry]
+            }
+        })
+        .collect();
     let profile = PermissionProfile::from_runtime_permissions(&filesystem, network);
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let result = tokio::runtime::Builder::new_current_thread()
