@@ -2,6 +2,14 @@
 
 ## Latest review follow-up
 
+Two additional ready fixes address named-environment Job coverage (#15) and incomplete HTTP probe headers (#20). The other fourth-round findings remain open; this delivery does not claim to address them or refresh provisioning.
+
+- The Job regression now connects assigned and outside-Job clients to both default and named HTTP/SOCKS listeners. Removing only the named-listener Job requirement made the targeted executable fail (`fd97d223-503b-44f3-8c14-1a1aeae01dc1`). After restoring enforcement, `just test --locked -p codex-network-proxy --retries 0 --status-level fail --final-status-level fail` passed **320/320**, zero skipped (`c743cf6a-8c1b-46b9-a60b-f8cee353f936`).
+- The HTTP probe rejects a header that reaches 16,384 bytes without its terminator while accepting a complete header at exactly that limit. The expanded HEAD/GET executable failed before the fix (`200d21c3-0dd7-48c1-b157-9615a85464d0`); the owning stage's `just test --locked -p mcp-console-sandbox --test windows_proxy_probes --retries 0` then passed **3/3** (`658a6973-d781-48ae-b683-98f1a3e7fab1`). After cleaning the changed package and restacking, the same command passed **9/9**, zero skipped, at `c10bc62c0f1ccd0a8d0351734fd12f4a38fa8ab5` (`86a6489c-6a4a-42ef-a2d6-54e342b87192`, 4.175 s).
+- Scoped `just fix` passed for network-proxy (42.19 s) and the companion (22.15 s), followed by successful `just fmt`. Unrelated Windows formatter rewrites were inspected and restored. Tests were not rerun after lint/format. The larger native and selected-suite results below remain evidence at their stated earlier source revisions.
+
+### Third review round
+
 Nineteen new inline comments were addressed in the third review round. Account/Job authentication, runtime identity/explicit provisioning/machine acceptance, and account-route/environment/native/policy acceptance are now separate stages, producing 23 PRs. Runtime fixes propagate failed deny-group enrollment, protect pool state for base accounts, preserve failed-slot reports, narrow the added observer ACE to process-limited query, and materialize explicit project roots before MXC selection. Acceptance requires actual protocol denials, complete SOCKS replies, owner-death storage removal, and post-lease rollback. Native helper lookup now uses Cargo/Bazel runfiles. No further setup or UAC ran.
 
 Cross-worktree Cargo artifact reuse was detected when a 35-case target unexpectedly listed only 28 cases: run `df294079-e780-4cd0-b193-cd69814c38d8` selected zero tests and is not a pass. A package clean restored the correct target; the strengthened owner-death/rollback pair passed (`ac46f19e-6a7d-4301-a0f0-36207e4ff6bd`, 2 passed, 33 filtered). Each subsequent intermediate check cleaned its changed package, and the combined verification below cleaned all seven runtime/helper packages before rebuilding. Earlier results remain revision-specific historical evidence.
