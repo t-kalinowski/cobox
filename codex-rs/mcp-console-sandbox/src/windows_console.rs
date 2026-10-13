@@ -68,7 +68,7 @@ pub(crate) fn run() -> Result<i32> {
         for account in ["McpConsoleSandboxOff", "McpConsoleSandboxOn"] {
             if codex_windows_sandbox::local_user_flags(account)?.is_some() {
                 host_mxc_restriction = Some(
-                    "MXC is unavailable while legacy Console sandbox accounts exist; use elevated mode",
+                    "MXC is unavailable while legacy Console sandbox accounts exist; complete the one-time cleanup at https://t-kalinowski.github.io/mcp-console/WINDOWS.html#legacy-installation-cleanup before retrying; launch never deletes accounts or credentials",
                 );
             }
         }
