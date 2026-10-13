@@ -399,3 +399,15 @@ fn has_reopened_writable_descendant(writable_roots: &[WritableRoot]) -> bool {
             })
     })
 }
+/// Applies a host preference after checking backend availability and policy compatibility.
+/// Keep the configured backend separately for inheritance by remote executors.
+pub fn resolve_windows_sandbox_type(
+    configured: crate::SandboxType,
+    prefer_mxc: bool,
+) -> crate::SandboxType {
+    if prefer_mxc {
+        crate::SandboxType::WindowsMxc
+    } else {
+        configured
+    }
+}

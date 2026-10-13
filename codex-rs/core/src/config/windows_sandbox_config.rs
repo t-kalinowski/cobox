@@ -29,16 +29,7 @@ impl Config {
     }
 }
 
-pub(super) fn resolve_windows_sandbox_type(
-    configured: SandboxType,
-    prefer_mxc: bool,
-) -> SandboxType {
-    if prefer_mxc {
-        SandboxType::WindowsMxc
-    } else {
-        configured
-    }
-}
+pub(super) use codex_sandboxing::resolve_windows_sandbox_type;
 
 #[derive(Debug, PartialEq)]
 pub struct PreparedWindowsSandboxConfig {

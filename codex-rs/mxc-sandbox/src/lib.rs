@@ -99,6 +99,30 @@ pub fn is_available() -> bool {
     }
 }
 
+/// Whether native MXC can enforce this profile on the executor. Automatic
+/// selection must account for Windows builds that support PSEC but not deny paths.
+pub fn is_available_for(permissions: &PermissionProfile) -> bool {
+    if !is_available() {
+        return false;
+    }
+    if !permissions
+        .file_system_sandbox_policy()
+        .has_denied_read_restrictions()
+    {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        learning_mode_windows::SecurityEnvironmentApi::load()
+            .and_then(|api| api.supports_deny_paths())
+            .unwrap_or(/*default*/ false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Entry point dispatched before ordinary Codex CLI parsing.
 pub fn run_main() -> ! {
     #[cfg(windows)]
