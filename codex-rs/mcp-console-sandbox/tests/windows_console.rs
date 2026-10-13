@@ -6,6 +6,32 @@ use serde_json::json;
 use std::process::Command;
 
 #[test]
+fn external_enforcement_delegates_network_without_legacy_state() -> anyhow::Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    for mode in ["auto", "mxc", "elevated", "unelevated"] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env_remove("LOCALAPPDATA")
+            .env(
+                "CONSOLE_POLICY",
+                json!({"filesystem":{"kind":"external-sandbox"},
+                "network":"restricted", "windows_sandbox_level":mode})
+                .to_string(),
+            )
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("connect")
+            .arg(listener.local_addr()?.to_string())
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), b"connected\n".to_vec(), vec![]),
+            "{mode}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     for (overrides, diagnostic) in [
@@ -27,7 +53,14 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
             ]}}),
             "cannot enforce read restrictions",
         ),
-        (json!({"proxy":{}}), "managed proxy configuration"),
+        (
+            json!({"proxy":{
+                "enabled":true,"enableSocks5":true,"enableSocks5Udp":false,
+                "allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,
+                "mode":"full","domains":null,"unixSockets":null,"allowLocalBinding":false
+            }}),
+            "managed proxy configuration",
+        ),
         (
             json!({"linux_backend":"bubblewrap"}),
             "linux_backend is supported only",
@@ -91,7 +124,7 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
         "windows_state_dir": root.path().join("state"),
         "lifecycle": {"private_tmp": {"parent": root.path(), "environment": ["TMPDIR"]}},
     });
-    for code in [0i32, -1, -1_073_741_819] {
+    for code in [0i32, 125, -1, -1_073_741_819] {
         let mut child = Command::new(cargo_bin("mcp-console-sandbox")?)
             .env("CONSOLE_POLICY", config.to_string())
             .args([

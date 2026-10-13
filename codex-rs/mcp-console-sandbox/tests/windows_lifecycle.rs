@@ -1,5 +1,8 @@
 #![cfg(windows)]
 
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_utils_cargo_bin::cargo_bin;
@@ -122,9 +125,34 @@ fn binary_stdin_is_preserved_through_eof() -> Result<()> {
 
 #[test]
 fn read_only_policy_denies_target_writes() -> Result<()> {
+    assert_read_only_policy_denies_target_writes(Some("unelevated"))
+}
+
+#[test]
+fn mxc_read_only_policy_denies_target_writes() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    for mode in [None, Some("auto"), Some("mxc")] {
+        assert_read_only_policy_denies_target_writes(mode)?;
+    }
+    Ok(())
+}
+
+fn assert_read_only_policy_denies_target_writes(mode: Option<&str>) -> Result<()> {
     let root = tempfile::tempdir()?;
+    let mut config = configuration(root.path());
+    if let Some(mode) = mode {
+        config["windows_sandbox_level"] = json!(mode);
+    } else {
+        config
+            .as_object_mut()
+            .context("configuration object")?
+            .remove("windows_sandbox_level");
+    }
     let forbidden = root.path().join("forbidden");
     let output = runner(root.path(), "probe-write")?
+        .env("CONSOLE_POLICY", config.to_string())
         .arg(&forbidden)
         .output()?;
     assert_eq!(
@@ -147,8 +175,29 @@ fn target_uses_a_private_desktop() -> Result<()> {
 
 #[test]
 fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
+    assert_root_exit_retires_descendants("unelevated")?;
+    assert_root_exit_retires_descendants("external")
+}
+
+#[test]
+fn mxc_root_exit_retires_descendants_before_removing_storage() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    assert_root_exit_retires_descendants("mxc")
+}
+
+fn assert_root_exit_retires_descendants(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let mut config = configuration(root.path());
+    if mode == "external" {
+        config["filesystem"] = json!({"kind":"external-sandbox"});
+    } else {
+        config["windows_sandbox_level"] = json!(mode);
+    }
+    let mut child = runner(root.path(), "tree")?
+        .env("CONSOLE_POLICY", config.to_string())
+        .spawn()?;
     let process = Process::open(child.id())?;
     let receipt = ready(&mut child)?;
     let descendant =
@@ -168,7 +217,10 @@ fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
         (Some(42), vec![], vec![])
     );
     assert!(!temporary.exists());
-    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    assert_eq!(
+        std::fs::read_dir(root.path())?.count(),
+        usize::from(mode == "unelevated")
+    );
     Ok(())
 }
 
@@ -244,20 +296,40 @@ fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
 
 #[test]
 fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
+    assert_caller_death_retires_workload("unelevated")?;
+    assert_caller_death_retires_workload("external")
+}
+
+#[test]
+fn mxc_direct_caller_death_retires_workload_and_storage() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    assert_caller_death_retires_workload("mxc")
+}
+
+fn assert_caller_death_retires_workload(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
+    let mut config = configuration(root.path());
+    if mode == "external" {
+        config["filesystem"] = json!({"kind":"external-sandbox"});
+    } else {
+        config["windows_sandbox_level"] = json!(mode);
+    }
     let mut owner = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
         .arg("owner")
         .arg(cargo_bin("mcp-console-sandbox")?)
         .current_dir(root.path())
-        .env("CONSOLE_POLICY", configuration(root.path()).to_string())
+        .env("CONSOLE_POLICY", config.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
     let owner_process = Process::open(owner.id())?;
     let receipt = ready(&mut owner)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
     let processes = ["runner", "root", "descendant"]
-        .map(|name| Process::open(receipt[name].as_u64().expect("fixture pid") as u32));
+        .map(|name| Process::open(receipt[name].as_u64().context("fixture pid")? as u32));
     let [runner, target, descendant] = processes;
     let (runner, target, descendant) = (runner?, target?, descendant?);
     owner.kill()?;
@@ -267,7 +339,11 @@ fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
     descendant.wait();
     let output = owner.wait_with_output()?;
     assert_eq!(output.stderr, Vec::<u8>::new());
-    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    assert!(!temporary.exists());
+    assert_eq!(
+        std::fs::read_dir(root.path())?.count(),
+        usize::from(mode == "unelevated")
+    );
     Ok(())
 }
 

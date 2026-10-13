@@ -14,6 +14,8 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+#[path = "../src/windows_backend.rs"]
+mod windows_backend;
 #[path = "../src/windows_proxy.rs"]
 mod windows_proxy;
 
@@ -75,6 +77,77 @@ fn unix_socket_proxy_modes_are_rejected_before_startup() -> Result<()> {
             "Unix sockets are not supported on Windows"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_removes_mixed_case_managed_ca_variables() -> Result<()> {
+    let Ok(managed) = std::env::var("CONSOLE_TEST_MANAGED_CA") else {
+        // Isolate the shared managed-path recognizer without changing this test process's env.
+        let root = tempfile::tempdir()?;
+        // CODEX_HOME is canonicalized by Codex, including Windows temp-path aliases.
+        let proxy_dir = AbsolutePathBuf::try_from(root.path())?
+            .canonicalize()?
+            .as_path()
+            .join("proxy");
+        std::fs::create_dir(&proxy_dir)?;
+        let managed = proxy_dir
+            .join("ca-bundle-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.pem");
+        std::fs::write(&managed, [])?;
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "proxy_removes_mixed_case_managed_ca_variables",
+                "--nocapture",
+            ])
+            .env("CODEX_HOME", root.path())
+            .env("CONSOLE_TEST_MANAGED_CA", managed)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    };
+    assert!(codex_network_proxy::is_managed_mitm_ca_trust_bundle_path(
+        &managed
+    ));
+    let job = codex_utils_pty::JobObject::create_without_breakaway()?;
+    let mut env = std::collections::HashMap::from([
+        ("ssl_cert_file".to_string(), managed.clone()),
+        ("CuRl_Ca_BuNdLe".to_string(), managed.clone()),
+        (
+            "rEqUeStS_cA_bUnDlE".to_string(),
+            "C:\\customer-ca.pem".to_string(),
+        ),
+        ("UNRELATED".to_string(), managed.clone()),
+    ]);
+    let prepared = windows_proxy::start(
+        serde_json::from_value(proxy(
+            /*allow_local_binding*/ true, /*allow_destination*/ true,
+        ))?,
+        &job,
+        &mut env,
+    )
+    .await?;
+    env.retain(|name, _| {
+        !codex_network_proxy::PROXY_ENV_KEYS
+            .iter()
+            .any(|key| name.eq_ignore_ascii_case(key))
+    });
+    assert_eq!(
+        env,
+        std::collections::HashMap::from([
+            (
+                "rEqUeStS_cA_bUnDlE".to_string(),
+                "C:\\customer-ca.pem".to_string()
+            ),
+            ("UNRELATED".to_string(), managed),
+        ])
+    );
+    prepared.handle.shutdown().await?;
     Ok(())
 }
 
