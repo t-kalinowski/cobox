@@ -121,7 +121,7 @@ The ordinary command arguments, cwd, and stdio remain the target's inputs. Envir
 
 MXC uses Codex's dedicated HTTP/SOCKS listeners and existing domain/method enforcement. A non-breakaway native Job owns the launcher and workload descendants before either runs. Both proxy services resolve the connecting process from the kernel TCP table and require membership in that exact Job before consuming any attribution frame. Another companion, proxyless workload, or copied route token cannot borrow the endpoint. The Job handle stays alive through execution and proxy teardown. No broker, named Job, account, durable slot, or fixed port is needed on this path. Listener conflicts use the upstream allocator; launch consumes the allocated endpoints.
 
-MXC permits host loopback for managed networking only with `allowLocalBinding: true`. This grants local TCP/UDP communication outside proxy domain filtering, as it does for the legacy local-access policy. Earlier native MXC runs established outbound IPv4/IPv6 loopback TCP/UDP and socket binding; the final combined revision still requires acceptance. On the validation host, inbound TCP/UDP failed even in the MXC network-enabled positive control, so inbound server reachability is not established. MXC permits port allocation even for proxyless restricted execution; that mode denies traffic, rather than `bind` itself. Use explicit elevated execution if denying local port allocation is required. See the [validation ledger](WINDOWS_PROXY_VALIDATION.md) for unavailable external controls.
+MXC permits host loopback for managed networking only with `allowLocalBinding: true`. This grants local TCP/UDP communication outside proxy domain filtering, as it does for the legacy local-access policy. The 2026-10-13 combined native acceptance established outbound IPv4/IPv6 loopback TCP/UDP and socket binding. On the validation host, inbound TCP/UDP failed even in the MXC network-enabled positive control, so inbound server reachability is not established. MXC permits port allocation even for proxyless restricted execution; that mode denies traffic, rather than `bind` itself. Use explicit elevated execution if denying local port allocation is required. See the [validation ledger](WINDOWS_PROXY_VALIDATION.md) for unavailable external controls.
 
 ### Elevated compatibility backend
 
@@ -154,7 +154,7 @@ Opt-in acceptance uses provisioned dedicated accounts and the public environment
 $env:MCP_CONSOLE_SANDBOX_TEST_STATE_DIR = "$env:LOCALAPPDATA\mcp-console"
 # Optional non-loopback peer: accepts TCP and echoes UDP at this address.
 $env:MCP_CONSOLE_SANDBOX_TEST_ECHO_ADDR = '192.0.2.2:44090'
-just test --locked -p mcp-console-sandbox --test windows_proxy --run-ignored ignored-only --test-threads 1 --retries 0 --success-output immediate
+just test --locked -p mcp-console-sandbox --test windows_proxy --run-ignored only --test-threads 1 --retries 0 --success-output immediate
 ```
 
 Replace the example echo address with a reachable controlled peer or omit it; unavailable external controls are reported explicitly. UDP echo assertions check round trips only; proving external UDP egress is blocked requires receiver-side observation at that peer, which the suite reports as unestablished. Run acceptance serially against an idle pool. Tests never provision accounts. The adversarial cleanup tests independently observe their known fixture processes before removing their own deliberately retained leases; production launch has no such reclaim path. See [recorded validation](WINDOWS_PROXY_VALIDATION.md) for actual results and unavailable coverage.
@@ -188,7 +188,7 @@ just test --locked -p mcp-console-sandbox --test windows_proxy --run-ignored onl
 
 The mixed MXC/elevated isolation test additionally requires the provisioned legacy pool. Tests never provision automatically. The fixture is an executable making real native socket and process calls inside the sandbox, not a mock proxy or a production helper. The [current ledger](WINDOWS_PROXY_VALIDATION.md) distinguishes these results from older backend audits.
 
-The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) records the current builds, runtime checks, restored files, counts, and provisioning/Bazel limits.
+The [2026-10-06 footprint validation](WINDOWS_FOOTPRINT_2026_10_06.md) preserves the earlier builds, runtime checks, restored files, counts, and provisioning/Bazel limits at that revision.
 
 The public environment-transport regression exercises unelevated policy, private storage, environment exclusion, unsupported configuration, and 32-bit exit codes. Native fixture contracts exercise binary stdin, denied file creation, descendant retirement before storage removal, caller death, and runner loss. CLI regressions cover setup/status path validation; transport regressions cover JSON/path validation and exact target argument forwarding. Rejection of the removed CLI was verified separately during the migration, without retaining a test for unsupported options. Elevated account provisioning needs an interactive administrator setup. After setup, the opt-in network regression can be run with:
 
