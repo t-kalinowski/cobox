@@ -211,3 +211,41 @@ pub(super) fn origin() -> Result<std::net::SocketAddr> {
     });
     Ok(address)
 }
+
+pub(super) fn observe_processes(pids: &[&Value]) -> Result<Vec<std::os::windows::io::OwnedHandle>> {
+    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::OwnedHandle;
+    use windows_sys::Win32::System::Threading::*;
+    pids.iter()
+        .map(|pid| {
+            let handle = unsafe {
+                OpenProcess(
+                    PROCESS_SYNCHRONIZE,
+                    /*binherithandle*/ 0,
+                    pid.as_u64().context("process id")? as u32,
+                )
+            };
+            anyhow::ensure!(
+                !handle.is_null(),
+                "observe workload: {}",
+                std::io::Error::last_os_error()
+            );
+            Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+        })
+        .collect()
+}
+
+pub(super) fn assert_processes_retired(processes: &[std::os::windows::io::OwnedHandle]) {
+    use std::os::windows::io::AsRawHandle;
+    for process in processes {
+        assert_eq!(
+            unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    process.as_raw_handle(),
+                    /*dwmilliseconds*/ 10_000,
+                )
+            },
+            windows_sys::Win32::Foundation::WAIT_OBJECT_0
+        );
+    }
+}
