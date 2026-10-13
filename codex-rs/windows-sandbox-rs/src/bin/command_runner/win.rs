@@ -738,7 +738,8 @@ pub fn main() -> Result<()> {
             },
         },
     };
-    if let Ok(mut guard) = pipe_write.lock()
+    if !retirement_failed
+        && let Ok(mut guard) = pipe_write.lock()
         && let Err(err) = write_frame(&mut *guard, &exit_msg)
     {
         log_note(&format!("runner exit write failed: {err}"), log_dir);

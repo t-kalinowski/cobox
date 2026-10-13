@@ -38,7 +38,9 @@ jobs:
       - name: Run Windows executable contracts
         run: just test --locked -p mcp-console-sandbox --retries 0
       - name: Check shared bridge and product identity
-        run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(stdio_bridge::) | test(wfp::product_tests::)'
+        run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(stdio_bridge::) | test(wfp::product_tests::) | test(windows_common::)'
+      - name: Check supervised Windows Job lifetime
+        run: just test --locked -p codex-utils-pty -p codex-sandboxing --retries 0 -E 'test(supervised_job_) | test(win::job::tests::) | test(spawn::tests::)'
       - name: Build standalone release executable and companions
         run: cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
       - name: Exercise release artifacts
