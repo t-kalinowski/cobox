@@ -56,6 +56,43 @@ pub(crate) fn restricting_sids_for_tcp_connection(
     )
 }
 
+/// Authorizes the kernel-observed client, independently of peer-supplied route tokens.
+pub(crate) fn require_client_job(
+    local: SocketAddr,
+    peer: SocketAddr,
+    job: &OwnedHandle,
+) -> io::Result<()> {
+    let (SocketAddr::V4(local), SocketAddr::V4(peer)) = (local, peer) else {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "proxy Job attribution requires IPv4",
+        ));
+    };
+    authorize_client_process(
+        || owning_process_id(local, peer),
+        |process| {
+            let mut member = 0;
+            if unsafe {
+                windows_sys::Win32::System::JobObjects::IsProcessInJob(
+                    process.as_raw_handle() as _,
+                    job.as_raw_handle() as _,
+                    &mut member,
+                )
+            } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            if member == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "proxy client belongs to a different Job",
+                ));
+            }
+            Ok(())
+        },
+    )
+}
+
 fn authorize_client_process<T>(
     mut lookup_owner: impl FnMut() -> io::Result<u32>,
     authorize: impl FnOnce(&OwnedHandle) -> io::Result<T>,

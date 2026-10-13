@@ -46,6 +46,15 @@ where
     type Error = BoxError;
 
     async fn serve(&self, mut stream: TcpStream) -> Result<Self::Output, Self::Error> {
+        #[cfg(windows)]
+        if let Some(job) = &self.state.windows_client_job {
+            use rama_net::stream::Socket;
+            crate::windows_tcp_attribution::require_client_job(
+                stream.local_addr()?,
+                stream.peer_addr()?,
+                job,
+            )?;
+        }
         let state = match read_attribution_token(&mut stream).await? {
             Some(token) => self.state.for_execution_token(&token).ok_or_else(|| {
                 io::Error::new(
@@ -53,6 +62,14 @@ where
                     "unknown network proxy attribution token",
                 )
             })?,
+            #[cfg(windows)]
+            None if self.state.windows_require_attribution => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "trusted proxy bridge requires an attribution token",
+                )
+                .into());
+            }
             None => self
                 .state
                 .for_environment_id(self.environment_id.as_deref()),

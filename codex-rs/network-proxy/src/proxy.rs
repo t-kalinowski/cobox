@@ -524,6 +524,8 @@ pub struct PreparedManagedNetwork {
 struct EnvironmentProxy {
     addrs: EnvironmentProxyAddrs,
     runtime: ProxyRuntime,
+    #[cfg(target_os = "windows")]
+    client: EnvironmentProxyClient,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1420,15 +1422,8 @@ impl NetworkProxy {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(proxy) = proxies.get(environment_id) {
             #[cfg(target_os = "windows")]
-            let uses_shared_ingress = client == EnvironmentProxyClient::SandboxedProcess
-                && self.windows_runtime.is_some();
-            #[cfg(target_os = "windows")]
             anyhow::ensure!(
-                matches!(
-                    (&proxy.runtime, uses_shared_ingress),
-                    (ProxyRuntime::SharedIngress { .. }, true)
-                        | (ProxyRuntime::Listeners(_), false)
-                ),
+                proxy.client == client,
                 "network proxy for environment `{environment_id}` was prepared for a different client type"
             );
             return Ok(proxy.addrs);
@@ -1474,6 +1469,7 @@ impl NetworkProxy {
                 EnvironmentProxy {
                     addrs,
                     runtime: ProxyRuntime::SharedIngress { route },
+                    client,
                 },
             );
             return Ok(addrs);
@@ -1503,7 +1499,22 @@ impl NetworkProxy {
 
         let mut listeners = ProxyListeners::new();
         let environment_id = environment_id.to_string();
-        let http_state = self.state.clone();
+        let listener_state = Arc::clone(&self.state);
+        #[cfg(target_os = "windows")]
+        let listener_state = match client {
+            EnvironmentProxyClient::SandboxedProcess => listener_state,
+            EnvironmentProxyClient::TrustedBridge => {
+                let mut state = listener_state.as_ref().clone();
+                // Bridges live outside the workload identity; authenticate their scoped token.
+                state.windows_require_attribution = state.windows_client_job.take().is_some()
+                    || self
+                        .windows_runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.client_sid.is_some());
+                Arc::new(state)
+            }
+        };
+        let http_state = Arc::clone(&listener_state);
         let http_decider = self.policy_decider.clone();
         let http_environment_id = Some(environment_id.clone());
         listeners.spawn(move |guard| async move {
@@ -1520,7 +1531,7 @@ impl NetworkProxy {
         if self.socks_enabled
             && let Some(listener) = socks_listener
         {
-            let socks_state = self.state.clone();
+            let socks_state = listener_state;
             let socks_decider = self.policy_decider.clone();
             let socks_environment_id = Some(environment_id.clone());
             let socks5_udp_enabled = self.socks5_udp_enabled;
@@ -1542,6 +1553,8 @@ impl NetworkProxy {
             EnvironmentProxy {
                 addrs,
                 runtime: ProxyRuntime::Listeners(listeners),
+                #[cfg(target_os = "windows")]
+                client,
             },
         );
         Ok(addrs)

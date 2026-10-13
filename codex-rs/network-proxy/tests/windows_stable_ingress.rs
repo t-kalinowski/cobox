@@ -1,8 +1,10 @@
 #![cfg(target_os = "windows")]
 
+use anyhow::Context;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
+use codex_network_proxy::ManagedProxyRouting;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkPolicyDecider;
@@ -12,6 +14,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
+use codex_network_proxy::write_attribution_frame;
 use codex_windows_sandbox::ConsoleMode;
 use codex_windows_sandbox::LaunchDesktop;
 use codex_windows_sandbox::LocalSid;
@@ -33,16 +36,20 @@ use std::net::TcpStream;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const CHILD_MODE_ENV: &str = "CODEX_WINDOWS_PROXY_TEST_CHILD";
+const JOB_CHILD_ENV: &str = "CODEX_WINDOWS_PROXY_TEST_JOB_CHILD";
 const HTTP_ADDR_ENV: &str = "CODEX_WINDOWS_PROXY_TEST_HTTP_ADDR";
 const SOCKS_ADDR_ENV: &str = "CODEX_WINDOWS_PROXY_TEST_SOCKS_ADDR";
 const ORIGIN_PORT_ENV: &str = "CODEX_WINDOWS_PROXY_TEST_ORIGIN_PORT";
@@ -274,9 +281,171 @@ async fn restricted_tokens_select_stable_routes_and_cleanup() -> anyhow::Result<
             /*expect_socks*/ true,
         )
         .await?;
+        if policy.is_some() {
+            assert_bridge_authentication(&proxy, origin_port).await?;
+        }
         handle.shutdown().await?;
     }
     origin_task.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dedicated_listeners_admit_only_clients_in_the_required_job() -> anyhow::Result<()> {
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    anyhow::ensure!(job != 0, "create Job: {}", std::io::Error::last_os_error());
+    let job = unsafe { OwnedHandle::from_raw_handle(job as _) };
+    let (origin_port, origin_task) = start_http_origin().await?;
+    let mut state = proxy_state(requested_addrs()?, "localhost", /*enable_socks5*/ true)?;
+    state.set_windows_client_job(job.try_clone()?);
+    let proxy = NetworkProxy::builder()
+        .state(Arc::new(state))
+        .managed_proxy_routing(ManagedProxyRouting::DedicatedListeners)
+        .build()
+        .await?;
+    let handle = proxy.run().await?;
+    for membership in ["inside", "outside"] {
+        let mut child = tokio::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "job_child_exercises_http_and_socks",
+                "--nocapture",
+            ])
+            .env(JOB_CHILD_ENV, membership)
+            .env(HTTP_ADDR_ENV, proxy.http_addr().to_string())
+            .env(SOCKS_ADDR_ENV, proxy.socks_addr().to_string())
+            .env(ORIGIN_PORT_ENV, origin_port.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        if membership == "inside" {
+            anyhow::ensure!(
+                unsafe {
+                    AssignProcessToJobObject(
+                        job.as_raw_handle() as _,
+                        child.raw_handle().unwrap() as _,
+                    )
+                } != 0,
+                "assign client to Job: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        // The child cannot open its client sockets until assignment is complete.
+        child.stdin.take().unwrap().write_all(b"x").await?;
+        let output = tokio::time::timeout(
+            Duration::from_millis(u64::from(CHILD_TIMEOUT_MS)),
+            child.wait_with_output(),
+        )
+        .await??;
+        anyhow::ensure!(
+            output.status.success(),
+            "{membership} Job client: {output:?}"
+        );
+    }
+    assert_bridge_authentication(&proxy, origin_port).await?;
+    handle.shutdown().await?;
+    origin_task.abort();
+    Ok(())
+}
+
+async fn assert_bridge_authentication(
+    proxy: &NetworkProxy,
+    origin_port: u16,
+) -> anyhow::Result<()> {
+    let remote_proxy = proxy.for_execution(
+        "remote",
+        "execution",
+        "bridge-token".into(),
+        /*environment_policy*/ None,
+        /*fallback_policy_decider*/ None,
+    )?;
+    let _other_proxy = proxy.for_execution(
+        "other",
+        "execution",
+        "other-token".into(),
+        /*environment_policy*/ None,
+        /*fallback_policy_decider*/ None,
+    )?;
+    let remote = remote_proxy.prepare_for_remote_environment(HashMap::new(), "remote")?;
+    let remote_http = remote.env["HTTP_PROXY"]
+        .strip_prefix("http://")
+        .context("remote HTTP URL")?
+        .parse::<SocketAddr>()?;
+    let remote_socks = remote.env["ALL_PROXY"]
+        .strip_prefix("socks5h://")
+        .context("remote SOCKS URL")?
+        .parse::<SocketAddr>()?;
+    let local_addrs = (proxy.http_addr(), proxy.socks_addr());
+    let remote_addrs = (remote_http, remote_socks);
+    // The bridge runs outside the Job, but must authenticate before either protocol.
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let http = format!("GET http://localhost:{origin_port}/ HTTP/1.1\r\nHost: localhost:{origin_port}\r\nConnection: close\r\n\r\n").into_bytes();
+        let mut socks = vec![5, 1, 0, 5, 1, 0, 3, 9];
+        socks.extend_from_slice(b"localhost");
+        socks.extend_from_slice(&origin_port.to_be_bytes());
+        for (token, addrs) in [(Some("bridge-token"), remote_addrs), (None, remote_addrs), (Some("wrong-token"), remote_addrs), (Some("other-token"), remote_addrs), (Some("bridge-token"), local_addrs)] {
+            for (addr, request, expected) in [(addrs.0, &http, b"HTTP/1.1 200".as_slice()), (addrs.1, &socks, &[5, 0, 5, 0])] {
+                let mut stream = TcpStream::connect(addr)?;
+                configure_stream(&stream)?;
+                let mut response = vec![0; expected.len()];
+                let result = (|| -> std::io::Result<()> {
+                    if let Some(token) = token {
+                        write_attribution_frame(&mut stream, token)?;
+                    }
+                    stream.write_all(request)?;
+                    stream.read_exact(&mut response)
+                })();
+                if token == Some("bridge-token") && addrs != local_addrs {
+                    result.with_context(|| format!("bridge {addr} did not accept its token"))?;
+                    assert_eq!(response, expected);
+                } else {
+                    assert!(matches!(result, Err(error) if matches!(error.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::UnexpectedEof)), "unauthenticated bridge: {token:?}");
+                }
+            }
+        }
+        Ok(())
+    })
+    .await??;
+    // Cached trusted listeners must never become a shortcut for a local workload.
+    assert!(
+        proxy
+            .prepare_for_optional_environment(HashMap::new(), Some("remote"))
+            .is_err()
+    );
+    proxy.prepare_for_optional_environment(HashMap::new(), Some("local"))?;
+    assert!(
+        proxy
+            .prepare_for_remote_environment(HashMap::new(), "local")
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn job_child_exercises_http_and_socks() -> anyhow::Result<()> {
+    let Ok(membership) = std::env::var(JOB_CHILD_ENV) else {
+        return Ok(());
+    };
+    std::io::stdin().read_exact(&mut [0_u8])?;
+    let http_addr = required_env(HTTP_ADDR_ENV)?.parse::<SocketAddr>()?;
+    let socks_addr = required_env(SOCKS_ADDR_ENV)?.parse::<SocketAddr>()?;
+    let origin_port = required_env(ORIGIN_PORT_ENV)?.parse::<u16>()?;
+    let http = http_status(http_addr, &format!("localhost:{origin_port}"));
+    let socks = socks_status(socks_addr, "localhost", origin_port);
+    if membership == "inside" {
+        assert_eq!((http?, socks?), (200, SocksOutcome::Connected));
+    } else {
+        assert!(
+            http.is_err(),
+            "outside Job HTTP client was admitted: {http:?}"
+        );
+        assert!(
+            socks.is_err(),
+            "outside Job SOCKS client was admitted: {socks:?}"
+        );
+    }
     Ok(())
 }
 
