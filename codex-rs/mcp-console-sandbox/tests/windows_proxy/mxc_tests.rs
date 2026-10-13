@@ -146,10 +146,7 @@ fn mxc_policies_and_cross_process_proxy_ownership() -> Result<()> {
                     "{op}: {response}"
                 );
             }
-            "socks" => assert!(
-                response["socks"].as_u64().is_some_and(|reply| reply != 0),
-                "SOCKS rejection reply: {response}"
-            ),
+            "socks" => assert_eq!(response, json!({"socks":2}), "SOCKS policy denial reply"),
             _ => unreachable!(),
         }
     }
