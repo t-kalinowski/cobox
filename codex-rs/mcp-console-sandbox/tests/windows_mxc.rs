@@ -89,6 +89,64 @@ fn mxc_selection_at_the_environment_boundary_does_not_provision() -> Result<()> 
 }
 
 #[test]
+fn explicit_project_roots_are_materialized_before_mxc_selection() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let state = root.path().join("unprovisioned");
+    let status = mxc_status(&state)?;
+    for selection in [None, Some("auto"), Some("mxc")] {
+        let mut config = json!({"network":"restricted", "windows_state_dir":state,
+        "filesystem":{"kind":"restricted", "entries":[
+            {"path":{"type":"special","value":{"kind":"root"}},"access":"read"},
+            {"path":{"type":"special","value":{"kind":"project_roots"}},"access":"write"}
+        ]}});
+        if let Some(selection) = selection {
+            config["windows_sandbox_level"] = json!(selection);
+        }
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(&workspace)
+            .env("CONSOLE_POLICY", config.to_string())
+            .args([
+                "--config-env",
+                "CONSOLE_POLICY",
+                "--",
+                "cmd.exe",
+                "/d",
+                "/c",
+                "echo PROJECT_ROOT_OK>granted.txt&type granted.txt",
+            ])
+            .output()?;
+        if status.mxc_available {
+            assert_eq!(
+                (output.status.code(), output.stdout, output.stderr),
+                (Some(0), b"PROJECT_ROOT_OK\r\n".to_vec(), vec![])
+            );
+            assert_eq!(
+                std::fs::read(workspace.join("granted.txt"))?,
+                b"PROJECT_ROOT_OK\r\n"
+            );
+            std::fs::remove_file(workspace.join("granted.txt"))?;
+        } else {
+            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+            let diagnostic = String::from_utf8(output.stderr)?;
+            if selection == Some("mxc") {
+                status.assert_preflight_rejection(&diagnostic, "project-root launch");
+            } else {
+                assert!(
+                    diagnostic.contains("mcp-console-sandbox setup"),
+                    "{diagnostic}"
+                );
+                eprintln!("UNAVAILABLE project-root launch: {diagnostic}");
+            }
+        }
+        assert!(!state.exists());
+        assert_eq!(std::fs::read_dir(&workspace)?.count(), 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn mxc_rejects_grants_that_reopen_control_state() -> Result<()> {
     let root = tempfile::tempdir()?;
     let state = root.path().join("state");

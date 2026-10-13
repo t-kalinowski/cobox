@@ -46,6 +46,9 @@ pub(crate) fn run() -> Result<i32> {
     );
     use crate::config::WindowsSandboxMode;
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
+    let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
+    filesystem =
+        filesystem.materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
     let state = match request.windows_state_dir.take() {
         Some(state) => state.into_path_buf(),
         None => {
@@ -206,7 +209,6 @@ pub(crate) fn run() -> Result<i32> {
         .map(Arc::new);
     let storage = storage.map(tempfile::TempDir::keep);
     let manager = SandboxManager::default();
-    let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let mut spawn_attempted = false;
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
