@@ -14,6 +14,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -27,7 +28,7 @@ pub async fn run(request: Bootstrap, stdin: File, signals: Signals) -> Result<i3
     let timeout = Duration::from_millis(request.lifecycle.cleanup_timeout_ms.unwrap_or(1000));
     // Capture foreground ownership in the caller's group, before isolating an
     // owned stdio runner. Terminal stderr alone does not make it interactive.
-    let terminal = platform::Terminal::capture()?;
+    let terminal = Arc::new(platform::Terminal::capture()?);
     if parent.is_some()
         && !stdin.is_terminal()
         && !std::io::stdout().is_terminal()
@@ -110,6 +111,7 @@ pub async fn run(request: Bootstrap, stdin: File, signals: Signals) -> Result<i3
         #[cfg(target_os = "linux")]
         let supervisor = unsafe { libc::getpid() };
         let target_signals = native.setup.signals.clone();
+        let target_terminal = Arc::clone(&terminal);
         // SAFETY: the child hook uses only syscalls and allocation-free errors;
         // proxy preparation may already have started other threads.
         unsafe {
@@ -146,6 +148,9 @@ pub async fn run(request: Bootstrap, stdin: File, signals: Signals) -> Result<i3
                 {
                     return Err(std::io::Error::last_os_error());
                 }
+                // Transfer before exec: an ungated external target can otherwise
+                // read first and stop with SIGTTIN before the parent hands over.
+                target_terminal.transfer(libc::getpid())?;
                 if !uses_native_setup {
                     target_signals.restore()?;
                 }
@@ -162,7 +167,6 @@ pub async fn run(request: Bootstrap, stdin: File, signals: Signals) -> Result<i3
             .track_root(root.id() as i32)
             .inspect_err(|_| observation_failed = true)
             .context("establish descendant observation")?;
-        terminal.transfer(root.id() as i32)?;
         loop {
             let pending_signals = signals.pending()?;
             tracker

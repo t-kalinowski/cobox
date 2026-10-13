@@ -85,7 +85,11 @@ async fn proxy_removes_mixed_case_managed_ca_variables() -> Result<()> {
     let Ok(managed) = std::env::var("CONSOLE_TEST_MANAGED_CA") else {
         // Isolate the shared managed-path recognizer without changing this test process's env.
         let root = tempfile::tempdir()?;
-        let proxy_dir = root.path().join("proxy");
+        // CODEX_HOME is canonicalized by Codex, including Windows temp-path aliases.
+        let proxy_dir = AbsolutePathBuf::try_from(root.path())?
+            .canonicalize()?
+            .as_path()
+            .join("proxy");
         std::fs::create_dir(&proxy_dir)?;
         let managed = proxy_dir
             .join("ca-bundle-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.pem");

@@ -192,6 +192,56 @@ fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> 
 }
 
 #[test]
+fn disabled_proxy_matches_absent_proxy_across_backends() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let available = mxc_support::available()?;
+    let mut disabled = proxy(
+        /*allow_local_binding*/ false, /*allow_destination*/ false,
+    );
+    disabled["enabled"] = json!(false);
+    disabled["enableSocks5Udp"] = json!(true);
+    disabled["dangerouslyAllowAllUnixSockets"] = json!(true);
+    for filesystem in ["restricted", "external-sandbox"] {
+        for mode in ["auto", "mxc", "elevated", "unelevated"] {
+            let mut outputs = Vec::new();
+            for proxy in [Value::Null, disabled.clone()] {
+                let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+                    .env(
+                        "hTtP_pRoXy",
+                        json!({"extends":":read-only", "network":"enabled",
+                            "filesystem":{"kind":filesystem}, "windows_sandbox_level":mode,
+                            "windows_state_dir":root.path().join("state"), "proxy":proxy})
+                        .to_string(),
+                    )
+                    .args([
+                        "--config-env",
+                        "hTtP_pRoXy",
+                        "--",
+                        "cmd.exe",
+                        "/d",
+                        "/c",
+                        "if defined HTTP_PROXY (exit /b 42) else echo PROXY_DISABLED",
+                    ])
+                    .output()?;
+                outputs.push((output.status.code(), output.stdout, output.stderr));
+            }
+            assert_eq!(outputs[0], outputs[1], "{filesystem}, {mode}");
+            if filesystem == "external-sandbox"
+                || mode == "unelevated"
+                || (available && matches!(mode, "auto" | "mxc"))
+            {
+                assert_eq!(
+                    outputs[1],
+                    (Some(0), b"PROXY_DISABLED\r\n".to_vec(), vec![]),
+                    "{filesystem}, {mode}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn managed_proxy_rejects_configuration_transport_collisions_before_launch() -> Result<()> {
     let root = tempfile::tempdir()?;
     for name in [

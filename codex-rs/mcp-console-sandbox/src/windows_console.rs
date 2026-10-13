@@ -33,6 +33,7 @@ use crate::windows_backend::WindowsSandboxPreference;
 
 pub(crate) fn run() -> Result<i32> {
     let crate::bootstrap::Input::Environment(mut request) = crate::bootstrap::take_input()?;
+    request.proxy = request.proxy.filter(|proxy| proxy.enabled);
     ensure!(
         request.proxy.is_none()
             || request.excluded_environment.iter().all(|name| {

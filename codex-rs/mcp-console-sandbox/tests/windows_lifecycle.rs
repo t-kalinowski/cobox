@@ -125,9 +125,34 @@ fn binary_stdin_is_preserved_through_eof() -> Result<()> {
 
 #[test]
 fn read_only_policy_denies_target_writes() -> Result<()> {
+    assert_read_only_policy_denies_target_writes(Some("unelevated"))
+}
+
+#[test]
+fn mxc_read_only_policy_denies_target_writes() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    for mode in [None, Some("auto"), Some("mxc")] {
+        assert_read_only_policy_denies_target_writes(mode)?;
+    }
+    Ok(())
+}
+
+fn assert_read_only_policy_denies_target_writes(mode: Option<&str>) -> Result<()> {
     let root = tempfile::tempdir()?;
+    let mut config = configuration(root.path());
+    if let Some(mode) = mode {
+        config["windows_sandbox_level"] = json!(mode);
+    } else {
+        config
+            .as_object_mut()
+            .context("configuration object")?
+            .remove("windows_sandbox_level");
+    }
     let forbidden = root.path().join("forbidden");
     let output = runner(root.path(), "probe-write")?
+        .env("CONSOLE_POLICY", config.to_string())
         .arg(&forbidden)
         .output()?;
     assert_eq!(
