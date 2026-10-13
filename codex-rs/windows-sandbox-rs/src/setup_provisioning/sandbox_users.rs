@@ -26,6 +26,7 @@ use windows_sys::Win32::NetworkManagement::NetManagement::UF_DONT_EXPIRE_PASSWD;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_SCRIPT;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1003;
+use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1011;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_PRIV_USER;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
@@ -60,7 +61,7 @@ mod tests;
 const SID_USERS: &str = "S-1-5-32-545";
 
 pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
-    resolve_sid(SANDBOX_USERS_GROUP)
+    resolve_sid(&crate::sandbox_name(SANDBOX_USERS_GROUP))
 }
 
 pub(super) fn provision_sandbox_users(
@@ -71,8 +72,9 @@ pub(super) fn provision_sandbox_users(
     log: &mut dyn Write,
     mode: SetupMode,
 ) -> Result<()> {
+    let group = crate::sandbox_name(SANDBOX_USERS_GROUP);
     if let Err(err) = ensure_sandbox_users_group() {
-        let message = format!("failed to create local group {SANDBOX_USERS_GROUP}: {err}");
+        let message = format!("failed to create local group {group}: {err}");
         super::log_line(log, &message)?;
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersGroupCreateFailed,
@@ -105,7 +107,31 @@ pub fn ensure_sandbox_user(
     log: &mut dyn Write,
 ) -> Result<()> {
     ensure_local_user(username, password, new_user_flags, log)?;
-    ensure_local_group_member(SANDBOX_USERS_GROUP, username)?;
+    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+        let display_name = match username {
+            "McpConsoleSandboxOff" => "McpConsoleSandboxOffline",
+            "McpConsoleSandboxOn" => "McpConsoleSandboxOnline",
+            _ => anyhow::bail!("unexpected Console sandbox account: {username}"),
+        };
+        let name = to_wide(username);
+        let full_name = to_wide(display_name);
+        let info = USER_INFO_1011 {
+            usri1011_full_name: full_name.as_ptr() as *mut _,
+        };
+        let result = unsafe {
+            NetUserSetInfo(
+                std::ptr::null(),
+                name.as_ptr(),
+                /*level*/ 1011,
+                (&raw const info).cast(),
+                std::ptr::null_mut(),
+            )
+        };
+        if result != NERR_Success {
+            anyhow::bail!("failed to set sandbox account display name: {result}");
+        }
+    }
+    ensure_local_group_member(&crate::sandbox_name(SANDBOX_USERS_GROUP), username)?;
     Ok(())
 }
 

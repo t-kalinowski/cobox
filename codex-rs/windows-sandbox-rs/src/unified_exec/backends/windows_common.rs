@@ -18,8 +18,33 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-pub(crate) fn finish_driver_spawn(driver: ProcessDriver, stdin_open: bool) -> SpawnedProcess {
-    let spawned = spawn_from_driver(driver);
+pub(crate) fn finish_driver_spawn(mut driver: ProcessDriver, stdin_open: bool) -> SpawnedProcess {
+    let native_receipt =
+        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+            let (send, receive) = oneshot::channel();
+            Some((send, std::mem::replace(&mut driver.exit_rx, receive)))
+        } else {
+            None
+        };
+    let mut spawned = spawn_from_driver(driver);
+    if let Some((driver_send, native_receive)) = native_receipt {
+        // The generic PTY adapter substitutes -1 for a lost driver. Console must preserve
+        // receipt absence across that adapter, while still waiting for its bookkeeping.
+        let (send, receive) = oneshot::channel();
+        let adapter_receive = std::mem::replace(&mut spawned.exit_rx, receive);
+        tokio::spawn(async move {
+            let receipt = native_receive.await.ok();
+            if let Some(code) = receipt {
+                let _ = driver_send.send(code);
+            } else {
+                drop(driver_send);
+            }
+            let _ = adapter_receive.await;
+            if let Some(code) = receipt {
+                let _ = send.send(code);
+            }
+        });
+    }
     if !stdin_open {
         spawned.session.close_stdin();
     }
@@ -138,7 +163,11 @@ pub(crate) fn start_runner_stdout_reader(
             }
         };
         crate::elevated::runner_metrics::record_command(exit);
-        let _ = exit_tx.send(exit.map_or(-1, |(code, _)| code));
+        if let Some((code, _)) = exit {
+            let _ = exit_tx.send(code);
+        } else if crate::WindowsSandboxProduct::current() != crate::WindowsSandboxProduct::Console {
+            let _ = exit_tx.send(-1);
+        }
     });
 }
 

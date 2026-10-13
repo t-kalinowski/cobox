@@ -1,5 +1,13 @@
 mod filter_specs;
+mod loopback;
 
+pub use loopback::install_loopback_filters_for_account;
+
+#[cfg(test)]
+#[path = "wfp_product_tests.rs"]
+mod product_tests;
+
+use crate::WindowsSandboxProduct;
 use crate::to_wide;
 use anyhow::Result;
 use std::ffi::OsStr;
@@ -90,7 +98,10 @@ pub fn install_wfp_filters_for_account(account: &str) -> Result<usize> {
     let user_condition = UserMatchCondition::for_account(account)?;
     let mut installed_filter_count = 0;
     for spec in FILTER_SPECS {
-        delete_filter_if_present(engine.handle, &spec.key)?;
+        delete_filter_if_present(
+            engine.handle,
+            &WindowsSandboxProduct::current().wfp_key(spec.key),
+        )?;
         add_filter(engine.handle, spec, &user_condition)?;
         installed_filter_count += 1;
     }
@@ -103,17 +114,31 @@ pub(crate) fn remove_wfp_filters() -> Result<()> {
     // Leave time for other cleanup if a WFP policy writer holds the transaction lock.
     let engine = Engine::open(/*transaction_wait_timeout_ms*/ 1_000)?;
     let mut transaction = engine.begin_transaction()?;
+    loopback::remove_filters(engine.handle)?;
     for spec in FILTER_SPECS {
-        delete_filter_if_present(engine.handle, &spec.key)?;
+        delete_filter_if_present(
+            engine.handle,
+            &WindowsSandboxProduct::current().wfp_key(spec.key),
+        )?;
     }
     for (result, operation, missing) in [
         (
-            unsafe { FwpmSubLayerDeleteByKey0(engine.handle, &SUBLAYER_KEY) },
+            unsafe {
+                FwpmSubLayerDeleteByKey0(
+                    engine.handle,
+                    &WindowsSandboxProduct::current().wfp_key(SUBLAYER_KEY),
+                )
+            },
             "FwpmSubLayerDeleteByKey0",
             FWP_E_SUBLAYER_NOT_FOUND as u32,
         ),
         (
-            unsafe { FwpmProviderDeleteByKey0(engine.handle, &PROVIDER_KEY) },
+            unsafe {
+                FwpmProviderDeleteByKey0(
+                    engine.handle,
+                    &WindowsSandboxProduct::current().wfp_key(PROVIDER_KEY),
+                )
+            },
             "FwpmProviderDeleteByKey0",
             FWP_E_PROVIDER_NOT_FOUND as u32,
         ),
@@ -130,7 +155,7 @@ struct Engine {
 
 impl Engine {
     fn open(transaction_wait_timeout_ms: u32) -> Result<Self> {
-        let session_name = to_wide(OsStr::new(SESSION_NAME));
+        let session_name = to_wide(OsStr::new(crate::sandbox_name(SESSION_NAME).as_ref()));
         let mut session: FWPM_SESSION0 = unsafe { zeroed() };
         session.displayData = FWPM_DISPLAY_DATA0 {
             name: session_name.as_ptr() as *mut _,
@@ -254,10 +279,12 @@ impl Drop for UserMatchCondition {
 
 /// Ensures the persistent Codex WFP provider exists.
 fn ensure_provider(engine: HANDLE) -> Result<()> {
-    let provider_name = to_wide(OsStr::new(PROVIDER_NAME));
-    let provider_description = to_wide(OsStr::new(PROVIDER_DESCRIPTION));
+    let provider_name = to_wide(OsStr::new(crate::sandbox_name(PROVIDER_NAME).as_ref()));
+    let provider_description = to_wide(OsStr::new(
+        crate::sandbox_name(PROVIDER_DESCRIPTION).as_ref(),
+    ));
     let provider = FWPM_PROVIDER0 {
-        providerKey: PROVIDER_KEY,
+        providerKey: WindowsSandboxProduct::current().wfp_key(PROVIDER_KEY),
         displayData: FWPM_DISPLAY_DATA0 {
             name: provider_name.as_ptr() as *mut _,
             description: provider_description.as_ptr() as *mut _,
@@ -273,11 +300,13 @@ fn ensure_provider(engine: HANDLE) -> Result<()> {
 
 /// Ensures the persistent Codex sublayer exists under the Codex provider.
 fn ensure_sublayer(engine: HANDLE) -> Result<()> {
-    let sublayer_name = to_wide(OsStr::new(SUBLAYER_NAME));
-    let sublayer_description = to_wide(OsStr::new(SUBLAYER_DESCRIPTION));
-    let provider_key = PROVIDER_KEY;
+    let sublayer_name = to_wide(OsStr::new(crate::sandbox_name(SUBLAYER_NAME).as_ref()));
+    let sublayer_description = to_wide(OsStr::new(
+        crate::sandbox_name(SUBLAYER_DESCRIPTION).as_ref(),
+    ));
+    let provider_key = WindowsSandboxProduct::current().wfp_key(PROVIDER_KEY);
     let sublayer = FWPM_SUBLAYER0 {
-        subLayerKey: SUBLAYER_KEY,
+        subLayerKey: WindowsSandboxProduct::current().wfp_key(SUBLAYER_KEY),
         displayData: FWPM_DISPLAY_DATA0 {
             name: sublayer_name.as_ptr() as *mut _,
             description: sublayer_description.as_ptr() as *mut _,
@@ -298,12 +327,20 @@ fn add_filter(
     spec: &FilterSpec,
     user_condition: &UserMatchCondition,
 ) -> Result<()> {
-    let filter_name = to_wide(OsStr::new(spec.name));
-    let filter_description = to_wide(OsStr::new(spec.description));
     let mut filter_conditions = build_conditions(spec.conditions, user_condition);
-    let provider_key = PROVIDER_KEY;
+    add_filter_with_conditions(engine, spec, &mut filter_conditions)
+}
+
+fn add_filter_with_conditions(
+    engine: HANDLE,
+    spec: &FilterSpec,
+    filter_conditions: &mut [FWPM_FILTER_CONDITION0],
+) -> Result<()> {
+    let filter_name = to_wide(OsStr::new(crate::sandbox_name(spec.name).as_ref()));
+    let filter_description = to_wide(OsStr::new(spec.description));
+    let provider_key = WindowsSandboxProduct::current().wfp_key(PROVIDER_KEY);
     let filter = FWPM_FILTER0 {
-        filterKey: spec.key,
+        filterKey: WindowsSandboxProduct::current().wfp_key(spec.key),
         displayData: FWPM_DISPLAY_DATA0 {
             name: filter_name.as_ptr() as *mut _,
             description: filter_description.as_ptr() as *mut _,
@@ -312,7 +349,7 @@ fn add_filter(
         providerKey: &provider_key as *const _ as *mut _,
         providerData: empty_blob(),
         layerKey: spec.layer_key,
-        subLayerKey: SUBLAYER_KEY,
+        subLayerKey: WindowsSandboxProduct::current().wfp_key(SUBLAYER_KEY),
         weight: empty_value(),
         numFilterConditions: filter_conditions.len() as u32,
         filterCondition: filter_conditions.as_mut_ptr(),

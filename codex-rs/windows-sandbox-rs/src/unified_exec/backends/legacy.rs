@@ -269,6 +269,7 @@ fn finalize_exit(
     output_join: std::thread::JoinHandle<()>,
     logs_base_dir: Option<&Path>,
     command: Vec<String>,
+    retirement_failed: bool,
 ) {
     let exit_code = {
         let mut raw_exit = 1u32;
@@ -280,11 +281,17 @@ fn finalize_exit(
                 GetExitCodeProcess(handle.raw(), &mut raw_exit);
             }
         }
-        raw_exit as i32
+        if retirement_failed {
+            125
+        } else {
+            raw_exit as i32
+        }
     };
 
-    let _ = output_join.join();
-    let _ = exit_tx.send(exit_code);
+    if !retirement_failed {
+        let _ = output_join.join();
+        let _ = exit_tx.send(exit_code);
+    }
 
     drop(thread_handle);
     if let Ok(mut guard) = process_handle.lock()
@@ -455,7 +462,9 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         let wait_res = unsafe { WaitForSingleObject(wait_process_handle.raw(), timeout) };
         if wait_res == WAIT_TIMEOUT {
             terminate_job_or_process(&job_for_wait, &wait_handle, wait_logs_base_dir.as_deref());
-        } else if let Err(err) = job_for_wait.preserve_descendants() {
+        } else if crate::WindowsSandboxProduct::current() != crate::WindowsSandboxProduct::Console
+            && let Err(err) = job_for_wait.preserve_descendants()
+        {
             log_note(
                 &format!("legacy spawn failed to preserve descendants after root exit: {err}"),
                 wait_logs_base_dir.as_deref(),
@@ -468,6 +477,17 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         }
         drop(conpty_owner.take());
         drop(token_handle);
+        let retirement_failed =
+            if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+                if let Err(error) = crate::retire_console_job(&job_for_wait) {
+                    eprintln!("Console Job retirement failed: {error:#}");
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
         finalize_exit(
             exit_tx,
             wait_handle,
@@ -475,6 +495,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             output_join,
             wait_logs_base_dir.as_deref(),
             command_for_wait,
+            retirement_failed,
         );
     });
 

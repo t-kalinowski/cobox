@@ -89,6 +89,25 @@ pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
 }
 
+/// Checks matching setup records and enabled accounts, without provisioning or decrypting secrets.
+/// This does not audit the installed firewall rules; launch performs additional validation.
+pub fn check_sandbox_setup(codex_home: &Path) -> Result<bool> {
+    let Some(users) = load_users(codex_home)? else {
+        return Ok(false);
+    };
+    if !users.version_matches()
+        || !matches!(load_marker(codex_home)?, Some(marker) if marker.version_matches())
+    {
+        return Ok(false);
+    }
+    for account in [&users.offline.username, &users.online.username] {
+        if !matches!(local_user_flags(account)?, Some(flags) if flags & UF_ACCOUNTDISABLE == 0) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Returns true when setup artifacts and provisioned network settings match.
 pub fn sandbox_setup_is_complete_with_settings(
     codex_home: &Path,
@@ -146,7 +165,16 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         }
     };
     match serde_json::from_str::<SandboxUsersFile>(&file) {
-        Ok(users) => Ok(Some(users)),
+        Ok(users) => {
+            if users.offline.username != crate::sandbox_name(OFFLINE_USERNAME)
+                || users.online.username != crate::sandbox_name(ONLINE_USERNAME)
+            {
+                anyhow::bail!(
+                    "sandbox state belongs to a different product; choose a separate state directory"
+                );
+            }
+            Ok(Some(users))
+        }
         Err(err) => {
             debug_log(
                 &format!("sandbox users parse failed: {err}"),
@@ -374,8 +402,11 @@ fn require_sandbox_account_with_setup(
         // Cleanup may also have removed the group, so repair missing or disabled accounts before ACL
         // refresh can fail. Expired passwords also require full setup, since an ACL refresh
         // cannot rotate the account passwords and update the stored DPAPI credentials.
-        for username in [OFFLINE_USERNAME, ONLINE_USERNAME] {
-            let needs_repair = match read_local_user_flags(username) {
+        for username in [
+            crate::sandbox_name(OFFLINE_USERNAME),
+            crate::sandbox_name(ONLINE_USERNAME),
+        ] {
+            let needs_repair = match read_local_user_flags(&username) {
                 Ok(Some(flags)) => flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) != 0,
                 Ok(None) => true,
                 Err(_) => false,
@@ -410,8 +441,11 @@ fn require_sandbox_account_with_setup(
             },
             &desired_offline_proxy_settings,
         )?;
-        for username in [OFFLINE_USERNAME, ONLINE_USERNAME] {
-            if let Ok(Some(flags)) = read_local_user_flags(username) {
+        for username in [
+            crate::sandbox_name(OFFLINE_USERNAME),
+            crate::sandbox_name(ONLINE_USERNAME),
+        ] {
+            if let Ok(Some(flags)) = read_local_user_flags(&username) {
                 anyhow::ensure!(
                     flags & UF_PASSWORD_EXPIRED == 0,
                     "Windows sandbox account password is still expired after setup"

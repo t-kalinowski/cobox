@@ -52,7 +52,9 @@ pub async fn spawn_windows_sandbox_session_for_level(
     spawn_windows_sandbox_session_with_desktop(request, /*private_desktop_name*/ None).await
 }
 
-pub(crate) async fn spawn_windows_sandbox_session_with_desktop(
+/// Launch with an explicitly selected desktop. Console may request `Default`
+/// for its native CLI opt-out; other callers must supply a private desktop name.
+pub async fn spawn_windows_sandbox_session_with_desktop(
     request: WindowsSandboxSessionRequest<'_>,
     private_desktop_name: Option<String>,
 ) -> Result<SpawnedProcess> {
