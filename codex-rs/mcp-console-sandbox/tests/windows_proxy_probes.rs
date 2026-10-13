@@ -309,7 +309,10 @@ fn route_probe_distinguishes_admission_close_from_broken_http() -> Result<()> {
 #[test]
 fn host_forgery_reaches_the_route_with_the_requested_sid() -> Result<()> {
     let directory = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
-    let nested = directory.path().join("a".repeat(120)).join("b".repeat(120));
+    let nested = directory
+        .path()
+        .join("a".repeat(/*n*/ 120))
+        .join("b".repeat(/*n*/ 120));
     std::fs::create_dir_all(&nested).context("create long fixture directory")?;
     let fixture = nested.join("fixture.exe");
     std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)
