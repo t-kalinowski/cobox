@@ -2,7 +2,9 @@
 
 The Windows executable uses Codex's shared capability, policy conversion, and launch APIs without `codex-core` or a running Codex application. Console's backend preferences and proxy-mode validation live in this leaf crate. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
 
-The JSON `windows_sandbox_level` field accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto prefers native MXC when the Windows build and policy support it, otherwise selects elevated. Explicit selections fail closed; launch failures never trigger a backend retry. MXC requires no setup. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup.
+The JSON `windows_backend` field accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto prefers native MXC when the Windows build and policy support it, otherwise selects elevated. Explicit selections fail closed; launch failures never trigger a backend retry. MXC requires no setup. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup.
+
+The previous field name, `windows_sandbox_level`, remains accepted as an alias. Supply only one of the two names; a configuration containing both is rejected.
 
 Existing Console sandbox accounts keep Auto on the legacy elevated backend. Old setup does not register every directory containing account credentials, so MXC's host identity cannot safely protect those unknown locations. This patch does not migrate or remove those accounts; explicit MXC reports the incompatibility. `setup` and `status` continue to manage only the legacy backend.
 
@@ -71,7 +73,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
-- Omitted or null `windows_sandbox_level` means `auto`. Consumers requiring the previous default must send `elevated`; `disabled` is rejected.
+- Omitted or null `windows_backend` means `auto`. Consumers requiring the previous default must send `elevated`; `disabled` is rejected.
 - Legacy targets run on a private Windows desktop with Console-specific names; MXC uses the native backend's desktop isolation.
 - `windows_state_dir` optionally selects an absolute persistent legacy state directory. Only legacy backends resolve its `LOCALAPPDATA` default; MXC needs neither and does not inspect setup records.
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.

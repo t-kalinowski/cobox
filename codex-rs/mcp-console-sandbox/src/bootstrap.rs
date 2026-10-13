@@ -44,7 +44,8 @@ pub struct Bootstrap {
     pub lifecycle: Lifecycle,
     pub linux_backend: Option<crate::config::LinuxBackend>,
     #[cfg(windows)]
-    pub windows_sandbox_level: Option<crate::config::WindowsSandboxMode>,
+    #[serde(alias = "windows_sandbox_level")]
+    pub windows_backend: Option<crate::config::WindowsBackend>,
     #[cfg(windows)]
     pub windows_state_dir: Option<AbsolutePathBuf>,
 }
@@ -65,7 +66,8 @@ struct EnvironmentConfiguration {
     lifecycle: Lifecycle,
     linux_backend: Option<crate::config::LinuxBackend>,
     #[cfg(windows)]
-    windows_sandbox_level: Option<crate::config::WindowsSandboxMode>,
+    #[serde(alias = "windows_sandbox_level")]
+    windows_backend: Option<crate::config::WindowsBackend>,
     #[cfg(windows)]
     windows_state_dir: Option<AbsolutePathBuf>,
     #[serde(default = "inherit_environment")]
@@ -178,7 +180,7 @@ pub fn take_input() -> Result<Input> {
             lifecycle: config.lifecycle,
             linux_backend: config.linux_backend,
             #[cfg(windows)]
-            windows_sandbox_level: config.windows_sandbox_level,
+            windows_backend: config.windows_backend,
             #[cfg(windows)]
             windows_state_dir: config.windows_state_dir,
         };

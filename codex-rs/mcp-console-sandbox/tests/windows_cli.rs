@@ -13,7 +13,7 @@ fn inherited_drive_directory_metadata_does_not_prevent_launch() -> anyhow::Resul
     let policy = json!({
         "extends": ":read-only",
         "network": "enabled",
-        "windows_sandbox_level": "unelevated",
+        "windows_backend": "unelevated",
         "windows_state_dir": root.path().join("state"),
     });
     // Windows callers can carry per-drive working directories as hidden entries.

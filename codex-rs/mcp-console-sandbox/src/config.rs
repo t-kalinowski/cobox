@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum WindowsSandboxMode {
+pub enum WindowsBackend {
     /// Prefer native MXC when the policy and host support it.
     Auto,
     /// Require native MXC; never retry through a legacy backend.
@@ -17,18 +17,18 @@ pub enum WindowsSandboxMode {
 }
 
 #[cfg(windows)]
-impl TryFrom<WindowsSandboxMode> for crate::windows_backend::WindowsSandboxPreference {
+impl TryFrom<WindowsBackend> for crate::windows_backend::WindowsSandboxPreference {
     type Error = anyhow::Error;
 
-    fn try_from(mode: WindowsSandboxMode) -> Result<Self, Self::Error> {
+    fn try_from(mode: WindowsBackend) -> Result<Self, Self::Error> {
         match mode {
-            WindowsSandboxMode::Disabled => {
-                anyhow::bail!("windows_sandbox_level: disabled is not supported")
+            WindowsBackend::Disabled => {
+                anyhow::bail!("windows_backend: disabled is not supported")
             }
-            WindowsSandboxMode::Auto => Ok(Self::Auto),
-            WindowsSandboxMode::Mxc => Ok(Self::Mxc),
-            WindowsSandboxMode::Elevated => Ok(Self::Elevated),
-            WindowsSandboxMode::Unelevated => Ok(Self::Unelevated),
+            WindowsBackend::Auto => Ok(Self::Auto),
+            WindowsBackend::Mxc => Ok(Self::Mxc),
+            WindowsBackend::Elevated => Ok(Self::Elevated),
+            WindowsBackend::Unelevated => Ok(Self::Unelevated),
         }
     }
 }
