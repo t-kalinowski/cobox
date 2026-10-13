@@ -9,6 +9,8 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cargo_bin::cargo_bin;
+use codex_utils_cargo_bin::copy_executable;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::process::Command;
@@ -33,8 +35,12 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
     fs::write(work.join("public/secret"), "outside").unwrap();
     fs::write(private.join("reopened/secret"), "private").unwrap();
     fs::write(private.join("sibling"), "sibling").unwrap();
-    codex_utils_cargo_bin::copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox"))
-        .unwrap();
+    copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox")).unwrap();
+    // The approved policy makes the synthetic root writable, so PATH helpers
+    // have writable ancestors. Supply the built helper in the bundled layout.
+    let resources = work.join("codex-resources");
+    fs::create_dir(&resources).unwrap();
+    copy_executable(&cargo_bin("bwrap").unwrap(), &resources.join("bwrap")).unwrap();
 
     let path_entry = |path: &str, access| {
         FileSystemSandboxEntry::new(
