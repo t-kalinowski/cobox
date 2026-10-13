@@ -76,14 +76,7 @@ pub(crate) fn require_client_job(
     };
     let process = owned_handle(process, "open proxy client process")?;
     let mut member = 0;
-    if unsafe {
-        IsProcessInJob(
-            process.as_raw_handle(),
-            job.as_raw_handle(),
-            &mut member,
-        )
-    } == 0
-    {
+    if unsafe { IsProcessInJob(process.as_raw_handle(), job.as_raw_handle(), &mut member) } == 0 {
         return Err(last_error("query proxy client Job membership"));
     }
     // Retain the exact process handle and verify that it still owns this connection.
