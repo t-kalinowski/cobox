@@ -59,6 +59,8 @@ Run from an ordinary interactive PowerShell session:
 
 Explicit setup provisions or refreshes the base accounts and all four proxy account pairs under one Windows UAC approval. It reserves the protected owner, rotates credentials and marks pool completion only after every helper succeeds, enabling the legacy-to-MXC migration. Ordinary launches never perform this refresh. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule.
 
+All elevated launches, including proxyless execution and auto selection of the legacy backend, require the registered owner and completed pool marker. Base-only and pre-marker installations therefore need one explicit setup refresh before using this companion. Failed or interrupted setup leaves an empty completion marker and refuses new legacy workloads until an explicit refresh succeeds; selecting auto does not bypass this requirement. Console must require `configured`, `managed_proxy_provisioned`, and `helpers_available` from status for elevated admission; `configured` alone describes the native base records and does not establish this complete readiness condition.
+
 Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
 The launcher creates `.sandbox-bin` as the caller before elevation, so ordinary launches can refresh its protected DACL. An older installation whose helper directory is administrator-owned can fail with `helper_sandbox_lock_failed`; it needs an ownership repair before ordinary launches will work.
@@ -125,6 +127,8 @@ Console's pipe-launched workloads enter a non-breakaway Job at process creation.
 
 The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. It removes private storage only after a confirmed receipt; startup errors and unconfirmed retirement retain storage with diagnostics. Private storage is not deleted while target descendants are known to remain.
 After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
+
+Proxyless elevated admission creates a protected `legacy-session-*.lease` record while holding the setup barrier. The barrier is then released, allowing independent sessions to run concurrently. Setup refuses to refresh accounts while any record remains active. Confirmed native retirement and successful storage cleanup empty the record for reuse; this requires no delete permission. Owner loss and missing receipts retain nonempty records as quarantine. A failed cleanup cannot publish success. Clear quarantined records only after independently confirming all affected native workloads have retired.
 
 Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner loss does not guarantee storage deletion. A forcibly killed waiting Console frontend is not evidence of completed native retirement and cannot admit a replacement. Windows console signals and desktop behavior are not Unix terminal semantics.
 

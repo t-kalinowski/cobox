@@ -93,18 +93,7 @@ pub(crate) fn run() -> Result<i32> {
         );
     }
     if matches!(cli.action, Action::Setup) {
-        std::fs::create_dir_all(state_dir.as_path().join(".sandbox-secrets"))?;
-        let _configuration = crate::windows_proxy_lock::configuration_guard(state_dir.as_path())?;
-        for index in 0..codex_windows_sandbox::ConsoleProxySlot::COUNT {
-            anyhow::ensure!(
-                !state_dir
-                    .as_path()
-                    .join(".sandbox-secrets")
-                    .join(format!("proxy-slot-{index}.lease"))
-                    .exists(),
-                "proxy slot {index} is leased or quarantined; setup cannot replace an unretired workload"
-            );
-        }
+        let _configuration = crate::windows_proxy_lock::begin_setup(state_dir.as_path())?;
         // Create the helper directory as the caller, before UAC. Its owner
         // must be able to refresh the protected DACL on ordinary launches.
         std::fs::create_dir_all(codex_windows_sandbox::sandbox_bin_dir(state_dir.as_path()))
@@ -120,9 +109,6 @@ pub(crate) fn run() -> Result<i32> {
             proxy_enforced: false,
         };
         let marker = crate::windows_proxy::pool_marker(state_dir.as_path());
-        if marker.exists() {
-            std::fs::remove_file(&marker)?;
-        }
         codex_windows_sandbox::ConsoleProxySlot::provision_pool(request)?;
         std::fs::write(marker, b"1\n")?;
     }

@@ -143,6 +143,4 @@ fn validate_grants(
     Ok(())
 }
 
-pub(crate) fn pool_marker(state: &Path) -> PathBuf {
-    state.join(".sandbox-secrets").join("console-proxy-pool-v1")
-}
+pub(crate) use crate::windows_proxy_lock::pool_marker;

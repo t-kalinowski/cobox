@@ -4,6 +4,8 @@ Windows implements the environment transport with native Job retirement. Its `wi
 
 On Windows, omitted or null `windows_sandbox_level` now means `auto`: prefer compatible MXC, otherwise select the explicitly provisioned elevated backend. Callers that depend on the former omission behavior must send `elevated`. Explicit backend selection fails closed and never retries a weaker backend. The consumer must coordinate this default change with its pinned companion update.
 
+Elevated execution, including proxyless workloads selected by auto, requires the registered Console state owner and completed setup marker. Older base-only or pre-marker installations need an explicit `setup` refresh; ordinary launches never provision or bypass incomplete setup. Admission records remain active until confirmed native retirement and cleanup, so concurrent setup cannot change the account policy beneath a workload.
+
 This private protocol is unversioned. MCP Console is its single consumer and pins the runner revision; the consumer and runner are updated in lockstep. Do not send a `version` field: unknown top-level fields are rejected. There is no version negotiation or compatibility execution mode.
 
 Two explicit input modes are supported. Both accept one immutable configuration and use the same permission-driven execution selection. Execution uses the runner's supervisor.

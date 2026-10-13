@@ -193,6 +193,12 @@ pub(crate) fn run() -> Result<i32> {
         filesystem = mxc_filesystem;
     }
     WindowsSandboxProduct::Console.initialize()?;
+    let configuration = (request.proxy.is_none()
+        && backend == SandboxType::WindowsRestrictedToken
+        && level == WindowsSandboxLevel::Elevated)
+        .then(|| crate::windows_proxy_lock::configuration_guard(&state)
+            .context("Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory"))
+        .transpose()?;
     if backend == SandboxType::WindowsRestrictedToken && level == WindowsSandboxLevel::Elevated {
         ensure!(
             codex_windows_sandbox::check_sandbox_setup(&state)?
@@ -203,6 +209,13 @@ pub(crate) fn run() -> Result<i32> {
             "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory from an interactive terminal"
         );
     }
+    let mut legacy_lease = configuration
+        .map(|configuration| {
+            codex_windows_sandbox::ConsoleProxySlot::validate_owner(&state)
+                .context("Windows sandbox setup is required for this state directory")?;
+            crate::windows_proxy_lock::LegacyLease::acquire(&state, configuration)
+        })
+        .transpose()?;
     let job = (backend == SandboxType::WindowsMxc)
         .then(codex_utils_pty::JobObject::create_without_breakaway)
         .transpose()?
@@ -254,6 +267,9 @@ pub(crate) fn run() -> Result<i32> {
                 windows_sandbox_level: level,
             })?;
             spawn_attempted = true;
+            if let Some(lease) = legacy_lease.as_mut() {
+                lease.mark_spawn_attempted();
+            }
             let spawned = codex_sandboxing::spawn_process_with_windows_context(
                 SpawnRequest {
                     command: &prepared.command,
@@ -321,6 +337,11 @@ pub(crate) fn run() -> Result<i32> {
                 }
             }
         }
+    }
+    if (!spawn_attempted || matches!(result, Ok(Some(_))))
+        && let Some(lease) = legacy_lease
+    {
+        lease.release()?;
     }
     result.map(|receipt| receipt.unwrap_or(125))
 }
