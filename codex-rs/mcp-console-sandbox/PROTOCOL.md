@@ -75,6 +75,8 @@ There are no other top-level fields. In particular, `excluded_environment` is in
 
 Windows environment inheritance omits hidden per-drive working-directory entries such as `=C:`. Ordinary variables remain inherited, and explicit environment names containing `=` remain invalid.
 
+With a managed proxy, Windows rejects a `--config-env` name that conflicts case insensitively with an upstream managed proxy variable (for example `HTTP_PROXY` or `NODE_USE_ENV_PROXY`). Use a dedicated transport name so removing the configuration cannot remove a generated endpoint or expose the original JSON. Stale `CODEX_NETWORK_PROXY_ATTRIBUTION` values are removed from inherited and workload environments.
+
 ### Native built-in selection
 
 `extends` selects a baseline directly from the public `codex-protocol` constructors. `":read-only"` uses `PermissionProfile::read_only()`: host reads and restricted networking. `":workspace"` uses `PermissionProfile::workspace_write_with(...)`: host reads, workspace writes, restricted networking, and native read-only metadata defaults for `.git`, `.agents`, and `.codex`. The workspace is supplied to that constructor so native Git pointer handling also protects referenced metadata, then the existing workspace-root materialization API resolves symbolic entries. No Codex configuration files or full configuration loader are used.

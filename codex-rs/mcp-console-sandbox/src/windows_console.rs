@@ -32,10 +32,18 @@ use windows_sys::Win32::System::Threading::*;
 
 pub(crate) fn run() -> Result<i32> {
     let crate::bootstrap::Input::Environment(mut request) = crate::bootstrap::take_input()?;
-    ensure!(
-        request.proxy.is_none(),
-        "managed proxy configuration is not supported on Windows"
-    );
+    if let Some(config) = &request.proxy {
+        crate::windows_proxy::validate(config)?;
+        ensure!(
+            request
+                .excluded_environment
+                .iter()
+                .all(|name| !codex_network_proxy::PROXY_ENV_KEYS
+                    .iter()
+                    .any(|key| name.eq_ignore_ascii_case(key))),
+            "configuration transport conflicts with managed proxy environment; use a dedicated --config-env name"
+        );
+    }
     ensure!(
         request.macos_seatbelt_profile_extension.is_none(),
         "macos_seatbelt_profile_extension is supported only on macOS"
@@ -49,7 +57,7 @@ pub(crate) fn run() -> Result<i32> {
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     filesystem =
         filesystem.materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
-    let state = match request.windows_state_dir.take() {
+    let mut state = match request.windows_state_dir.take() {
         Some(state) => state.into_path_buf(),
         None => {
             PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?)
@@ -141,6 +149,10 @@ pub(crate) fn run() -> Result<i32> {
     let mxc_state_protection =
         crate::windows_proxy::protect_state(&mut mxc_filesystem, &state, &request.cwd);
     let initial_profile = PermissionProfile::from_runtime_permissions(&mxc_filesystem, network);
+    let compatible = request
+        .proxy
+        .as_ref()
+        .is_none_or(|proxy| proxy.allow_local_binding);
     let (backend, level) = match request
         .windows_sandbox_level
         .unwrap_or(WindowsSandboxMode::Auto)
@@ -149,6 +161,10 @@ pub(crate) fn run() -> Result<i32> {
             anyhow::bail!("windows_sandbox_level: disabled is not supported")
         }
         WindowsSandboxMode::Mxc => {
+            ensure!(
+                compatible,
+                "MXC cannot enforce allow_local_binding=false; use auto or elevated"
+            );
             if let Err(error) = &mxc_state_protection {
                 anyhow::bail!("{error:#}");
             }
@@ -165,7 +181,8 @@ pub(crate) fn run() -> Result<i32> {
         WindowsSandboxMode::Auto => (
             codex_sandboxing::resolve_windows_sandbox_type(
                 SandboxType::WindowsRestrictedToken,
-                mxc_state_protection.is_ok()
+                compatible
+                    && mxc_state_protection.is_ok()
                     && codex_sandboxing::windows_mxc_available_for(&initial_profile),
             ),
             WindowsSandboxLevel::Elevated,
@@ -179,6 +196,12 @@ pub(crate) fn run() -> Result<i32> {
             WindowsSandboxLevel::RestrictedToken,
         ),
     };
+    ensure!(
+        request.proxy.is_none()
+            || backend == SandboxType::WindowsMxc
+            || level == WindowsSandboxLevel::Elevated,
+        "managed proxy requires MXC or the elevated Windows sandbox"
+    );
     ensure!(
         level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
         "restricted networking requires the elevated Windows sandbox; unelevated requires network: enabled"
@@ -199,12 +222,25 @@ pub(crate) fn run() -> Result<i32> {
         .then(|| crate::windows_proxy_lock::configuration_guard(&state)
             .context("Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory"))
         .transpose()?;
+    let mut lease = request
+        .proxy
+        .as_ref()
+        .filter(|_| backend == SandboxType::WindowsRestrictedToken)
+        .map(|config| crate::windows_proxy::Lease::acquire(&state, config))
+        .transpose()?;
+    if let Some(lease) = &lease {
+        lease.slot.initialize()?;
+        state = lease.state.clone();
+    }
+    let settings = lease.as_ref().map_or_else(
+        codex_windows_sandbox::WindowsSandboxProvisioningSettings::default,
+        |lease| lease.slot.settings(),
+    );
     if backend == SandboxType::WindowsRestrictedToken && level == WindowsSandboxLevel::Elevated {
         ensure!(
             codex_windows_sandbox::check_sandbox_setup(&state)?
                 && codex_windows_sandbox::sandbox_setup_is_complete_with_settings(
-                    &state,
-                    &codex_windows_sandbox::WindowsSandboxProvisioningSettings::default()
+                    &state, &settings
                 ),
             "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory from an interactive terminal"
         );
@@ -232,8 +268,25 @@ pub(crate) fn run() -> Result<i32> {
                 &profile,
                 SandboxablePreference::Require,
                 backend,
-                /*has_managed_network_requirements*/ false,
+                request.proxy.is_some(),
             );
+            let proxy = if let Some(config) = request.proxy {
+                Some(
+                    crate::windows_proxy::prepare(
+                        config,
+                        match &job {
+                            Some(job) => crate::windows_proxy::Owner::Job(job),
+                            None => crate::windows_proxy::Owner::Account(
+                                lease.as_ref().context("Console proxy lease")?.slot,
+                            ),
+                        },
+                        &mut request.environment,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
             // Projection precedes the final case-insensitive transport exclusion.
             request.environment.retain(|name, _| {
                 !request
@@ -241,6 +294,8 @@ pub(crate) fn run() -> Result<i32> {
                     .iter()
                     .any(|excluded| name.eq_ignore_ascii_case(excluded))
             });
+            let network = proxy.as_ref().map(|proxy| &proxy.proxy);
+            let managed_network = proxy.as_ref().map(|proxy| proxy.context.clone());
             let (program, args) = request
                 .command
                 .split_first()
@@ -253,21 +308,31 @@ pub(crate) fn run() -> Result<i32> {
                     args: args.to_vec(),
                     cwd: request.cwd.clone().into(),
                     env: request.environment,
-                    managed_network: None,
+                    managed_network,
                     additional_permissions: None,
                 },
                 permissions: &profile,
                 sandbox,
-                enforce_managed_network: false,
+                enforce_managed_network: proxy.is_some(),
                 environment_id: None,
-                network: None,
+                network,
                 sandbox_policy_cwd: &policy_cwd,
                 sandbox_exe: Some(&executable),
                 use_legacy_landlock: false,
                 windows_sandbox_level: level,
             })?;
+            let restricting_sid = network.and_then(|proxy| {
+                proxy.network_proxy_restricting_sid(/*environment_id*/ None)
+            });
+            ensure!(
+                lease.is_none() || restricting_sid.is_some(),
+                "managed Windows proxy route is unavailable"
+            );
             spawn_attempted = true;
             if let Some(lease) = legacy_lease.as_mut() {
+                lease.mark_spawn_attempted();
+            }
+            if let Some(lease) = lease.as_mut() {
                 lease.mark_spawn_attempted();
             }
             let spawned = codex_sandboxing::spawn_process_with_windows_context(
@@ -281,8 +346,8 @@ pub(crate) fn run() -> Result<i32> {
                         permission_profile: &profile,
                         workspace_roots: std::slice::from_ref(&workspace),
                         windows_sandbox_level: level,
-                        proxy_enforced: false,
-                        network_proxy_restricting_sid: None,
+                        proxy_enforced: proxy.is_some(),
+                        network_proxy_restricting_sid: restricting_sid.as_deref(),
                         proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
                         filesystem_overrides: None,
                     }),
@@ -305,6 +370,13 @@ pub(crate) fn run() -> Result<i32> {
                 cancellation,
             )
             .await;
+            if let Some(proxy) = proxy {
+                proxy
+                    .handle
+                    .shutdown()
+                    .await
+                    .context("stop retired Console proxy")?;
+            }
             // A missing receipt is distinct from every 32-bit target exit code.
             Ok::<_, anyhow::Error>(result)
         });
@@ -341,6 +413,24 @@ pub(crate) fn run() -> Result<i32> {
     if (!spawn_attempted || matches!(result, Ok(Some(_))))
         && let Some(lease) = legacy_lease
     {
+        lease.release()?;
+    }
+    // The runtime has dropped, including ingress and accepted connections. Only a confirmed
+    // native receipt and successful proxy/storage cleanup permit another process to use the slot.
+    if (!spawn_attempted || matches!(result, Ok(Some(_))))
+        && let Some(lease) = lease
+    {
+        // Do not publish a successful receipt if a listener outlived runtime teardown.
+        if spawn_attempted {
+            let ports = lease
+                .slot
+                .ports()
+                .map(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)))
+                .into_iter()
+                .collect::<std::io::Result<Vec<_>>>()
+                .context("verify retired Console proxy ports")?;
+            drop(ports);
+        }
         lease.release()?;
     }
     result.map(|receipt| receipt.unwrap_or(125))

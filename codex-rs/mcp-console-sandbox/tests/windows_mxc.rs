@@ -147,6 +147,39 @@ fn explicit_project_roots_are_materialized_before_mxc_selection() -> Result<()> 
 }
 
 #[test]
+fn explicit_mxc_rejects_incompatible_network_policy_before_launch() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .env(
+            "CONSOLE_POLICY",
+            json!({"extends": ":read-only", "network": "restricted",
+            "windows_sandbox_level": "mxc", "windows_state_dir": root.path().join("state"),
+            "proxy": {"enabled": true, "enableSocks5": true, "enableSocks5Udp": false,
+                "allowUpstreamProxy": false, "dangerouslyAllowAllUnixSockets": false,
+                "mode": "full", "domains": {"localhost": "allow"}, "allowLocalBinding": false}})
+            .to_string(),
+        )
+        .args([
+            "--config-env",
+            "CONSOLE_POLICY",
+            "--",
+            "cmd.exe",
+            "/d",
+            "/c",
+            "echo launched",
+        ])
+        .output()?;
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let diagnostic = String::from_utf8(output.stderr)?;
+    assert!(
+        diagnostic.contains("allow_local_binding=false"),
+        "{diagnostic}"
+    );
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
 fn mxc_rejects_grants_that_reopen_control_state() -> Result<()> {
     let root = tempfile::tempdir()?;
     let state = root.path().join("state");
