@@ -45,7 +45,7 @@ pub fn select_windows_sandbox(
     host_mxc_restriction: Option<&str>,
 ) -> anyhow::Result<(SandboxType, WindowsSandboxLevel)> {
     let restriction = host_mxc_restriction.or_else(|| {
-        proxy.filter(|proxy| !proxy.allow_local_binding).map(|_| {
+        proxy.filter(|proxy| proxy.enabled && !proxy.allow_local_binding).map(|_| {
             "MXC cannot enforce allow_local_binding=false: native host-loopback access is bidirectional"
         })
     });
@@ -77,3 +77,7 @@ pub fn select_windows_sandbox(
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "windows_mxc_tests.rs"]
+mod tests;

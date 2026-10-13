@@ -28,7 +28,7 @@ pub(crate) async fn start(
 ) -> Result<Prepared> {
     ensure!(config.enabled, "proxy.enabled must be true");
     ensure!(
-        !config.enable_socks5_udp,
+        !config.enable_socks5 || !config.enable_socks5_udp,
         "SOCKS5 UDP is not supported on Windows"
     );
     ensure!(

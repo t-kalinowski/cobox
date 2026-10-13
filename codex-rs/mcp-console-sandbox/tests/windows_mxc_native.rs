@@ -25,9 +25,43 @@ fn proxy(allow_local_binding: bool, allow_destination: bool) -> Value {
 }
 
 #[tokio::test]
-#[ignore = "requires a usable native MXC runtime and curl.exe"]
+async fn http_only_proxy_ignores_udp_flag_but_active_socks_udp_is_rejected() -> Result<()> {
+    let job = codex_utils_pty::JobObject::create_without_breakaway()?;
+    let mut env = std::collections::HashMap::new();
+    let mut config: codex_network_proxy::RemoteNetworkProxyConfig = serde_json::from_value(proxy(
+        /*allow_local_binding*/ true, /*allow_destination*/ true,
+    ))?;
+    config.enable_socks5 = false;
+    config.enable_socks5_udp = true;
+    let prepared = windows_proxy::start(config.clone(), &job, &mut env).await?;
+    assert_eq!(
+        prepared.context,
+        codex_network_proxy::ManagedNetworkSandboxContext {
+            loopback_ports: vec![prepared.proxy.http_addr().port()],
+            allow_local_binding: true,
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        env.get("HTTP_PROXY"),
+        Some(&format!("http://{}", prepared.proxy.http_addr()))
+    );
+    prepared.handle.shutdown().await?;
+
+    config.enable_socks5 = true;
+    let Err(error) = windows_proxy::start(config, &job, &mut env).await else {
+        anyhow::bail!("active SOCKS5 UDP unexpectedly accepted");
+    };
+    assert_eq!(error.to_string(), "SOCKS5 UDP is not supported on Windows");
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
-    anyhow::ensure!(windows_mxc_available(), "native MXC is unavailable");
+    if !windows_mxc_available() {
+        eprintln!("skipping native MXC integration: this Windows worker has no usable MXC runtime");
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let cwd = AbsolutePathBuf::try_from(root.path().join("command-cwd"))?;
     std::fs::create_dir(cwd.as_path())?;
