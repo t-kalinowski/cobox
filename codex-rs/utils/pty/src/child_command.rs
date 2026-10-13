@@ -72,6 +72,8 @@ pub enum ChildStdin {
 /// A local command whose complete launch contract is known to both backends.
 pub struct Command {
     pub(crate) inner: tokio::process::Command,
+    #[cfg(windows)]
+    pub(crate) windows_job: Option<std::sync::Arc<crate::JobObject>>,
     #[cfg(unix)]
     saw_nul: bool,
     pub(crate) process_mode: ProcessMode,
@@ -105,6 +107,8 @@ impl Command {
         inner.creation_flags(CREATE_NO_WINDOW);
         Self {
             inner,
+            #[cfg(windows)]
+            windows_job: None,
             #[cfg(unix)]
             saw_nul: program.as_encoded_bytes().contains(&0),
             process_mode: ProcessMode::Inherit,
@@ -335,6 +339,12 @@ impl Command {
             ChildDropPolicy::KillAndReap => None,
             ChildDropPolicy::ReapOnly => Some(crate::child::reaper::sender()?),
         };
+        #[cfg(windows)]
+        let mut child = match self.windows_job {
+            Some(job) => job.spawn_contained(&mut self.inner)?,
+            None => self.inner.spawn()?,
+        };
+        #[cfg(not(windows))]
         let mut child = self.inner.spawn()?;
         Ok(Child {
             stdin: child.stdin.take(),

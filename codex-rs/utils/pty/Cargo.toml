@@ -25,6 +25,7 @@ log = { workspace = true }
 shared_library = "0.1.9"
 winapi = { version = "0.3.9", features = [
     "handleapi",
+    "ioapiset",
     "jobapi",
     "jobapi2",
     "libloaderapi",
