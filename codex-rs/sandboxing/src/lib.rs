@@ -20,6 +20,7 @@ pub use bwrap::find_system_bwrap_in_path;
 pub use bwrap::system_bwrap_warning;
 pub use codex_mxc_sandbox::CODEX_WINDOWS_MXC_ARG1;
 pub use codex_mxc_sandbox::is_available as windows_mxc_available;
+pub use codex_mxc_sandbox::is_available_for as windows_mxc_available_for;
 pub use codex_mxc_sandbox::run_main as run_windows_mxc_main;
 pub use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
 pub use denial::is_likely_executor_managed_sandbox_denied;
@@ -57,10 +58,6 @@ pub use windows::resolve_windows_elevated_filesystem_overrides;
 pub use windows::resolve_windows_restricted_token_filesystem_overrides;
 pub use windows::unsupported_windows_restricted_token_sandbox_reason;
 pub use windows::windows_sandbox_uses_elevated_backend;
-#[cfg(windows)]
-pub use windows_mxc::WindowsSandboxPreference;
-#[cfg(windows)]
-pub use windows_mxc::select_windows_sandbox;
 
 use codex_protocol::error::CodexErr;
 

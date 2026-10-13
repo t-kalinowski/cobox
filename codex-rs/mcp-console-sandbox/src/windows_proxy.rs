@@ -21,11 +21,9 @@ pub(crate) struct Prepared {
     pub context: ManagedNetworkSandboxContext,
 }
 
-pub(crate) async fn start(
-    config: RemoteNetworkProxyConfig,
-    job: &JobObject,
-    environment: &mut HashMap<String, String>,
-) -> Result<Prepared> {
+// Console supports only TCP proxies on Windows. Reject unsupported modes before
+// selecting a backend: legacy Console does not support managed proxies either.
+pub(crate) fn validate(config: &RemoteNetworkProxyConfig) -> Result<()> {
     ensure!(config.enabled, "proxy.enabled must be true");
     ensure!(
         !config.enable_socks5 || !config.enable_socks5_udp,
@@ -39,6 +37,15 @@ pub(crate) async fn start(
                 .is_none_or(|sockets| sockets.entries.is_empty()),
         "Unix sockets are not supported on Windows"
     );
+    Ok(())
+}
+
+pub(crate) async fn start(
+    config: RemoteNetworkProxyConfig,
+    job: &JobObject,
+    environment: &mut HashMap<String, String>,
+) -> Result<Prepared> {
+    validate(&config)?;
     let mut state = NetworkProxyState::from_remote_launch_config(
         RemoteNetworkProxyLaunchConfig::new(config),
         codex_network_proxy::Platform::native(),

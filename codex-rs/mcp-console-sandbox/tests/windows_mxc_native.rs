@@ -43,8 +43,11 @@ async fn http_only_proxy_ignores_udp_flag_but_active_socks_udp_is_rejected() -> 
         }
     );
     assert_eq!(
-        env.get("HTTP_PROXY"),
-        Some(&format!("http://{}", prepared.proxy.http_addr()))
+        env.iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("HTTP_PROXY"))
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>(),
+        vec![format!("http://{}", prepared.proxy.http_addr())]
     );
     prepared.handle.shutdown().await?;
 
@@ -53,6 +56,25 @@ async fn http_only_proxy_ignores_udp_flag_but_active_socks_udp_is_rejected() -> 
         anyhow::bail!("active SOCKS5 UDP unexpectedly accepted");
     };
     assert_eq!(error.to_string(), "SOCKS5 UDP is not supported on Windows");
+    Ok(())
+}
+
+#[test]
+fn unix_socket_proxy_modes_are_rejected_before_startup() -> Result<()> {
+    for (key, value) in [
+        ("dangerouslyAllowAllUnixSockets", json!(true)),
+        ("unixSockets", json!({"/tmp/proxy.sock": "allow"})),
+    ] {
+        let mut config = proxy(
+            /*allow_local_binding*/ true, /*allow_destination*/ true,
+        );
+        config[key] = value;
+        let error = windows_proxy::validate(&serde_json::from_value(config)?).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Unix sockets are not supported on Windows"
+        );
+    }
     Ok(())
 }
 
