@@ -137,6 +137,8 @@ pub enum ManagedProxyRouting {
 
 #[derive(Clone)]
 pub struct NetworkProxyBuilder {
+    #[cfg(windows)]
+    windows_client_sid: Option<String>,
     state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
     socks_addr: Option<SocketAddr>,
@@ -149,6 +151,8 @@ pub struct NetworkProxyBuilder {
 impl Default for NetworkProxyBuilder {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            windows_client_sid: None,
             state: None,
             http_addr: None,
             socks_addr: None,
@@ -161,6 +165,15 @@ impl Default for NetworkProxyBuilder {
 }
 
 impl NetworkProxyBuilder {
+    /// Require this account as well as the route SID on shared Windows ingress.
+    /// A restricting SID alone can be copied into a token belonging to another account.
+    /// Reserve both ingress ports, even without SOCKS service, for account firewall exceptions.
+    #[cfg(windows)]
+    pub fn windows_client_sid(mut self, client_sid: String) -> Self {
+        self.windows_client_sid = Some(client_sid);
+        self
+    }
+
     pub fn state(mut self, state: Arc<NetworkProxyState>) -> Self {
         self.state = Some(state);
         self
@@ -249,7 +262,7 @@ impl NetworkProxyBuilder {
                 let ingress = WindowsProxyIngress::shared(
                     managed_http_addr,
                     managed_socks_addr,
-                    current_cfg.enable_socks5,
+                    current_cfg.enable_socks5 || self.windows_client_sid.is_some(),
                 )?;
                 let http_addr = ingress.http_addr();
                 let socks_addr = ingress.socks_addr();
@@ -302,6 +315,7 @@ impl NetworkProxyBuilder {
                 )
             });
             Arc::new(WindowsSharedProxyRuntime {
+                client_sid: self.windows_client_sid,
                 ingress,
                 http_service: http,
                 socks_service: socks,
@@ -558,6 +572,7 @@ impl ProxyRuntime {
 
 #[cfg(target_os = "windows")]
 struct WindowsSharedProxyRuntime {
+    client_sid: Option<String>,
     ingress: Arc<WindowsProxyIngress>,
     http_service: WindowsRouteService,
     socks_service: Option<WindowsRouteService>,
@@ -1445,7 +1460,11 @@ impl NetworkProxy {
                     self.socks5_udp_enabled,
                 )
             });
-            let route = Arc::new(windows_runtime.ingress.register_route(http, socks));
+            let route = Arc::new(windows_runtime.ingress.register_route(
+                http,
+                socks,
+                windows_runtime.client_sid.clone(),
+            ));
             let addrs = EnvironmentProxyAddrs {
                 http_addr: self.http_addr,
                 socks_addr: self.socks_addr,
@@ -1601,6 +1620,7 @@ impl NetworkProxy {
             let route = Arc::new(windows_runtime.ingress.register_route(
                 windows_runtime.http_service.clone(),
                 windows_runtime.socks_service.clone(),
+                windows_runtime.client_sid.clone(),
             ));
             *active_route = Some(Arc::clone(&route));
             drop(active_route);

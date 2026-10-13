@@ -4,6 +4,35 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 
 #[test]
+fn sid_authorization_rejects_recycled_or_disappeared_connection_owners() {
+    let current = std::process::id();
+    for (second_owner, expected) in [
+        (Some(current), Ok(())),
+        (Some(0), Err(io::ErrorKind::PermissionDenied)),
+        (None, Err(io::ErrorKind::NotFound)),
+    ] {
+        let mut lookups = 0;
+        let authorized = authorize_client_process(
+            || {
+                lookups += 1;
+                if lookups == 1 {
+                    Ok(current)
+                } else {
+                    second_owner.ok_or_else(|| io::ErrorKind::NotFound.into())
+                }
+            },
+            // Read a real token while simulating the connection disappearing or
+            // changing owners between its two kernel-table observations.
+            restricting_sids_for_process,
+        );
+        let result = authorized
+            .map(|(sid, _)| assert!(sid.starts_with("S-")))
+            .map_err(|error| error.kind());
+        assert_eq!((lookups, result), (2, expected));
+    }
+}
+
+#[test]
 fn parses_owner_table_and_matches_reversed_client_tuple() -> io::Result<()> {
     let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3128);
     let client_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 49152);
@@ -61,7 +90,7 @@ fn resolves_loopback_connection_to_current_process() -> io::Result<()> {
     let peer_addr = accepted.peer_addr()?;
 
     let process_id = owning_process_id(socket_addr_v4(local_addr)?, socket_addr_v4(peer_addr)?)?;
-    let restricting_sids = restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
+    let (_, restricting_sids) = restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
 
     assert_eq!(process_id, std::process::id());
     assert!(restricting_sids.iter().all(|sid| sid.starts_with("S-")));
