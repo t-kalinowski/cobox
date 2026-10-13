@@ -9,7 +9,7 @@ mod upstream {
 
 #[cfg(windows)]
 fn main() -> anyhow::Result<()> {
-    codex_windows_sandbox::WindowsSandboxProduct::Console.initialize()?;
+    codex_windows_sandbox::ConsoleProxySlot::initialize_helper()?;
     upstream::win::main()
 }
 

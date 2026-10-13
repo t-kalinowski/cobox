@@ -6,7 +6,7 @@ The JSON `windows_backend` field accepts `auto` (the default), `mxc`, `elevated`
 
 The previous field name, `windows_sandbox_level`, remains accepted as an alias. Supply only one of the two names; a configuration containing both is rejected.
 
-Existing Console sandbox accounts keep Auto on the legacy elevated backend. Old setup does not register every directory containing account credentials, so MXC's host identity cannot safely protect those unknown locations. This patch does not migrate or remove those accounts; explicit MXC reports the incompatibility. `setup` and `status` continue to manage only the legacy backend.
+Existing Console sandbox accounts keep Auto on the legacy elevated backend. Old setup does not register every directory containing account credentials, so MXC's host identity cannot safely protect those unknown locations. This proposal does not enable MXC/account coexistence or remove those accounts; explicit MXC reports the incompatibility. A registered proxy pool and orphaned slot accounts also exclude MXC. `setup` and `status` manage only the legacy backend. The optional [elevated managed-proxy proposal](WINDOWS_ELEVATED_PROXY.md) adds a fixed account pool and remains independent of the landed MXC support.
 
 ## Build and distribute
 
@@ -59,7 +59,7 @@ Run from an ordinary interactive PowerShell session:
 .\target\release\mcp-console-sandbox.exe status
 ```
 
-Setup requests Windows UAC approval when provisioning is needed. Repeating it reuses current setup records and enabled accounts. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule.
+In this proposal, explicit setup refreshes the base accounts and four proxy account pairs under one UAC request. Existing base-only installations need this explicit refresh before any elevated launch, including proxyless execution, to register the protected state. Ordinary launches never provision accounts. Status reports base configuration, matching helpers, and `managed_proxy_provisioned` separately; its exit code still describes base readiness. It does not audit every firewall rule or report free slot capacity. See [pool ownership and recovery](WINDOWS_ELEVATED_PROXY.md).
 
 Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
@@ -80,7 +80,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
 - `external-sandbox` delegates enforcement to the caller's outer sandbox when no managed proxy is requested. Codex's selection rules omit native restrictions, while the runner uses the existing supervised Job helper for descendant retirement and private-storage cleanup.
-- MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto falls back when local binding is disallowed; legacy Windows retains its existing managed-proxy rejection. Active SOCKS5 UDP and Unix-socket configurations fail preflight for every backend because neither Console path supports them. An unused UDP flag is accepted when SOCKS5 is disabled.
+- MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto selects the elevated backend when local binding is disallowed. Elevated managed proxies require the explicitly provisioned account pool; unelevated managed proxies remain unsupported. Active SOCKS5 UDP and Unix-socket configurations fail preflight for every backend because neither Console path supports them. An unused UDP flag is accepted when SOCKS5 is disabled.
 - Custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
 - The selected configuration and reserved transport variable are removed from the target environment case insensitively. Excluded variables cannot be reused as private temporary environment names.
 - With a managed proxy, the selected configuration variable must not collide case insensitively with generated proxy variables such as `HTTP_PROXY` or `NODE_USE_ENV_PROXY`; such requests fail before creating resources.
@@ -93,14 +93,13 @@ Run `--help` for `setup` and `status`. Execute workloads only with `--config-env
 
 Targets still need host read/traverse permission. In particular, Python 3.14's private temporary directories can grant access only through owner/admin/system ACL entries that a restricted token cannot use. Ordinary directories inheriting the current user's access work without machine-wide ACL changes. Use native Windows paths with backslashes for `cmd.exe`. Targets also remain subject to host Application Control policy; error 4551 is a host policy rejection.
 
-Unelevated launches create capability SIDs and save mappings in `cap_sid`. Capability ACL entries persist on filesystem objects; deleting the state directory does not undo them. Elevated launches use provisioned accounts and refresh workspace ACLs. Backend upgrades or network-setting changes can require administrator repair.
+Console launches create capability SIDs and save mappings in `.sandbox-secrets/cap_sid`, protected from the sandbox accounts. Capability ACL entries persist on filesystem objects; deleting the state directory does not undo them. Elevated launches use provisioned accounts and refresh workspace ACLs. Backend upgrades or network-setting changes can require administrator repair.
 
 ## Lifecycle
 
 Console's pipe-launched workloads enter a non-breakaway Job at process creation. After normal root exit, timeout, or cancellation, the backend terminates remaining members and confirms zero active processes before returning an exit receipt. A native Job completion port wakes the waiter; an accounting query confirms the barrier, with a five-second cleanup allowance. Failure uses reserved exit code 125. A missing exit receipt is distinct from a target exit code of `0xffffffff` (`-1`). Codex's default product continues to preserve descendants after normal root exit.
 
-The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. Failed preflight removes temporary storage; after a launch attempt, cleanup requires a confirmed receipt. Unconfirmed retirement retains storage with diagnostics. A target exit code of 125 is a valid receipt and still permits cleanup.
-After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
+The environment transport watches its direct caller and optional `lifecycle.parent_pid` owner through retained process handles. Owner death or Ctrl+C requests session termination. Failed preflight removes temporary storage; after a launch attempt, cleanup requires a confirmed receipt. Unconfirmed retirement retains storage with diagnostics. A target exit code of 125 is a valid receipt and still permits cleanup. After confirmed Job retirement, storage removal retries Windows sharing violations for up to five seconds while file or image mappings finish releasing. Other errors and persistent sharing violations remain cleanup failures; no successful receipt is returned before removal completes.
 
 Unelevated runner loss and elevated helper loss close kill-on-close Jobs. Runner loss does not guarantee storage deletion. A forcibly killed waiting Console frontend is not evidence of completed native retirement and cannot admit a replacement. Windows console signals and desktop behavior are not Unix terminal semantics.
 

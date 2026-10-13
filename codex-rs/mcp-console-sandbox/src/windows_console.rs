@@ -76,6 +76,25 @@ pub(crate) fn run() -> Result<i32> {
                 );
             }
         }
+        // Registered and orphaned pool identities also retain host-readable credentials.
+        // Account proxy support does not enable MXC coexistence with that state.
+        let mut pool_exists = !matches!(
+            codex_windows_sandbox::ConsoleProxySlot::is_registered(),
+            Ok(false)
+        );
+        for index in 0..codex_windows_sandbox::ConsoleProxySlot::COUNT {
+            for account in [
+                format!("McpConsoleProxyOff{index}"),
+                format!("McpConsoleProxyOn{index}"),
+            ] {
+                pool_exists |= codex_windows_sandbox::local_user_flags(&account)?.is_some();
+            }
+        }
+        if pool_exists {
+            host_mxc_restriction = Some(
+                "MXC is unavailable while a Console proxy pool is registered or its accounts exist; use elevated mode",
+            );
+        }
     }
     let (sandbox, level) = crate::windows_backend::select_windows_sandbox(
         preference,
@@ -84,8 +103,10 @@ pub(crate) fn run() -> Result<i32> {
         host_mxc_restriction,
     )?;
     ensure!(
-        request.proxy.is_none() || sandbox == SandboxType::WindowsMxc,
-        "managed proxy configuration is not supported by the legacy Windows sandbox"
+        request.proxy.is_none()
+            || sandbox == SandboxType::WindowsMxc
+            || level == WindowsSandboxLevel::Elevated,
+        "managed proxy requires MXC or the elevated Windows sandbox"
     );
     ensure!(
         level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
@@ -98,7 +119,7 @@ pub(crate) fn run() -> Result<i32> {
         "unelevated requires host reads and cannot enforce read restrictions"
     );
     // Only legacy backends consume state_dir; the shared context ignores it for MXC.
-    let state = if sandbox == SandboxType::WindowsRestrictedToken {
+    let mut state = if sandbox == SandboxType::WindowsRestrictedToken {
         match request.windows_state_dir.take() {
             Some(state) => state.into_path_buf(),
             None => PathBuf::from(
@@ -109,11 +130,47 @@ pub(crate) fn run() -> Result<i32> {
     } else {
         request.cwd.as_path().to_path_buf()
     };
-    ensure!(
-        level != WindowsSandboxLevel::Elevated
-            || codex_windows_sandbox::check_sandbox_setup(&state)?,
-        "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the same state directory from an interactive terminal"
+    if level == WindowsSandboxLevel::Elevated {
+        // Validate state ownership before admission can create its protected lock.
+        // Readiness is checked again under the setup barrier below.
+        codex_windows_sandbox::check_sandbox_setup(&state)?;
+    }
+    let configuration = (request.proxy.is_none() && level == WindowsSandboxLevel::Elevated)
+        .then(|| {
+            crate::windows_proxy_lock::configuration_guard(&state)
+                .context("Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory")
+        })
+        .transpose()?;
+    let mut lease = request
+        .proxy
+        .as_ref()
+        .filter(|_| sandbox == SandboxType::WindowsRestrictedToken)
+        .map(|config| crate::windows_proxy_lock::ProxyLease::acquire(&state, config))
+        .transpose()?;
+    if let Some(lease) = &lease {
+        lease.slot.initialize()?;
+        state = lease.state.clone();
+    }
+    let settings = lease.as_ref().map_or_else(
+        codex_windows_sandbox::WindowsSandboxProvisioningSettings::default,
+        |lease| lease.slot.settings(),
     );
+    if level == WindowsSandboxLevel::Elevated {
+        ensure!(
+            codex_windows_sandbox::check_sandbox_setup(&state)?
+                && codex_windows_sandbox::sandbox_setup_is_complete_with_settings(
+                    &state, &settings
+                ),
+            "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory from an interactive terminal"
+        );
+    }
+    let mut legacy_lease = configuration
+        .map(|configuration| {
+            codex_windows_sandbox::ConsoleProxySlot::validate_owner(&state)
+                .context("Windows sandbox setup is required for this state directory")?;
+            crate::windows_proxy_lock::LegacyLease::acquire(&state, configuration)
+        })
+        .transpose()?;
     let parent = Parent::new(request.lifecycle.parent_pid)?;
     for name in &request.excluded_environment {
         request
@@ -159,6 +216,42 @@ pub(crate) fn run() -> Result<i32> {
             Ok(directory)
         })
         .transpose()?;
+    if level == WindowsSandboxLevel::Elevated {
+        // Resolve explicit temp grants from the target environment before the shared
+        // elevated backend consults trusted host inputs for provisioning.
+        let temporary_paths = request
+            .environment
+            .iter()
+            .filter(|(key, value)| {
+                (key.eq_ignore_ascii_case("TEMP") || key.eq_ignore_ascii_case("TMP"))
+                    && std::path::Path::new(value).is_absolute()
+            })
+            .map(|(_, value)| AbsolutePathBuf::from_absolute_path(value))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        filesystem.entries = filesystem
+            .entries
+            .into_iter()
+            .flat_map(|entry| {
+                if matches!(
+                    &entry.path,
+                    FileSystemPath::Special {
+                        value: codex_protocol::permissions::FileSystemSpecialPath::Tmpdir,
+                    }
+                ) {
+                    temporary_paths
+                        .iter()
+                        .map(|path| {
+                            let mut entry = entry.clone();
+                            entry.path = path.clone().into();
+                            entry
+                        })
+                        .collect()
+                } else {
+                    vec![entry]
+                }
+            })
+            .collect();
+    }
     let profile = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
     let job = matches!(sandbox, SandboxType::WindowsMxc | SandboxType::None)
@@ -166,6 +259,7 @@ pub(crate) fn run() -> Result<i32> {
         .transpose()?
         .map(Arc::new);
     let mut retained_storage = None;
+    let mut spawn_attempted = false;
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
@@ -174,7 +268,12 @@ pub(crate) fn run() -> Result<i32> {
                 Some(config) => Some(
                     crate::windows_proxy::start(
                         config,
-                        job.as_ref().context("MXC proxy Job")?,
+                        match &job {
+                            Some(job) => crate::windows_proxy::Owner::Job(job),
+                            None => crate::windows_proxy::Owner::Account(
+                                lease.as_ref().context("Console proxy lease")?.slot,
+                            ),
+                        },
                         &mut request.environment,
                     )
                     .await?,
@@ -208,9 +307,25 @@ pub(crate) fn run() -> Result<i32> {
                 use_legacy_landlock: false,
                 windows_sandbox_level: level,
             })?;
+            let restricting_sid = proxy.as_ref().and_then(|proxy| {
+                proxy
+                    .proxy
+                    .network_proxy_restricting_sid(/*environment_id*/ None)
+            });
+            ensure!(
+                lease.is_none() || restricting_sid.is_some(),
+                "managed Windows proxy route is unavailable"
+            );
             // Before a launch attempt TempDir removes failed preflight storage.
             // Afterwards cleanup requires a confirmed native retirement receipt.
             retained_storage = storage.take().map(tempfile::TempDir::keep);
+            spawn_attempted = true;
+            if let Some(lease) = legacy_lease.as_mut() {
+                lease.mark_spawn_attempted();
+            }
+            if let Some(lease) = lease.as_mut() {
+                lease.mark_spawn_attempted();
+            }
             let spawned = if prepared.sandbox == SandboxType::None {
                 // External enforcement still needs the existing supervised Job lifetime.
                 let (program, args) = prepared.command.split_first().context("missing command")?;
@@ -235,8 +350,8 @@ pub(crate) fn run() -> Result<i32> {
                             workspace_roots: std::slice::from_ref(&workspace),
                             windows_sandbox_level: level,
                             proxy_enforced: proxy.is_some(),
-                            network_proxy_restricting_sid: None,
-                            proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
+                            network_proxy_restricting_sid: restricting_sid.as_deref(),
+                            proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
                             filesystem_overrides: None,
                         }),
                         tty: false,
@@ -293,6 +408,28 @@ pub(crate) fn run() -> Result<i32> {
                 }
             }
         }
+    }
+    if (!spawn_attempted || matches!(result, Ok(Some(_))))
+        && let Some(lease) = legacy_lease
+    {
+        lease.release()?;
+    }
+    // Runtime teardown has closed ingress and accepted connections. A slot is reusable
+    // only after the native receipt, successful storage cleanup, and listener retirement.
+    if (!spawn_attempted || matches!(result, Ok(Some(_))))
+        && let Some(lease) = lease
+    {
+        if spawn_attempted {
+            let ports = lease
+                .slot
+                .ports()
+                .map(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)))
+                .into_iter()
+                .collect::<std::io::Result<Vec<_>>>()
+                .context("verify retired Console proxy ports")?;
+            drop(ports);
+        }
+        lease.release()?;
     }
     result.map(|receipt| receipt.unwrap_or(/*default*/ 125))
 }

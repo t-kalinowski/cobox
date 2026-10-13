@@ -48,7 +48,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 tempfile = { workspace = true }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
 
 # Match the release binaries' native linkage without depending on codex-core
 # to enable this feature through Cargo's workspace feature unification.
@@ -66,3 +66,7 @@ codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+rcgen = { workspace = true }
+rustls = { workspace = true }

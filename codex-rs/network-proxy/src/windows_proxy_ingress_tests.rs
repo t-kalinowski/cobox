@@ -37,6 +37,7 @@ fn rejects_missing_or_ambiguous_registered_routes() {
 fn route_services() -> Arc<RouteServices> {
     let service = service_fn(|_stream: TcpStream| async { Ok::<(), BoxError>(()) }).boxed();
     Arc::new(RouteServices {
+        client_sid: None,
         http: service,
         socks: None,
     })

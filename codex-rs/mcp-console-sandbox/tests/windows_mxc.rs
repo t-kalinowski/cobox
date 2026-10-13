@@ -4,7 +4,6 @@
 mod mxc_support;
 
 use anyhow::Result;
-use codex_sandboxing::*;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -109,11 +108,7 @@ fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result
 #[test]
 fn public_backend_selection_preserves_legacy_ownership_without_provisioning() -> Result<()> {
     let root = tempfile::tempdir()?;
-    let accounts = ["McpConsoleSandboxOff", "McpConsoleSandboxOn"]
-        .into_iter()
-        .map(codex_windows_sandbox::local_user_flags)
-        .collect::<Result<Vec<_>>>()?;
-    let available = accounts.iter().all(Option::is_none) && windows_mxc_available();
+    let available = mxc_support::available()?;
     for (mode, strict_proxy) in [
         (None, false),
         (Some("auto"), false),
@@ -144,8 +139,6 @@ fn public_backend_selection_preserves_legacy_ownership_without_provisioning() ->
             let diagnostic = String::from_utf8(output.stderr)?;
             let expected = if mode == Some("mxc") {
                 "MXC"
-            } else if strict_proxy {
-                "legacy Windows sandbox"
             } else {
                 "mcp-console-sandbox setup"
             };
@@ -289,11 +282,7 @@ fn mxc_does_not_validate_unused_legacy_setup_records() -> Result<()> {
         "online":{"username":"CodexSandboxOnline","password":""}})
     .to_string();
     std::fs::write(&users, &foreign)?;
-    let accounts = ["McpConsoleSandboxOff", "McpConsoleSandboxOn"]
-        .into_iter()
-        .map(codex_windows_sandbox::local_user_flags)
-        .collect::<Result<Vec<_>>>()?;
-    let available = accounts.iter().all(Option::is_none) && windows_mxc_available();
+    let available = mxc_support::available()?;
     for mode in ["mxc", "elevated"] {
         let output = console(json!({"extends":":read-only", "windows_backend":mode,
                     "windows_state_dir":root.path()}))?
@@ -309,8 +298,6 @@ fn mxc_does_not_validate_unused_legacy_setup_records() -> Result<()> {
             let diagnostic = String::from_utf8(output.stderr)?;
             let expected = if mode == "elevated" {
                 "sandbox state belongs to a different product"
-            } else if accounts.iter().any(Option::is_some) {
-                "legacy Console sandbox accounts exist"
             } else {
                 "MXC is unavailable"
             };

@@ -40,7 +40,12 @@ pub(crate) fn run() -> Result<i32> {
             .join("mcp-console"),
         )?,
     };
-    let configured = codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())?;
+    let settings = codex_windows_sandbox::WindowsSandboxProvisioningSettings::default();
+    let configured = codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())?
+        && codex_windows_sandbox::sandbox_setup_is_complete_with_settings(
+            state_dir.as_path(),
+            &settings,
+        );
     let executable = std::env::current_exe()?;
     let directory = executable
         .parent()
@@ -58,6 +63,8 @@ pub(crate) fn run() -> Result<i32> {
                 "state_dir": state_dir,
                 "configured": configured,
                 "helpers_available": helpers_available,
+                "managed_proxy_provisioned": std::fs::read(crate::windows_proxy_lock::pool_marker(state_dir.as_path())).ok().as_deref() == Some(b"1\n")
+                    && codex_windows_sandbox::ConsoleProxySlot::validate_owner(state_dir.as_path()).is_ok(),
                 "offline_account": "McpConsoleSandboxOff",
                 "online_account": "McpConsoleSandboxOn",
             })
@@ -73,7 +80,8 @@ pub(crate) fn run() -> Result<i32> {
             "setup requires adjacent mcp-console-sandbox-setup.exe and mcp-console-sandbox-runner.exe"
         );
     }
-    if !configured {
+    if matches!(cli.action, Action::Setup) {
+        let _configuration = crate::windows_proxy_lock::begin_setup(state_dir.as_path())?;
         // Create the helper directory as the caller, before UAC. Its owner
         // must be able to refresh the protected DACL on ordinary launches.
         std::fs::create_dir_all(codex_windows_sandbox::sandbox_bin_dir(state_dir.as_path()))
@@ -81,13 +89,18 @@ pub(crate) fn run() -> Result<i32> {
         let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
             &PermissionProfile::read_only(),
         )?;
-        codex_windows_sandbox::run_elevated_setup(SandboxSetupRequest {
+        let request = SandboxSetupRequest {
             permissions: &permissions,
             command_cwd: state_dir.as_path(),
             env_map: &HashMap::new(),
             codex_home: state_dir.as_path(),
             proxy_enforced: false,
-        })?;
+        };
+        codex_windows_sandbox::ConsoleProxySlot::provision_pool(request)?;
+        std::fs::write(
+            crate::windows_proxy_lock::pool_marker(state_dir.as_path()),
+            b"1\n",
+        )?;
     }
     if !codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())? {
         bail!("sandbox setup did not produce current records and enabled accounts");

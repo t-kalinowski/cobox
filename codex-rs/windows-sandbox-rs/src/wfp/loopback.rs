@@ -57,8 +57,115 @@ pub fn install_loopback_filters_for_account(
     ensure_sublayer(engine.handle)?;
     remove_filters(engine.handle)?;
     let mut installed = 0;
+    // Workloads must never impersonate a companion on a provisioned ingress port, including
+    // the interval between companion loss and native Job retirement. Cover online accounts too.
+    if WindowsSandboxProduct::current() == WindowsSandboxProduct::Console {
+        use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
+        for (identity, name) in [(0, "CodexSandboxOffline"), (1, "CodexSandboxOnline")] {
+            let user = UserMatchCondition::for_account(&crate::sandbox_name(name))?;
+            for (family, layer) in [
+                (4, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4),
+                (6, FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6),
+            ] {
+                let mut key = KEY_PREFIX;
+                key.data4[4] = family;
+                key.data4[5] = identity;
+                let mut ports = FWP_RANGE0 {
+                    valueLow: FWP_VALUE0 {
+                        r#type: FWP_UINT16,
+                        Anonymous: FWP_VALUE0_0 { uint16: 43180 },
+                    },
+                    valueHigh: FWP_VALUE0 {
+                        r#type: FWP_UINT16,
+                        Anonymous: FWP_VALUE0_0 { uint16: 43187 },
+                    },
+                };
+                let spec = FilterSpec {
+                    key,
+                    name: "console_proxy_bind_guard",
+                    description: "Reserve Console proxy ingress ports against workload impersonation",
+                    layer_key: layer,
+                    conditions: &[],
+                };
+                let mut conditions = build_conditions(
+                    &[
+                        ConditionSpec::User,
+                        ConditionSpec::Protocol(IPPROTO_TCP as u8),
+                    ],
+                    &user,
+                );
+                conditions.push(FWPM_FILTER_CONDITION0 {
+                    fieldKey: FWPM_CONDITION_IP_LOCAL_PORT,
+                    matchType: FWP_MATCH_RANGE,
+                    conditionValue: FWP_CONDITION_VALUE0 {
+                        r#type: FWP_RANGE_TYPE,
+                        Anonymous: FWP_CONDITION_VALUE0_0 {
+                            rangeValue: &mut ports,
+                        },
+                    },
+                });
+                add_filter_with_conditions(engine.handle, &spec, &mut conditions)?;
+                installed += 1;
+            }
+        }
+    }
     if !settings.allow_local_binding {
         let user = UserMatchCondition::for_account(account)?;
+        if WindowsSandboxProduct::current() == WindowsSandboxProduct::Console {
+            use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
+            // Outbound connect filters alone still permit host-initiated local channels.
+            // TCP listen and UDP receive admission close that path without blocking
+            // replies on the permitted outbound TCP proxy connections.
+            for (family, kind, layer, conditions) in [
+                (
+                    4,
+                    2,
+                    FWPM_LAYER_ALE_AUTH_LISTEN_V4,
+                    vec![ConditionSpec::User],
+                ),
+                (
+                    6,
+                    2,
+                    FWPM_LAYER_ALE_AUTH_LISTEN_V6,
+                    vec![ConditionSpec::User],
+                ),
+                (
+                    4,
+                    3,
+                    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+                    vec![
+                        ConditionSpec::User,
+                        ConditionSpec::Protocol(IPPROTO_UDP as u8),
+                    ],
+                ),
+                (
+                    6,
+                    3,
+                    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+                    vec![
+                        ConditionSpec::User,
+                        ConditionSpec::Protocol(IPPROTO_UDP as u8),
+                    ],
+                ),
+            ] {
+                let mut key = KEY_PREFIX;
+                key.data4[4] = family;
+                key.data4[5] = kind;
+                let spec = FilterSpec {
+                    key,
+                    name: "console_local_listener_guard",
+                    description: "Block local listeners for Console sessions without local access",
+                    layer_key: layer,
+                    conditions: &[],
+                };
+                add_filter_with_conditions(
+                    engine.handle,
+                    &spec,
+                    &mut build_conditions(&conditions, &user),
+                )?;
+                installed += 1;
+            }
+        }
         let blocked_ports = blocked_tcp_ports(&settings.proxy_ports);
         for (family, layer) in [
             (4, FWPM_LAYER_ALE_AUTH_CONNECT_V4),
