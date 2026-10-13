@@ -25,7 +25,7 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Action {
-    /// Provision Windows accounts and network rules (requests UAC approval).
+    /// Provision sandbox accounts and managed proxy slots (one UAC approval).
     Setup,
     /// Report setup records, accounts, and packaged helpers as JSON.
     Status,

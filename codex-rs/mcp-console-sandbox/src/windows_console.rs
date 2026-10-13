@@ -1,4 +1,4 @@
-//! Console's versioned policy transport, backed by the native Windows session.
+//! Console's unversioned policy transport, backed by the native Windows session.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -10,13 +10,21 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::SpawnRequest;
+use codex_sandboxing::WindowsSandboxLaunchContext;
+use codex_sandboxing::WindowsSandboxSpawnRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_windows_sandbox::WindowsSandboxProduct;
-use codex_windows_sandbox::WindowsSandboxSessionRequest;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
@@ -36,25 +44,8 @@ pub(crate) fn run() -> Result<i32> {
         request.lifecycle.cleanup_timeout_ms.is_none(),
         "cleanup_timeout_ms is not configurable on Windows"
     );
-    let level = request
-        .windows_sandbox_level
-        .map(WindowsSandboxLevel::from)
-        .unwrap_or(WindowsSandboxLevel::Elevated);
-    ensure!(
-        level != WindowsSandboxLevel::Disabled,
-        "windows_sandbox_level: disabled is not supported"
-    );
+    use crate::config::WindowsSandboxMode;
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
-    ensure!(
-        level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
-        "restricted networking requires the elevated Windows sandbox; unelevated requires network: enabled"
-    );
-    ensure!(
-        level != WindowsSandboxLevel::RestrictedToken
-            || (filesystem.has_full_disk_read_access()
-                && !filesystem.has_denied_read_restrictions()),
-        "unelevated requires host reads and cannot enforce read restrictions"
-    );
     let state = match request.windows_state_dir.take() {
         Some(state) => state.into_path_buf(),
         None => {
@@ -62,12 +53,6 @@ pub(crate) fn run() -> Result<i32> {
                 .join("mcp-console")
         }
     };
-    WindowsSandboxProduct::Console.initialize()?;
-    let configured = codex_windows_sandbox::check_sandbox_setup(&state)?;
-    ensure!(
-        level != WindowsSandboxLevel::Elevated || configured,
-        "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the same state directory from an interactive terminal"
-    );
     let parent = Parent::new(request.lifecycle.parent_pid)?;
     for name in &request.excluded_environment {
         request
@@ -110,9 +95,8 @@ pub(crate) fn run() -> Result<i32> {
                     .environment
                     .insert(name.clone(), path.to_string_lossy().into_owned());
             }
-            // Cleanup belongs to the confirmed Job receipt, including when a
-            // later error or panic unwinds this function.
-            Ok(directory.keep())
+            // Keep automatic cleanup until policy preflight and backend selection finish.
+            Ok(directory)
         })
         .transpose()?;
     // Resolve only the policy's explicit temporary-directory grants from target inputs.
@@ -150,32 +134,147 @@ pub(crate) fn run() -> Result<i32> {
             }
         })
         .collect();
-    let profile = PermissionProfile::from_runtime_permissions(&filesystem, network);
+    let mut mxc_filesystem = filesystem.clone();
+    let mxc_state_protection =
+        crate::windows_proxy::protect_state(&mut mxc_filesystem, &state, &request.cwd);
+    let initial_profile = PermissionProfile::from_runtime_permissions(&mxc_filesystem, network);
+    let (backend, level) = match request
+        .windows_sandbox_level
+        .unwrap_or(WindowsSandboxMode::Auto)
+    {
+        WindowsSandboxMode::Disabled => {
+            anyhow::bail!("windows_sandbox_level: disabled is not supported")
+        }
+        WindowsSandboxMode::Mxc => {
+            if let Err(error) = &mxc_state_protection {
+                anyhow::bail!("{error:#}");
+            }
+            ensure!(
+                codex_sandboxing::windows_mxc_available(),
+                "MXC is unavailable on this executor"
+            );
+            ensure!(
+                codex_sandboxing::windows_mxc_available_for(&initial_profile),
+                "MXC cannot enforce this filesystem policy on this executor"
+            );
+            (SandboxType::WindowsMxc, WindowsSandboxLevel::Disabled)
+        }
+        WindowsSandboxMode::Auto => (
+            codex_sandboxing::resolve_windows_sandbox_type(
+                SandboxType::WindowsRestrictedToken,
+                mxc_state_protection.is_ok()
+                    && codex_sandboxing::windows_mxc_available_for(&initial_profile),
+            ),
+            WindowsSandboxLevel::Elevated,
+        ),
+        WindowsSandboxMode::Elevated => (
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Elevated,
+        ),
+        WindowsSandboxMode::Unelevated => (
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::RestrictedToken,
+        ),
+    };
+    ensure!(
+        level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
+        "restricted networking requires the elevated Windows sandbox; unelevated requires network: enabled"
+    );
+    ensure!(
+        level != WindowsSandboxLevel::RestrictedToken
+            || (filesystem.has_full_disk_read_access()
+                && !filesystem.has_denied_read_restrictions()),
+        "unelevated requires host reads and cannot enforce read restrictions"
+    );
+    if backend == SandboxType::WindowsMxc {
+        filesystem = mxc_filesystem;
+    }
+    WindowsSandboxProduct::Console.initialize()?;
+    if backend == SandboxType::WindowsRestrictedToken && level == WindowsSandboxLevel::Elevated {
+        ensure!(
+            codex_windows_sandbox::check_sandbox_setup(&state)?
+                && codex_windows_sandbox::sandbox_setup_is_complete_with_settings(
+                    &state,
+                    &codex_windows_sandbox::WindowsSandboxProvisioningSettings::default()
+                ),
+            "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the original base state directory from an interactive terminal"
+        );
+    }
+    let job = (backend == SandboxType::WindowsMxc)
+        .then(codex_utils_pty::JobObject::create_without_breakaway)
+        .transpose()?
+        .map(Arc::new);
+    let storage = storage.map(tempfile::TempDir::keep);
+    let manager = SandboxManager::default();
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
+    let mut spawn_attempted = false;
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(async {
-            let spawned = codex_windows_sandbox::spawn_windows_sandbox_session_for_level(
-                WindowsSandboxSessionRequest {
-                    permission_profile: &profile,
-                    workspace_roots: std::slice::from_ref(&workspace),
-                    codex_home: &state,
-                    command: request.command,
+            let profile = PermissionProfile::from_runtime_permissions(&filesystem, network);
+            let sandbox = manager.select_initial(
+                &profile,
+                SandboxablePreference::Require,
+                backend,
+                /*has_managed_network_requirements*/ false,
+            );
+            // Projection precedes the final case-insensitive transport exclusion.
+            request.environment.retain(|name, _| {
+                !request
+                    .excluded_environment
+                    .iter()
+                    .any(|excluded| name.eq_ignore_ascii_case(excluded))
+            });
+            let (program, args) = request
+                .command
+                .split_first()
+                .context("missing sandbox command")?;
+            let policy_cwd = request.cwd.clone().into();
+            let executable = std::env::current_exe()?;
+            let prepared = manager.transform(SandboxTransformRequest {
+                command: SandboxCommand {
+                    program: program.into(),
+                    args: args.to_vec(),
+                    cwd: request.cwd.clone().into(),
+                    env: request.environment,
+                    managed_network: None,
+                    additional_permissions: None,
+                },
+                permissions: &profile,
+                sandbox,
+                enforce_managed_network: false,
+                environment_id: None,
+                network: None,
+                sandbox_policy_cwd: &policy_cwd,
+                sandbox_exe: Some(&executable),
+                use_legacy_landlock: false,
+                windows_sandbox_level: level,
+            })?;
+            spawn_attempted = true;
+            let spawned = codex_sandboxing::spawn_process_with_windows_context(
+                SpawnRequest {
+                    command: &prepared.command,
                     cwd: request.cwd.as_path(),
-                    env_map: request.environment,
-                    windows_sandbox_level: level,
-                    proxy_enforced: false,
-                    network_proxy_restricting_sid: None,
-                    proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
-                    timeout_ms: None,
-                    read_roots_override: None,
-                    read_roots_include_platform_defaults: false,
-                    write_roots_override: None,
-                    deny_read_paths_override: &[],
-                    deny_write_paths_override: &[],
+                    env: &prepared.env,
+                    arg0: &prepared.arg0,
+                    sandbox: prepared.sandbox,
+                    windows_sandbox: Some(WindowsSandboxSpawnRequest {
+                        permission_profile: &profile,
+                        workspace_roots: std::slice::from_ref(&workspace),
+                        windows_sandbox_level: level,
+                        proxy_enforced: false,
+                        network_proxy_restricting_sid: None,
+                        proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+                        filesystem_overrides: None,
+                    }),
                     tty: false,
                     stdin_open: true,
+                    inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
+                },
+                WindowsSandboxLaunchContext {
+                    state_dir: &state,
+                    job: job.clone(),
                 },
             )
             .await?;
@@ -192,8 +291,7 @@ pub(crate) fn run() -> Result<i32> {
             Ok::<_, anyhow::Error>(result)
         });
     if let Some(storage) = storage {
-        // A missing native receipt is distinct from every target exit code.
-        if matches!(result, Ok(None) | Err(_)) {
+        if spawn_attempted && matches!(result, Ok(None) | Err(_)) {
             eprintln!(
                 "private storage retained after unconfirmed retirement: {}",
                 storage.display()

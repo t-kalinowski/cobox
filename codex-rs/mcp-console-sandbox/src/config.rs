@@ -5,22 +5,15 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSandboxMode {
+    /// Prefer MXC when the runtime and requested policy are compatible.
+    Auto,
+    /// Require MXC; never fall back on incompatibility or launch failure.
+    Mxc,
     Disabled,
     /// Administrator-approved setup with dedicated sandbox accounts.
     Elevated,
     /// No administrator setup; restricted token under the current user.
     Unelevated,
-}
-
-#[cfg(windows)]
-impl From<WindowsSandboxMode> for codex_protocol::config_types::WindowsSandboxLevel {
-    fn from(mode: WindowsSandboxMode) -> Self {
-        match mode {
-            WindowsSandboxMode::Disabled => Self::Disabled,
-            WindowsSandboxMode::Elevated => Self::Elevated,
-            WindowsSandboxMode::Unelevated => Self::RestrictedToken,
-        }
-    }
 }
 
 #[derive(Default, Deserialize)]

@@ -17,7 +17,13 @@ use crate::windows_cli::Cli;
 
 pub(crate) fn run() -> Result<i32> {
     if std::env::args_os()
-        .nth(1)
+        .nth(/*n*/ 1)
+        .is_some_and(|arg| arg == codex_sandboxing::CODEX_WINDOWS_MXC_ARG1)
+    {
+        codex_sandboxing::run_windows_mxc_main();
+    }
+    if std::env::args_os()
+        .nth(/*n*/ 1)
         .is_some_and(|arg| arg == "--config-env")
     {
         return crate::windows_console::run();
@@ -34,7 +40,12 @@ pub(crate) fn run() -> Result<i32> {
             .join("mcp-console"),
         )?,
     };
-    let configured = codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())?;
+    let settings = codex_windows_sandbox::WindowsSandboxProvisioningSettings::default();
+    let configured = codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())?
+        && codex_windows_sandbox::sandbox_setup_is_complete_with_settings(
+            state_dir.as_path(),
+            &settings,
+        );
     let executable = std::env::current_exe()?;
     let directory = executable
         .parent()
@@ -47,8 +58,11 @@ pub(crate) fn run() -> Result<i32> {
     .all(|name| directory.join(name).is_file());
     if matches!(cli.action, Action::Status) {
         let (mut filesystem, network) = PermissionProfile::read_only().to_runtime_permissions();
-        let mxc_state_protection =
-            crate::windows_proxy::protect_state(&mut filesystem, state_dir.as_path());
+        let mxc_state_protection = crate::windows_proxy::protect_state(
+            &mut filesystem,
+            state_dir.as_path(),
+            &AbsolutePathBuf::try_from(std::env::current_dir()?)?,
+        );
         let mxc_available = mxc_state_protection.is_ok()
             && codex_sandboxing::windows_mxc_available_for(
                 &PermissionProfile::from_runtime_permissions(&filesystem, network),
@@ -61,8 +75,8 @@ pub(crate) fn run() -> Result<i32> {
                 "mxc_available": mxc_available,
                 "mxc_state_error": mxc_state_protection.err().map(|error| error.to_string()),
                 "helpers_available": helpers_available,
-                "offline_account": "McpConsoleSandboxOff",
-                "online_account": "McpConsoleSandboxOn",
+                "offline_account": codex_windows_sandbox::sandbox_name("CodexSandboxOffline"),
+                "online_account": codex_windows_sandbox::sandbox_name("CodexSandboxOnline"),
             })
         );
         return Ok(if configured && helpers_available {
@@ -84,13 +98,14 @@ pub(crate) fn run() -> Result<i32> {
         let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
             &PermissionProfile::read_only(),
         )?;
-        codex_windows_sandbox::run_elevated_setup(SandboxSetupRequest {
+        let request = SandboxSetupRequest {
             permissions: &permissions,
             command_cwd: state_dir.as_path(),
             env_map: &HashMap::new(),
             codex_home: state_dir.as_path(),
             proxy_enforced: false,
-        })?;
+        };
+        codex_windows_sandbox::ConsoleProxySlot::provision_pool(request)?;
     }
     if !codex_windows_sandbox::check_sandbox_setup(state_dir.as_path())? {
         bail!("sandbox setup did not produce current records and enabled accounts");

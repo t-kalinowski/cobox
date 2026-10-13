@@ -1,8 +1,10 @@
 # Windows native sandbox
 
-The Windows executable uses the existing Windows sandbox implementation without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
+The Windows executable uses Codex's shared sandbox selection, policy transform, and launch APIs without `codex-core` or a running Codex application. It supports explicit `setup` and `status` and uses Console's environment transport for all execution.
 
-The public backend names are `elevated` and `unelevated`, in the JSON `windows_sandbox_level` field. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
+The JSON `windows_sandbox_level` accepts `auto` (the default), `mxc`, `elevated`, and `unelevated`. Auto resolves target temporary-directory and private-storage grants, validates canonical protected-state exclusions, and prefers the native MXC process security environment when the complete policy is compatible; otherwise it selects elevated execution. An explicit mode is never changed after selection or launch failure. A new MXC-only installation needs no sandbox accounts, setup, or UAC. Existing unregistered legacy installations require explicit setup against their existing state directory before MXC can protect the credentials. Elevated setup requires administrator approval and creates dedicated sandbox accounts; commands do not run as administrator. Unelevated runs under the current user's restricted token without administrator setup. The former `restricted-token` spelling is no longer accepted.
+
+Omitting this field previously selected elevated execution. Console must update its pinned companion and admission logic together: callers that require the legacy account backend must now pass `elevated` explicitly. The private transport remains unversioned. Resolver sandbox parity is separate work.
 
 ## Build and distribute
 
@@ -13,7 +15,7 @@ cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-win
 just test --locked --release -p mcp-console-sandbox --retries 0
 ```
 
-Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by the unelevated backend.
+Distribute `mcp-console-sandbox.exe`, `mcp-console-sandbox-setup.exe`, and `mcp-console-sandbox-runner.exe` together. The additive `mcp-console-sandbox-windows` package registers the helpers and reuses the existing setup and command-runner implementations with Console's product identity. Only the main executable is needed by MXC and the unelevated backend.
 
 For debug builds omit `--release`. Cargo output remains `target/debug` or `target/release`, and the distribution layout is unchanged.
 
@@ -55,7 +57,7 @@ Run from an ordinary interactive PowerShell session:
 .\target\release\mcp-console-sandbox.exe status
 ```
 
-Setup requests Windows UAC approval when provisioning is needed. Repeating it reuses current setup records and enabled accounts. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule.
+Explicit setup provisions or refreshes the base accounts and all four proxy account pairs under one Windows UAC approval. It reserves the protected owner, rotates credentials and marks pool completion only after every helper succeeds, enabling the legacy-to-MXC migration. Ordinary launches never perform this refresh. Status prints JSON and exits zero when current records, enabled accounts, and adjacent helpers are present. It is a readiness check, not an audit of every firewall rule.
 
 Setup version 6 also installs account-scoped WFP loopback filters. Older installations need one approved setup refresh. Installation must succeed before setup records are committed. The filters preserve the native proxy-port exceptions and local-binding setting; uninstall removes them with the other product-specific WFP objects.
 
@@ -98,9 +100,9 @@ The companion test uses the public environment transport and actual write attemp
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
 
-- `windows_sandbox_level` defaults to `elevated`. `unelevated` is explicit; `disabled` is rejected.
-- Targets run on a private Windows desktop, matching upstream behavior, with Console-specific desktop names.
-- `windows_state_dir` optionally selects an absolute persistent state directory.
+- `windows_sandbox_level` defaults to `auto`. Explicit `mxc` fails if unavailable or incompatible; explicit `elevated` and `unelevated` preserve their previous behavior. `disabled` is rejected.
+- Targets use upstream private desktop isolation. Legacy desktop names retain Console's product identity; MXC uses the SDK's desktop implementation.
+- `windows_state_dir` optionally selects an absolute persistent legacy state directory. MXC does not read, create, or provision it.
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
