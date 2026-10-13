@@ -39,7 +39,10 @@ rust_binary(
 
 rust_test(
     name = "windows-lifecycle-test",
-    srcs = ["tests/windows_lifecycle.rs"],
+    srcs = [
+        "tests/windows_lifecycle.rs",
+        "tests/windows_mxc_support/mod.rs",
+    ],
     crate_root = "tests/windows_lifecycle.rs",
     data = [
         ":mcp-console-sandbox",
@@ -100,7 +103,10 @@ rust_test(
 
 rust_test(
     name = "windows-mxc-test",
-    srcs = ["tests/windows_mxc.rs"],
+    srcs = [
+        "tests/windows_mxc.rs",
+        "tests/windows_mxc_support/mod.rs",
+    ],
     crate_root = "tests/windows_mxc.rs",
     data = [":mcp-console-sandbox"],
     edition = "2024",

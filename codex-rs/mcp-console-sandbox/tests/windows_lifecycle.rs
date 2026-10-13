@@ -1,5 +1,8 @@
 #![cfg(windows)]
 
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
+
 use anyhow::Context;
 use anyhow::Result;
 use codex_utils_cargo_bin::cargo_bin;
@@ -96,20 +99,6 @@ fn ready(child: &mut Child) -> Result<Value> {
     serde_json::from_str(&line).context("fixture readiness")
 }
 
-fn require_mxc_without_legacy_accounts() -> Result<()> {
-    anyhow::ensure!(
-        codex_sandboxing::windows_mxc_available(),
-        "MXC is unavailable"
-    );
-    for account in ["McpConsoleSandboxOff", "McpConsoleSandboxOn"] {
-        anyhow::ensure!(
-            codex_windows_sandbox::local_user_flags(account)?.is_none(),
-            "public MXC lifecycle tests require a host without legacy Console accounts"
-        );
-    }
-    Ok(())
-}
-
 #[test]
 fn binary_stdin_is_preserved_through_eof() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -161,20 +150,26 @@ fn target_uses_a_private_desktop() -> Result<()> {
 
 #[test]
 fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
-    assert_root_exit_retires_descendants("unelevated")
+    assert_root_exit_retires_descendants("unelevated")?;
+    assert_root_exit_retires_descendants("external")
 }
 
 #[test]
-#[ignore = "requires native MXC and a host without legacy Console accounts"]
 fn mxc_root_exit_retires_descendants_before_removing_storage() -> Result<()> {
-    require_mxc_without_legacy_accounts()?;
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     assert_root_exit_retires_descendants("mxc")
 }
 
 fn assert_root_exit_retires_descendants(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut config = configuration(root.path());
-    config["windows_sandbox_level"] = json!(mode);
+    if mode == "external" {
+        config["filesystem"] = json!({"kind":"external-sandbox"});
+    } else {
+        config["windows_sandbox_level"] = json!(mode);
+    }
     let mut child = runner(root.path(), "tree")?
         .env("CONSOLE_POLICY", config.to_string())
         .spawn()?;
@@ -276,20 +271,26 @@ fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
 
 #[test]
 fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
-    assert_caller_death_retires_workload("unelevated")
+    assert_caller_death_retires_workload("unelevated")?;
+    assert_caller_death_retires_workload("external")
 }
 
 #[test]
-#[ignore = "requires native MXC and a host without legacy Console accounts"]
 fn mxc_direct_caller_death_retires_workload_and_storage() -> Result<()> {
-    require_mxc_without_legacy_accounts()?;
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     assert_caller_death_retires_workload("mxc")
 }
 
 fn assert_caller_death_retires_workload(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut config = configuration(root.path());
-    config["windows_sandbox_level"] = json!(mode);
+    if mode == "external" {
+        config["filesystem"] = json!({"kind":"external-sandbox"});
+    } else {
+        config["windows_sandbox_level"] = json!(mode);
+    }
     let mut owner = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
         .arg("owner")
         .arg(cargo_bin("mcp-console-sandbox")?)

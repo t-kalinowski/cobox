@@ -73,10 +73,11 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 - Omitted or null `windows_sandbox_level` means `auto`. Consumers requiring the previous default must send `elevated`; `disabled` is rejected.
 - Legacy targets run on a private Windows desktop with Console-specific names; MXC uses the native backend's desktop isolation.
-- `windows_state_dir` optionally selects an absolute persistent legacy state directory. MXC does not inspect its setup records.
+- `windows_state_dir` optionally selects an absolute persistent legacy state directory. Only legacy backends resolve its `LOCALAPPDATA` default; MXC needs neither and does not inspect setup records.
 - The elevated mode requires prior explicit setup. Ordinary launches fail with setup guidance when accounts are missing.
 - Unelevated execution requires `network: enabled`, host reads, and no read-deny policies. It does not provide OS-enforced network isolation or a read allowlist boundary. Selected write operations are restricted, but the deletion boundary failed native validation; see the limits below.
 - Profiles use the same native constructors and workspace metadata defaults as Unix. Unsupported policy fails before launching the target.
+- `external-sandbox` delegates enforcement to the caller's outer sandbox when no managed proxy is requested. Codex's selection rules omit native restrictions, while the runner uses the existing supervised Job helper for descendant retirement and private-storage cleanup.
 - MXC supports managed HTTP/CONNECT and SOCKS5 TCP proxies when `allowLocalBinding` is true. Dedicated listeners admit only clients in the workload's Job. MXC host loopback is bidirectional, so Auto falls back when local binding is disallowed; legacy Windows retains its existing managed-proxy rejection. Active SOCKS5 UDP and Unix-socket configurations fail preflight for every backend because neither Console path supports them. An unused UDP flag is accepted when SOCKS5 is disabled.
 - Custom cleanup timeouts, macOS policy extensions, and Linux backend selection are rejected. `--bootstrap-fd` is Unix-only.
 - The selected configuration and reserved transport variable are removed from the target environment case insensitively. Excluded variables cannot be reused as private temporary environment names.
@@ -110,6 +111,8 @@ The public environment-transport regression exercises unelevated policy, private
 ```powershell
 just test --locked -p mcp-console-sandbox --retries 0 --run-ignored only -E 'test(elevated_offline_account_denies_loopback_)'
 ```
+
+MXC descendant-retirement, caller-death, and public managed-proxy allow/deny tests run in the ordinary Windows suite. They return early with a diagnostic only when native MXC is unavailable or legacy Console accounts prevent public MXC execution. The fixed-command native MXC proxy test also runs on provisioned hosts. These tests never provision, migrate, or delete accounts.
 
 The TCP and UDP tests use host listeners and a compiled target fixture on IPv4 and IPv6. Each verifies online connectivity first, then requires the offline account to be blocked. UDP checks actual receipt because a successful send does not establish delivery. For a nondefault provisioned directory, set `MCP_CONSOLE_SANDBOX_TEST_STATE_DIR` to its absolute path; this supplies `windows_state_dir` without changing the test harness's `LOCALAPPDATA`. The tests do not provision accounts. Linux/macOS lifecycle suites remain separate platform coverage.
 

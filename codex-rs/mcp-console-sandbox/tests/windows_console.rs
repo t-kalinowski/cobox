@@ -6,6 +6,32 @@ use serde_json::json;
 use std::process::Command;
 
 #[test]
+fn external_enforcement_delegates_network_without_legacy_state() -> anyhow::Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    for mode in ["auto", "mxc", "elevated", "unelevated"] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env_remove("LOCALAPPDATA")
+            .env(
+                "CONSOLE_POLICY",
+                json!({"filesystem":{"kind":"external-sandbox"},
+                "network":"restricted", "windows_sandbox_level":mode})
+                .to_string(),
+            )
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("connect")
+            .arg(listener.local_addr()?.to_string())
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), b"connected\n".to_vec(), vec![]),
+            "{mode}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     for (overrides, diagnostic) in [

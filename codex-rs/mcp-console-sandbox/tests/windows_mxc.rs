@@ -1,5 +1,8 @@
 #![cfg(windows)]
 
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
+
 use anyhow::Result;
 use codex_sandboxing::*;
 use codex_utils_cargo_bin::cargo_bin;
@@ -13,6 +16,94 @@ fn proxy(allow_local_binding: bool, allow_destination: bool) -> Value {
         "allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,"mode":"full",
         "domains":{"127.0.0.1":if allow_destination {"allow"} else {"deny"}},
         "allowLocalBinding":allow_local_binding})
+}
+
+fn console(policy: Value) -> Result<Command> {
+    let mut command = Command::new(cargo_bin("mcp-console-sandbox")?);
+    command.env("CONSOLE_POLICY", policy.to_string()).args([
+        "--config-env",
+        "CONSOLE_POLICY",
+        "--",
+        "cmd.exe",
+        "/d",
+        "/c",
+    ]);
+    Ok(command)
+}
+
+#[test]
+fn mxc_does_not_require_localappdata_or_a_state_directory() -> Result<()> {
+    let available = mxc_support::available()?;
+    for mode in ["auto", "mxc"] {
+        let output = console(json!({"extends":":read-only", "windows_sandbox_level":mode}))?
+            .env_remove("LOCALAPPDATA")
+            .arg("echo MXC_OK")
+            .output()?;
+        if available {
+            assert_eq!(
+                (output.status.code(), output.stdout, output.stderr),
+                (Some(0), b"MXC_OK\r\n".to_vec(), vec![])
+            );
+        } else {
+            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+            let error = String::from_utf8(output.stderr)?;
+            assert!(
+                error.contains(if mode == "auto" {
+                    "LOCALAPPDATA"
+                } else {
+                    "MXC is unavailable"
+                }),
+                "{error}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result<()> {
+    use std::io::Read;
+    use std::io::Write;
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/", listener.local_addr()?);
+    let origin = std::thread::spawn(move || -> Result<()> {
+        let (mut connection, _) = listener.accept()?;
+        connection.set_read_timeout(Some(std::time::Duration::from_secs(/*secs*/ 5)))?;
+        anyhow::ensure!(
+            connection.read(&mut [0; 4096])? > 0,
+            "expected an HTTP request"
+        );
+        connection.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nMXC_OK",
+        )?;
+        Ok(())
+    });
+    for allowed in [true, false] {
+        let output = console(json!({"extends":":read-only", "windows_sandbox_level":"mxc",
+                "proxy":proxy(/*allow_local_binding*/ true, allowed)}))?
+            .env_remove("LOCALAPPDATA")
+            .env("hTtP_pRoXy", "http://127.0.0.1:1")
+            .arg(format!("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy \"\" --proxy \"%HTTP_PROXY%\" {url}"))
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout),
+            if allowed {
+                (Some(0), b"MXC_OK".to_vec())
+            } else {
+                (Some(22), vec![])
+            },
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !allowed {
+            assert!(String::from_utf8(output.stderr)?.contains("403"));
+        }
+    }
+    origin.join().expect("origin thread")?;
+    Ok(())
 }
 
 #[test]
@@ -40,17 +131,8 @@ fn public_backend_selection_preserves_legacy_ownership_without_provisioning() ->
                 /*allow_local_binding*/ false, /*allow_destination*/ true,
             );
         }
-        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-            .env("CONSOLE_POLICY", policy.to_string())
-            .args([
-                "--config-env",
-                "CONSOLE_POLICY",
-                "--",
-                "cmd.exe",
-                "/d",
-                "/c",
-                "if defined CONSOLE_POLICY (exit /b 42) else echo MXC_OK",
-            ])
+        let output = console(policy)?
+            .arg("if defined CONSOLE_POLICY (exit /b 42) else echo MXC_OK")
             .output()?;
         if available && !strict_proxy {
             assert_eq!(
@@ -95,24 +177,11 @@ fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> 
         );
         proxy[key] = value;
         for mode in ["auto", "mxc", "elevated", "unelevated"] {
-            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-                .env(
-                    "CONSOLE_POLICY",
-                    json!({"extends":":read-only", "windows_sandbox_level":mode,
+            let output = console(json!({"extends":":read-only", "windows_sandbox_level":mode,
                         "windows_state_dir":root.path().join("state"), "proxy":proxy,
-                        "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["TMP"]}}})
-                    .to_string(),
-                )
-                .args([
-                    "--config-env",
-                    "CONSOLE_POLICY",
-                    "--",
-                    "cmd.exe",
-                    "/d",
-                    "/c",
-                    "echo launched",
-                ])
-                .output()?;
+                        "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["TMP"]}}}))?
+            .arg("echo launched")
+            .output()?;
             assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
             let error = String::from_utf8(output.stderr)?;
             assert!(error.contains(diagnostic), "{mode}: {error}");
@@ -176,23 +245,10 @@ fn mxc_does_not_validate_unused_legacy_setup_records() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     let available = accounts.iter().all(Option::is_none) && windows_mxc_available();
     for mode in ["mxc", "elevated"] {
-        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-            .env(
-                "CONSOLE_POLICY",
-                json!({"extends":":read-only", "windows_sandbox_level":mode,
-                    "windows_state_dir":root.path()})
-                .to_string(),
-            )
-            .args([
-                "--config-env",
-                "CONSOLE_POLICY",
-                "--",
-                "cmd.exe",
-                "/d",
-                "/c",
-                "echo MXC_OK",
-            ])
-            .output()?;
+        let output = console(json!({"extends":":read-only", "windows_sandbox_level":mode,
+                    "windows_state_dir":root.path()}))?
+        .arg("echo MXC_OK")
+        .output()?;
         if mode == "mxc" && available {
             assert_eq!(
                 (output.status.code(), output.stdout, output.stderr),

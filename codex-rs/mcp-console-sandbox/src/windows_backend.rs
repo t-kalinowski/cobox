@@ -3,7 +3,10 @@
 use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
+use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum WindowsSandboxPreference {
@@ -24,6 +27,18 @@ pub(crate) fn select_windows_sandbox(
 ) -> anyhow::Result<(SandboxType, WindowsSandboxLevel)> {
     if let Some(proxy) = proxy.filter(|proxy| proxy.enabled) {
         crate::windows_proxy::validate(proxy)?;
+    }
+    if !SandboxManager::default().should_sandbox(
+        permissions,
+        match permissions.enforcement() {
+            SandboxEnforcement::External => SandboxablePreference::Auto,
+            SandboxEnforcement::Managed | SandboxEnforcement::Disabled => {
+                SandboxablePreference::Require
+            }
+        },
+        proxy.is_some_and(|proxy| proxy.enabled),
+    ) {
+        return Ok((SandboxType::None, WindowsSandboxLevel::Disabled));
     }
     let restriction = host_mxc_restriction.or_else(|| {
         proxy.filter(|proxy| proxy.enabled && !proxy.allow_local_binding).map(|_| {

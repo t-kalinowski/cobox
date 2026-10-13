@@ -60,10 +60,14 @@ pub(crate) async fn start(
     let prepared =
         proxy.prepare_for_optional_environment(Default::default(), /*environment_id*/ None)?;
     codex_network_proxy::strip_managed_proxy_env(environment);
-    environment.retain(|name, _| {
-        !codex_network_proxy::PROXY_ENV_KEYS
+    environment.retain(|name, value| {
+        !(codex_network_proxy::PROXY_ENV_KEYS
             .iter()
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
+            || (codex_network_proxy::CUSTOM_CA_ENV_KEYS
+                .iter()
+                .any(|reserved| name.eq_ignore_ascii_case(reserved))
+                && codex_network_proxy::is_managed_mitm_ca_trust_bundle_path(value)))
     });
     for (key, value) in prepared.env {
         environment.retain(|name, _| !name.eq_ignore_ascii_case(&key));
