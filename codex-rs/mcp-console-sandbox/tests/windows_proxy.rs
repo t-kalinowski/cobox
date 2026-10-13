@@ -1,11 +1,18 @@
 #![cfg(windows)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::io::BufRead;
+use std::io::Read;
+use std::io::Write;
+use std::net::TcpListener;
+use std::net::TcpStream;
 use std::process::Command;
+use std::time::Duration;
 
 #[path = "../src/windows_proxy_lock.rs"]
 mod windows_proxy_lock;
@@ -151,3 +158,9 @@ fn proxy_capabilities_and_provisioning_are_checked_before_launch() -> Result<()>
     }
     Ok(())
 }
+
+#[path = "windows_proxy/support.rs"]
+mod support;
+use support::*;
+#[path = "windows_proxy/network_tests.rs"]
+mod network;

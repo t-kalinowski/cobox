@@ -43,6 +43,14 @@ max-threads = 1
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
+[test-groups.console_proxy_acceptance]
+max-threads = 1
+
+[[profile.default.overrides]]
+# These opt-in tests lease fixed machine accounts and exercise exhaustion/quarantine.
+filter = 'package(mcp-console-sandbox) & binary(windows_proxy)'
+test-group = 'console_proxy_acceptance'
+
 [test-groups.windows_process_heavy]
 max-threads = 2
 
