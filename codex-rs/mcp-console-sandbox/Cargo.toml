@@ -67,3 +67,7 @@ codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+rcgen = { workspace = true }
+rustls = { workspace = true }

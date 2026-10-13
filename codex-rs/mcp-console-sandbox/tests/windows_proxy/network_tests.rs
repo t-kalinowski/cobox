@@ -230,3 +230,324 @@ pub(super) fn limited_mode(backend: &str) -> Result<()> {
     );
     session.finish()
 }
+
+#[test]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+fn elevated_proxy_direct_ipv4_ipv6_tcp_udp_and_local_access() -> Result<()> {
+    let mut online = Session::start_with(Value::Null, json!({"network":"enabled"}), &[])?;
+    let mut strict = Session::start(proxy())?;
+    let mut local_policy = proxy();
+    local_policy["allowLocalBinding"] = json!(true);
+    let mut local = Session::start(local_policy)?;
+    let mut offline = Session::start(Value::Null)?;
+    for address in ["127.0.0.1:0", "[::1]:0"] {
+        let tcp = TcpListener::bind(address)?;
+        let udp = std::net::UdpSocket::bind(address)?;
+        udp.set_read_timeout(Some(Duration::from_millis(/*millis*/ 200)))?;
+        for (session, permitted) in [
+            (&mut online, true),
+            (&mut strict, false),
+            (&mut local, true),
+            (&mut offline, false),
+        ] {
+            assert_eq!(
+                session.probe(json!({"op":"bind", "address":address}))?,
+                json!({"bound":permitted}),
+                "local TCP binding {address}"
+            );
+            assert_eq!(
+                session.probe(json!({"op":"tcp", "address":tcp.local_addr()?.to_string()}))?,
+                json!({"connected":permitted})
+            );
+            let _ = session.probe(json!({"op":"udp", "address":udp.local_addr()?.to_string()}))?;
+            let mut bytes = [0; 32];
+            assert_eq!(
+                udp.recv_from(&mut bytes).is_ok(),
+                permitted,
+                "UDP {address}"
+            );
+            let incoming = session.probe(json!({"op":"udp-listen", "address":address}))?;
+            if let Some(target) = incoming["address"].as_str() {
+                udp.send_to(b"probe", target)?;
+                assert_eq!(
+                    session.probe(json!({"op":"udp-receive"}))?,
+                    json!({"received":permitted}),
+                    "inbound UDP {address}"
+                );
+            } else {
+                assert!(!permitted, "positive UDP bind control failed: {incoming}");
+            }
+        }
+    }
+    for address in ["1.1.1.1:443", "[2606:4700:4700::1111]:443"] {
+        if TcpStream::connect_timeout(&address.parse()?, Duration::from_secs(/*secs*/ 2)).is_err() {
+            eprintln!("UNAVAILABLE external TCP positive control: {address}");
+            continue;
+        }
+        assert_eq!(
+            online.probe(json!({"op":"tcp", "address":address}))?,
+            json!({"connected":true})
+        );
+        for session in [&mut strict, &mut local, &mut offline] {
+            assert_eq!(
+                session.probe(json!({"op":"tcp", "address":address}))?,
+                json!({"connected":false})
+            );
+        }
+    }
+    if let Ok(address) = std::env::var("MCP_CONSOLE_SANDBOX_TEST_ECHO_ADDR") {
+        // A separate host/VM must echo UDP and accept TCP on this non-loopback address.
+        // Missing echoes establish only a blocked round trip: the receive filter could
+        // drop replies to escaped datagrams. Egress requires observation at that peer.
+        eprintln!("UNESTABLISHED external UDP egress: echo results do not observe peer receipt");
+        for (session, permitted) in [
+            (&mut online, true),
+            (&mut strict, false),
+            (&mut local, false),
+            (&mut offline, false),
+        ] {
+            assert_eq!(
+                session.probe(json!({"op":"tcp", "address":address}))?,
+                json!({"connected":permitted})
+            );
+            assert_eq!(
+                session.probe(json!({"op":"udp-echo", "address":address}))?,
+                json!({"received":permitted})
+            );
+        }
+    } else {
+        eprintln!(
+            "UNAVAILABLE external UDP positive control: set MCP_CONSOLE_SANDBOX_TEST_ECHO_ADDR"
+        );
+    }
+    offline.finish()?;
+    local.finish()?;
+    strict.finish()?;
+    online.finish()
+}
+
+#[test]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+fn elevated_proxy_uses_trusted_upstream_and_preserves_domain_denials() -> Result<()> {
+    trusted_upstream("elevated")
+}
+
+pub(super) fn trusted_upstream(backend: &str) -> Result<()> {
+    let upstream = origin()?;
+    let mut policy = proxy();
+    policy["allowUpstreamProxy"] = json!(true);
+    policy["allowLocalBinding"] = json!(true);
+    policy["domains"] = json!({"allowed.invalid":"allow", "denied.invalid":"deny"});
+    let mut session = Session::start_with(
+        policy,
+        json!({"windows_sandbox_level":backend}),
+        &[
+            ("HTTP_PROXY", format!("http://{upstream}")),
+            ("HTTPS_PROXY", format!("http://{upstream}")),
+        ],
+    )?;
+    for op in ["http", "connect"] {
+        let response = session.probe(json!({"op":op, "address":"allowed.invalid:80"}))?;
+        assert!(
+            response["headers"]
+                .as_str()
+                .context("HTTP response headers")?
+                .starts_with("HTTP/1.1 200"),
+            "{response}"
+        );
+        let response = session.probe(json!({"op":op, "address":"denied.invalid:80"}))?;
+        assert!(
+            response["headers"]
+                .as_str()
+                .context("HTTP response headers")?
+                .contains("blocked-by-denylist"),
+            "{response}"
+        );
+    }
+    session.finish()
+}
+
+#[test]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+fn elevated_proxy_port_conflict_and_pool_exhaustion_fail_closed() -> Result<()> {
+    for enabled in [false, true] {
+        let mut policy = proxy();
+        policy["enableSocks5"] = json!(enabled);
+        for port in [43180, 43181] {
+            let occupied = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))?;
+            let error = Session::start(policy.clone())
+                .err()
+                .context("port conflict must reject startup")?;
+            assert!(error.to_string().contains("no port fallback"), "{error:#}");
+            drop(occupied);
+        }
+    }
+    let first = Session::start(proxy())?;
+    let second = Session::start(proxy())?;
+    let error = Session::start(proxy())
+        .err()
+        .context("pool exhaustion must reject startup")?;
+    assert!(
+        error.to_string().contains("busy or quarantined"),
+        "{error:#}"
+    );
+    second.finish()?;
+    first.finish()
+}
+
+#[test]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+fn elevated_proxy_concurrent_admission_and_disabled_socks() -> Result<()> {
+    let address = origin()?;
+    let mut policy = proxy();
+    policy["enableSocks5"] = json!(false);
+    let barrier = std::sync::Barrier::new(2);
+    let (mut first, second) = std::thread::scope(|scope| -> Result<_> {
+        let start = || {
+            barrier.wait();
+            Session::start(policy.clone())
+        };
+        let first = scope.spawn(start);
+        let second = scope.spawn(start);
+        Ok((first.join().unwrap()?, second.join().unwrap()?))
+    })?;
+    assert_ne!(first.lease_path()?, second.lease_path()?);
+    let endpoint: std::net::SocketAddr = first
+        .http_endpoint()?
+        .strip_prefix("http://")
+        .context("HTTP endpoint")?
+        .parse()?;
+    let result = first.probe(json!({"op":"http", "address":address.to_string()}))?;
+    assert!(
+        result["headers"]
+            .as_str()
+            .context("HTTP response headers")?
+            .starts_with("HTTP/1.1 200"),
+        "{result}"
+    );
+    // The disabled service's firewall exception still has an owner. It cannot
+    // be hijacked by a host listener and does not accept SOCKS requests.
+    assert!(TcpListener::bind((endpoint.ip(), endpoint.port() + 1)).is_err());
+    let result = first.probe(json!({"op":"socks", "address":address.to_string(),
+        "endpoint":format!("socks5://{}:{}", endpoint.ip(), endpoint.port() + 1)}))?;
+    assert!(
+        result.get("error").is_some(),
+        "disabled SOCKS accepted: {result}"
+    );
+    second.finish()?;
+    first.finish()
+}
+
+#[test]
+#[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
+fn elevated_proxy_https_connect_transfers_authenticated_tls() -> Result<()> {
+    authenticated_tls("elevated")
+}
+
+pub(super) fn authenticated_tls(backend: &str) -> Result<()> {
+    let root = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
+    let workload = root.path().join("tls-client.exe");
+    std::fs::copy(std::env::current_exe()?, &workload)?;
+    let generated = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_owned()])?;
+    let certificate = root.path().join("origin.der");
+    std::fs::write(&certificate, generated.cert.der())?;
+    let key = rustls::pki_types::PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der());
+    let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_no_client_auth()
+    .with_single_cert(vec![generated.cert.der().clone()], key.into())?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let server = std::thread::spawn(move || -> Result<()> {
+        let (tcp, _) = listener.accept()?;
+        tcp.set_read_timeout(Some(Duration::from_secs(/*secs*/ 5)))?;
+        let mut tls = rustls::StreamOwned::new(
+            rustls::ServerConnection::new(std::sync::Arc::new(config))?,
+            tcp,
+        );
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            tls.read_exact(&mut byte)?;
+            request.push(byte[0]);
+        }
+        tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")?;
+        tls.flush()?;
+        Ok(())
+    });
+    let mut policy = proxy();
+    policy["allowLocalBinding"] = json!(backend == "mxc");
+    let state = std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.path().join("unprovisioned"));
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .current_dir(root.path())
+        .env("USERPROFILE", root.path())
+        .env("HOME", root.path())
+        .env("CONSOLE_TLS_ADDRESS", address.to_string())
+        .env("CONSOLE_TLS_CERTIFICATE", &certificate)
+        .env(
+            "CONSOLE_POLICY",
+            json!({"extends": ":read-only", "network": "restricted",
+            "proxy": policy, "windows_sandbox_level": backend, "windows_state_dir": state})
+            .to_string(),
+        )
+        .args(["--config-env", "CONSOLE_POLICY", "--"])
+        .arg(workload)
+        .args(["--exact", "network::tls_client", "--nocapture"])
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    server
+        .join()
+        .map_err(|_| anyhow::anyhow!("TLS origin thread panicked"))??;
+    Ok(())
+}
+
+// Use the integration executable's existing rustls dependency: Schannel requires
+// ambient logon credentials that dedicated restricted accounts do not provide.
+#[test]
+fn tls_client() -> Result<()> {
+    let Ok(address) = std::env::var("CONSOLE_TLS_ADDRESS") else {
+        return Ok(());
+    };
+    let endpoint = std::env::var("HTTPS_PROXY")?;
+    let mut tcp = TcpStream::connect(endpoint.strip_prefix("http://").context("proxy URL")?)?;
+    tcp.set_read_timeout(Some(Duration::from_secs(/*secs*/ 5)))?;
+    write!(tcp, "CONNECT {address} HTTP/1.1\r\nHost: {address}\r\n\r\n")?;
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") && headers.len() < 16384 {
+        let mut byte = [0];
+        tcp.read_exact(&mut byte)?;
+        headers.push(byte[0]);
+    }
+    anyhow::ensure!(
+        headers.starts_with(b"HTTP/1.1 200 ") && headers.ends_with(b"\r\n\r\n"),
+        "CONNECT: {headers:?}"
+    );
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(rustls::pki_types::CertificateDer::from(std::fs::read(
+        std::env::var_os("CONSOLE_TLS_CERTIFICATE").context("origin certificate")?,
+    )?))?;
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let connection = rustls::ClientConnection::new(
+        std::sync::Arc::new(config),
+        rustls::pki_types::ServerName::try_from("127.0.0.1")?,
+    )?;
+    let mut tls = rustls::StreamOwned::new(connection, tcp);
+    write!(
+        tls,
+        "GET / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )?;
+    let expected = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
+    let mut response = vec![0; expected.len()];
+    tls.read_exact(&mut response)?;
+    assert_eq!(response, expected);
+    Ok(())
+}

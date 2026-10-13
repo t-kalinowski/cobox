@@ -103,6 +103,35 @@ impl Session {
         Ok(serde_json::from_str(&line)?)
     }
 
+    pub(super) fn http_endpoint(&self) -> Result<&str> {
+        self.ready["environment"]
+            .as_object()
+            .context("environment")?
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("HTTP_PROXY"))
+            .and_then(|(_, value)| value.as_str())
+            .context("endpoint")
+    }
+
+    pub(super) fn lease_path(&self) -> Result<std::path::PathBuf> {
+        let endpoint: std::net::SocketAddr = self
+            .http_endpoint()?
+            .strip_prefix("http://")
+            .context("HTTP URL")?
+            .parse()?;
+        anyhow::ensure!(
+            (43180..43188).contains(&endpoint.port()),
+            "unexpected managed port"
+        );
+        let slot = (endpoint.port() - 43180) / 2;
+        let state = std::path::PathBuf::from(
+            std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR").context("state")?,
+        );
+        Ok(state
+            .join(".sandbox-secrets")
+            .join(format!("proxy-slot-{slot}.lease")))
+    }
+
     pub(super) fn finish(self) -> Result<()> {
         self.finish_with_code(/*code*/ 0)
     }
