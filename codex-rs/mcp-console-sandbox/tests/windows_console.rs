@@ -89,7 +89,7 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
                 "allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,
                 "mode":"full","domains":null,"unixSockets":null,"allowLocalBinding":false
             }}),
-            "managed proxy configuration",
+            "managed proxy requires MXC or the elevated Windows sandbox",
         ),
         (
             json!({"linux_backend":"bubblewrap"}),

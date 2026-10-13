@@ -1,13 +1,41 @@
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use dirs_next::home_dir;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsString;
 use std::fs::File;
 use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+
+// The setup transport is UTF-8. Reject unrepresentable host input instead of
+// panicking or silently dropping a trusted provisioning override.
+pub(crate) fn console_host_environment(
+    entries: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<HashMap<String, String>> {
+    entries
+        .into_iter()
+        .filter(|(key, _)| !key.as_encoded_bytes().starts_with(b"="))
+        .map(|(key, value)| {
+            Ok((
+                key.into_string()
+                    .ok()
+                    .context("Console host environment name is not valid Unicode")?,
+                value
+                    .into_string()
+                    .ok()
+                    .context("Console host environment value is not valid Unicode")?,
+            ))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "env_tests.rs"]
+mod tests;
 
 pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     let keys: Vec<String> = env_map.keys().cloned().collect();

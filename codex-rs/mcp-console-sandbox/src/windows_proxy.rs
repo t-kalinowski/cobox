@@ -1,4 +1,4 @@
-//! Dedicated Codex proxy listeners admit only members of this workload's Job.
+//! Console proxies admit a workload's Job or its exclusively leased sandbox account.
 
 use anyhow::Result;
 use anyhow::ensure;
@@ -10,6 +10,7 @@ use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_utils_pty::JobObject;
+use codex_windows_sandbox::ConsoleProxySlot;
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::BorrowedHandle;
@@ -22,7 +23,7 @@ pub(crate) struct Prepared {
 }
 
 // Console supports only TCP proxies on Windows. Reject unsupported modes before
-// selecting a backend: legacy Console does not support managed proxies either.
+// selecting a backend so unsupported transports never reach native launch.
 pub(crate) fn validate(config: &RemoteNetworkProxyConfig) -> Result<()> {
     ensure!(config.enabled, "proxy.enabled must be true");
     ensure!(
@@ -40,9 +41,14 @@ pub(crate) fn validate(config: &RemoteNetworkProxyConfig) -> Result<()> {
     Ok(())
 }
 
+pub(crate) enum Owner<'a> {
+    Account(ConsoleProxySlot),
+    Job(&'a JobObject),
+}
+
 pub(crate) async fn start(
     config: RemoteNetworkProxyConfig,
-    job: &JobObject,
+    owner: Owner<'_>,
     environment: &mut HashMap<String, String>,
 ) -> Result<Prepared> {
     validate(&config)?;
@@ -50,13 +56,40 @@ pub(crate) async fn start(
         RemoteNetworkProxyLaunchConfig::new(config),
         codex_network_proxy::Platform::native(),
     )?;
-    let handle = unsafe { BorrowedHandle::borrow_raw(job.as_raw_handle()) };
-    state.set_windows_client_job(handle.try_clone_to_owned()?);
-    let proxy = NetworkProxy::builder()
-        .state(Arc::new(state))
-        .managed_proxy_routing(ManagedProxyRouting::DedicatedListeners)
-        .build()
-        .await?;
+    let mut builder = NetworkProxy::builder();
+    match owner {
+        Owner::Account(slot) => {
+            let account = codex_windows_sandbox::sandbox_name("CodexSandboxOffline");
+            let sid = codex_windows_sandbox::string_from_sid_bytes(
+                &codex_windows_sandbox::resolve_sid(&account)?,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let [http_port, socks_port] = slot.ports();
+            let mut config = state.current_cfg().await?;
+            config.proxy_url = format!("http://127.0.0.1:{http_port}");
+            config.socks_url = format!("socks5://127.0.0.1:{socks_port}");
+            state
+                .replace_config_state(codex_network_proxy::build_config_state(
+                    config,
+                    Default::default(),
+                    codex_network_proxy::Platform::native(),
+                )?)
+                .await?;
+            builder = builder.windows_client_sid(sid);
+        }
+        Owner::Job(job) => {
+            let handle = unsafe { BorrowedHandle::borrow_raw(job.as_raw_handle()) };
+            state.set_windows_client_job(handle.try_clone_to_owned()?);
+            builder = builder.managed_proxy_routing(ManagedProxyRouting::DedicatedListeners);
+        }
+    }
+    let proxy = builder.state(Arc::new(state)).build().await?;
+    if let Owner::Account(slot) = owner {
+        ensure!(
+            [proxy.http_addr().port(), proxy.socks_addr().port()] == slot.ports(),
+            "provisioned Console proxy port is unavailable; no port fallback is permitted"
+        );
+    }
     let prepared =
         proxy.prepare_for_optional_environment(Default::default(), /*environment_id*/ None)?;
     codex_network_proxy::strip_managed_proxy_env(environment);

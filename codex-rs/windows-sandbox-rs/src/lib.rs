@@ -69,6 +69,8 @@ pub use app_package::registered_core_needs_refresh;
 pub use app_package::registered_core_requested;
 #[cfg(target_os = "windows")]
 mod cap;
+#[cfg(windows)]
+mod console_proxy_slot;
 #[cfg(target_os = "windows")]
 mod deny_read_acl;
 #[cfg(target_os = "windows")]
@@ -103,6 +105,12 @@ mod path_normalization;
 mod process;
 #[cfg(target_os = "windows")]
 mod product;
+#[cfg(windows)]
+pub use console_proxy_slot::ConsoleProxySlot;
+#[cfg(windows)]
+mod proxy_observer;
+#[cfg(windows)]
+pub use proxy_observer::allow_console_proxy_observer;
 #[cfg(target_os = "windows")]
 mod retirement;
 #[cfg(target_os = "windows")]

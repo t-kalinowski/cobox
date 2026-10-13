@@ -174,12 +174,16 @@ impl Drop for LocalSid {
 /// # Safety
 /// Caller must close the returned token handle.
 pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
-    let desired = TOKEN_DUPLICATE
+    let mut desired = TOKEN_DUPLICATE
         | TOKEN_QUERY
         | TOKEN_ASSIGN_PRIMARY
         | TOKEN_ADJUST_DEFAULT
         | TOKEN_ADJUST_SESSIONID
         | TOKEN_ADJUST_PRIVILEGES;
+    if crate::ConsoleProxySlot::current().is_some() {
+        desired |= windows_sys::Win32::Storage::FileSystem::READ_CONTROL
+            | windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+    }
     let mut h: HANDLE = 0;
     #[link(name = "advapi32")]
     unsafe extern "system" {

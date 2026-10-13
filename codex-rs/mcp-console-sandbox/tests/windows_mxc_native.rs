@@ -35,7 +35,8 @@ async fn http_only_proxy_ignores_udp_flag_but_active_socks_udp_is_rejected() -> 
     ))?;
     config.enable_socks5 = false;
     config.enable_socks5_udp = true;
-    let prepared = windows_proxy::start(config.clone(), &job, &mut env).await?;
+    let prepared =
+        windows_proxy::start(config.clone(), windows_proxy::Owner::Job(&job), &mut env).await?;
     assert_eq!(
         prepared.context,
         codex_network_proxy::ManagedNetworkSandboxContext {
@@ -54,7 +55,8 @@ async fn http_only_proxy_ignores_udp_flag_but_active_socks_udp_is_rejected() -> 
     prepared.handle.shutdown().await?;
 
     config.enable_socks5 = true;
-    let Err(error) = windows_proxy::start(config, &job, &mut env).await else {
+    let Err(error) = windows_proxy::start(config, windows_proxy::Owner::Job(&job), &mut env).await
+    else {
         anyhow::bail!("active SOCKS5 UDP unexpectedly accepted");
     };
     assert_eq!(error.to_string(), "SOCKS5 UDP is not supported on Windows");
@@ -128,7 +130,7 @@ async fn proxy_removes_mixed_case_managed_ca_variables() -> Result<()> {
         serde_json::from_value(proxy(
             /*allow_local_binding*/ true, /*allow_destination*/ true,
         ))?,
-        &job,
+        windows_proxy::Owner::Job(&job),
         &mut env,
     )
     .await?;
@@ -177,7 +179,7 @@ async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
         env.insert("hTtP_PrOxY".into(), "http://127.0.0.1:1".into());
         let proxy = windows_proxy::start(
             serde_json::from_value(proxy(/*allow_local_binding*/ true, allowed))?,
-            &job,
+            windows_proxy::Owner::Job(&job),
             &mut env,
         )
         .await?;

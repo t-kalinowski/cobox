@@ -36,6 +36,7 @@ static SHARED_INGRESS: LazyLock<Mutex<Weak<WindowsProxyIngress>>> =
 
 #[derive(Clone)]
 struct RouteServices {
+    client_sid: Option<String>,
     http: WindowsRouteService,
     socks: Option<WindowsRouteService>,
 }
@@ -61,7 +62,8 @@ impl Service<TcpStream> for IngressDispatcher {
     async fn serve(&self, stream: TcpStream) -> Result<(), BoxError> {
         let local_addr = stream.local_addr()?;
         let peer_addr = stream.peer_addr()?;
-        let restricting_sids = restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
+        let (client_sid, restricting_sids) =
+            restricting_sids_for_tcp_connection(local_addr, peer_addr)?;
         let route = {
             let routes = self
                 .routes
@@ -69,6 +71,17 @@ impl Service<TcpStream> for IngressDispatcher {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             registered_route_for_sids(&routes, &restricting_sids)?
         };
+        if route
+            .client_sid
+            .as_ref()
+            .is_some_and(|expected| expected != &client_sid)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "proxy client account does not own this route",
+            )
+            .into());
+        }
         let service = match self.protocol {
             ProxyProtocol::Http => route.http.clone(),
             ProxyProtocol::Socks => route.socks.clone().ok_or_else(|| {
@@ -204,8 +217,13 @@ impl WindowsProxyIngress {
         self: &Arc<Self>,
         http: WindowsRouteService,
         socks: Option<WindowsRouteService>,
+        client_sid: Option<String>,
     ) -> WindowsProxyRoute {
-        let services = Arc::new(RouteServices { http, socks });
+        let services = Arc::new(RouteServices {
+            http,
+            socks,
+            client_sid,
+        });
         let mut routes = self
             .routes
             .lock()

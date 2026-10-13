@@ -18,6 +18,8 @@ use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::create_process_as_user;
 use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
 use codex_windows_sandbox::get_current_token_for_restriction;
+use codex_windows_sandbox::get_user_sid_bytes;
+use codex_windows_sandbox::string_from_sid_bytes;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -247,6 +249,78 @@ async fn restricted_tokens_select_stable_routes_and_cleanup() -> anyhow::Result<
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_bound_routes_reserve_both_ports_without_socks() -> anyhow::Result<()> {
+    // Shared ingress belongs to its first runtime; use a fresh process under libtest too.
+    const ACCOUNT_CHILD: &str = "CODEX_WINDOWS_PROXY_ACCOUNT_TEST";
+    if std::env::var_os(ACCOUNT_CHILD).is_none() {
+        let output = tokio::time::timeout(
+            Duration::from_secs(60),
+            tokio::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "account_bound_routes_reserve_both_ports_without_socks",
+                    "--nocapture",
+                ])
+                .env(ACCOUNT_CHILD, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await??;
+        anyhow::ensure!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "account ingress subprocess: {output:?}"
+        );
+        return Ok(());
+    }
+    let (origin_port, origin_task) = start_http_origin().await?;
+    let stable_addrs = requested_addrs()?;
+    let token = unsafe {
+        OwnedHandle::from_raw_handle(get_current_token_for_restriction()? as *mut std::ffi::c_void)
+    };
+    let sid_bytes = unsafe { get_user_sid_bytes(token.as_raw_handle() as isize)? };
+    let account_sid = string_from_sid_bytes(&sid_bytes).map_err(anyhow::Error::msg)?;
+    let mismatched_sid = "S-1-5-21-10-20-30-41";
+    assert_ne!(account_sid, mismatched_sid);
+    for enable_socks5 in [false, true] {
+        for (expected_account, policy) in [
+            (account_sid.as_str(), Some(("localhost", "127.0.0.1"))),
+            (mismatched_sid, None),
+        ] {
+            let state = proxy_state(stable_addrs, "localhost", enable_socks5)?;
+            let proxy = NetworkProxy::builder()
+                .state(Arc::new(state))
+                .windows_client_sid(expected_account.to_string())
+                .build()
+                .await?;
+            let handle = proxy.run().await?;
+            for addr in [proxy.http_addr(), proxy.socks_addr()] {
+                assert_eq!(
+                    TcpListener::bind(addr).unwrap_err().kind(),
+                    std::io::ErrorKind::AddrInUse
+                );
+            }
+            proxy.prepare_for_optional_environment(HashMap::new(), Some(FIRST_ENVIRONMENT_ID))?;
+            for environment in [None, Some(FIRST_ENVIRONMENT_ID)] {
+                let route = proxy.network_proxy_restricting_sid(environment).unwrap();
+                // Both children carry a valid route SID; only the kernel-observed account differs
+                // from the route requirement. The first run proves both services are reachable.
+                run_restricted_child(
+                    &route,
+                    (proxy.http_addr(), proxy.socks_addr()),
+                    origin_port,
+                    policy,
+                    enable_socks5,
+                )
+                .await?;
+            }
+            handle.shutdown().await?;
+        }
+    }
+    origin_task.abort();
+    Ok(())
+}
+
 #[test]
 fn restricted_child_exercises_http_and_socks() -> anyhow::Result<()> {
     let Ok(mode) = std::env::var(CHILD_MODE_ENV) else {
@@ -290,6 +364,19 @@ async fn build_proxy(
     enable_socks5: bool,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> anyhow::Result<NetworkProxy> {
+    let state = Arc::new(proxy_state(requested_addrs, allowed_domain, enable_socks5)?);
+    let mut builder = NetworkProxy::builder().state(state);
+    if let Some(policy_decider) = policy_decider {
+        builder = builder.policy_decider_arc(policy_decider);
+    }
+    builder.build().await
+}
+
+fn proxy_state(
+    requested_addrs: (SocketAddr, SocketAddr),
+    allowed_domain: &str,
+    enable_socks5: bool,
+) -> anyhow::Result<NetworkProxyState> {
     let (http_addr, socks_addr) = requested_addrs;
     let mut config = NetworkProxyConfig {
         enabled: true,
@@ -308,12 +395,7 @@ async fn build_proxy(
         codex_network_proxy::Platform::native(),
     )?;
     let reloader = Arc::new(StaticReloader(config_state.clone()));
-    let state = Arc::new(NetworkProxyState::with_reloader(config_state, reloader));
-    let mut builder = NetworkProxy::builder().state(state);
-    if let Some(policy_decider) = policy_decider {
-        builder = builder.policy_decider_arc(policy_decider);
-    }
-    builder.build().await
+    Ok(NetworkProxyState::with_reloader(config_state, reloader))
 }
 
 fn recording_decider() -> (

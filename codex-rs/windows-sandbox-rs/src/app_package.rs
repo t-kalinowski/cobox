@@ -31,6 +31,9 @@ unsafe extern "system" {
 
 /// Capture the startup request once; this flag never authorizes a package or process.
 pub fn registered_core_requested() -> bool {
+    if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Console {
+        return false;
+    }
     static REQUESTED: OnceLock<bool> = OnceLock::new();
     *REQUESTED.get_or_init(|| {
         requested_value(std::env::var_os("CODEX_WINDOWS_REGISTERED_CORE").as_deref())

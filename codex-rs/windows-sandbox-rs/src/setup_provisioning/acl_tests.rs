@@ -77,6 +77,8 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
 
         let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
         let payload = Payload {
+            console_proxy_pool: false,
+            console_proxy_pool_nonce: None,
             version: SETUP_VERSION,
             offline_username: String::new(),
             online_username: String::new(),
