@@ -4,6 +4,8 @@ The default execution path owns one sandbox lifetime. Its single application sup
 
 The JSON shape and all defaults are defined in the [complete configuration reference](PROTOCOL.md#lifecycle-object). Managed unrestricted files retain the ordinary lifecycle below, with weaker guarantees against malicious interference. External execution without a proxy uses direct process supervision: Linux covers its original process group, while macOS retains descendant observation. An outer sandbox must retire descendants outside those mechanisms. Crashes or interference can leave processes or storage and can undermine other restrictions through shared writable host state.
 
+Windows uses native Job supervision and the environment transport. Its direct caller is always observed; `lifecycle.parent_pid` adds an optional owner. Caller death preserves the native termination status (normally 1), rather than the Unix exit-0 cancellation policy below; missing retirement confirmation returns 125. See [Windows lifecycle](WINDOWS.md#lifecycle) for its complete platform contract.
+
 ## Configuration
 
 Both [input modes](PROTOCOL.md) accept this optional object:

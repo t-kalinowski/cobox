@@ -4,15 +4,49 @@ use pretty_assertions::assert_eq;
 #[test]
 #[ignore = "requires explicit setup and MCP_CONSOLE_SANDBOX_TEST_STATE_DIR"]
 fn elevated_proxy_descendants_retire_before_slot_reuse() -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
     let mut session = Session::start(proxy())?;
     let child = session.probe(json!({"op":"descendant"}))?;
     let lease_path = session.lease_path()?;
     let processes = observe_processes(&[&child["pid"]])?;
-    session.finish()?;
+    assert_eq!(
+        unsafe { WaitForSingleObject(processes[0].as_raw_handle(), /*dwmilliseconds*/ 0) },
+        WAIT_TIMEOUT
+    );
+    // Occupy the other matching slot, so replacement must contend for this one.
+    let other = Session::start(proxy())?;
+    let temporary = std::path::PathBuf::from(
+        session.ready["environment"]["TMPDIR"].as_str().context("temporary")?,
+    );
+    // Keep cleanup pending after Job retirement without a timing-only sleep.
+    let held = std::fs::File::options().read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(temporary.join("held-by-descendant"))?;
+    let retirement = std::thread::spawn(move || session.finish());
     assert_processes_retired(&processes);
+    let still_pending = !retirement.is_finished();
+    let contending = Session::start(proxy());
+    drop(held);
+    let retired = retirement.join().map_err(|_| anyhow::anyhow!("retirement thread panicked"))?;
+    let denial = match contending {
+        Ok(early) => {
+            early.finish()?;
+            anyhow::bail!("slot was reused before retirement cleanup completed");
+        }
+        Err(error) => error,
+    };
+    retired?;
+    assert!(still_pending, "retirement did not wait for the held resource");
+    assert!(denial.to_string().contains("busy or quarantined"), "{denial:#}");
     let replacement = Session::start(proxy())?;
     assert_eq!(replacement.lease_path()?, lease_path);
-    replacement.finish()
+    replacement.finish()?;
+    other.finish()
 }
 
 #[test]
@@ -36,11 +70,7 @@ fn elevated_proxy_owner_death_cancels_and_releases_resources() -> Result<()> {
     owner.kill()?;
     owner.wait()?;
     let status = wait_for_exit(&mut session.child)?;
-    assert_ne!(
-        status.code(),
-        Some(125),
-        "owner death lacked native retirement"
-    );
+    assert_eq!(status.code(), Some(1), "native owner-death termination status");
     assert_eq!(std::fs::read_to_string(session.error.path())?, "");
     assert_processes_retired(&processes);
     assert!(TcpStream::connect(endpoint.strip_prefix("http://").unwrap()).is_err());
@@ -168,7 +198,8 @@ fn elevated_proxy_helper_loss_withholds_retirement_receipt() -> Result<()> {
     assert!(temporary.exists());
     assert!(first.lease_path()?.exists());
     let second = Session::start(proxy())?;
-    assert!(Session::start(proxy()).is_err());
+    let error = Session::start(proxy()).err().context("helper-loss quarantine was reused")?;
+    assert!(error.to_string().contains("busy or quarantined"), "{error:#}");
     second.finish()?;
     std::fs::remove_dir_all(temporary.parent().context("private storage parent")?)?;
     std::fs::remove_file(first.lease_path()?)?;
