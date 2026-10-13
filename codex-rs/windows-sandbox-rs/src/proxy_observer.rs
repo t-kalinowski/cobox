@@ -8,6 +8,7 @@ use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Security::Authorization::*;
 use windows_sys::Win32::Security::*;
+use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 
 /// Grants the trusted host query access to this token and objects created with its default DACL.
 ///
@@ -45,7 +46,12 @@ pub unsafe fn allow_console_proxy_observer(token: HANDLE, state: &std::path::Pat
         std::io::Error::last_os_error()
     );
     let default_dacl = unsafe { (*(buffer.as_ptr().cast::<TOKEN_DEFAULT_DACL>())).DefaultDacl };
-    for (access, default) in [(GENERIC_READ, true), (TOKEN_QUERY, false)] {
+    // The default DACL reaches descendant processes too. Use the process-specific
+    // query right so this added ACE does not grant generic memory-read access.
+    for (access, default) in [
+        (PROCESS_QUERY_LIMITED_INFORMATION, true),
+        (TOKEN_QUERY, false),
+    ] {
         let mut descriptor = null_mut();
         let mut dacl = default_dacl;
         if !default {
