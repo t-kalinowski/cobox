@@ -26,7 +26,8 @@ fn probe_with_command(command: &mut Command, request: Value) -> Result<Value> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .context("start fixture")?;
     writeln!(child.stdin.take().context("fixture stdin")?, "{request}")?;
     let output = child.wait_with_output()?;
     anyhow::ensure!(output.status.success(), "{output:?}");
@@ -307,6 +308,13 @@ fn route_probe_distinguishes_admission_close_from_broken_http() -> Result<()> {
 
 #[test]
 fn host_forgery_reaches_the_route_with_the_requested_sid() -> Result<()> {
+    let directory = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
+    let nested = directory.path().join("a".repeat(120)).join("b".repeat(120));
+    std::fs::create_dir_all(&nested).context("create long fixture directory")?;
+    let fixture = nested.join("fixture.exe");
+    std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)
+        .context("stage long fixture")?;
+    assert!(fixture.as_os_str().len() > 260);
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let endpoint = listener.local_addr()?.to_string();
     let server = std::thread::spawn(move || -> Result<()> {
@@ -315,8 +323,11 @@ fn host_forgery_reaches_the_route_with_the_requested_sid() -> Result<()> {
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")?;
         Ok(())
     });
-    let result = probe(json!({"op":"forge-route", "sid":"S-1-5-21-1-2-3-43180",
-        "endpoint":endpoint, "address":"example.test:80"}))?;
+    let result = probe_with_command(
+        Command::new(fixture.canonicalize()?).arg("proxy-session"),
+        json!({"op":"forge-route", "sid":"S-1-5-21-1-2-3-43180",
+            "endpoint":endpoint, "address":"example.test:80"}),
+    )?;
     let served = server
         .join()
         .map_err(|_| anyhow::anyhow!("forgery server panicked"))?;
