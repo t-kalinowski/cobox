@@ -83,6 +83,14 @@ just test --locked -p codex-windows-sandbox --test console_proxy_pool --run-igno
 
 The regression drives the real native setup API and audits enabled account identities, shared secrets-deny membership/ACLs, fixed firewall exceptions, wrong-state rejection, and repeated explicit refresh. It injects a final-slot setup failure only when that slot has no secrets yet, then checks partial progress and retry; an existing installation reports that injection unavailable and preserves its credentials. It does not establish network enforcement, which requires the later dedicated-account workload acceptance. Different-user rejection still requires a separate Windows-user control. Ordinary tests never invoke provisioning.
 
+After setup completes, run the public environment acceptance from an ordinary, non-elevated shell with the same state variable and matching helpers. All Console workers must be retired:
+
+```powershell
+just test --locked -p mcp-console-sandbox --test windows_environment_native --run-ignored all --test-threads 1 --retries 0
+```
+
+The companion test uses the public environment transport and actual write attempts to verify that mixed-case workload TEMP/TMP grants work, conflicting host paths stay read-only, and omitting workload TEMP/TMP grants neither host nor target paths. Host proxy/local-binding variables with `inherit_environment=false` must not reconcile provisioning or reach the workload. These executable probes use existing provisioning, perform ordinary filesystem ACL refreshes, and never request UAC or change account network policy. Missing provisioning fails the opt-in test instead of silently skipping coverage.
+
 ## Console transport
 
 `--config-env NAME -- COMMAND ...` consumes the unversioned configuration described in [PROTOCOL.md](PROTOCOL.md), with these platform fields and limits:
