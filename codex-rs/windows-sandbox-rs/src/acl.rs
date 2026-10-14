@@ -9,13 +9,17 @@ use std::ffi::c_void;
 use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::path::Path;
+use windows_sys::Wdk::Storage::FileSystem::NtSetSecurityObject;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 use windows_sys::Win32::Security::ACCESS_DENIED_ACE;
 use windows_sys::Win32::Security::ACE_HEADER;
@@ -47,7 +51,6 @@ use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::SE_DACL_DEFAULTED;
 use windows_sys::Win32::Security::SE_SELF_RELATIVE;
 use windows_sys::Win32::Security::SECURITY_DESCRIPTOR;
-use windows_sys::Win32::Security::SetFileSecurityW;
 use windows_sys::Win32::Security::SetSecurityDescriptorDacl;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
@@ -56,10 +59,10 @@ use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
@@ -69,6 +72,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
 use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+use windows_sys::Win32::Storage::FileSystem::ReOpenFile;
 use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_NONE;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::Storage::FileSystem::WRITE_OWNER;
@@ -556,9 +560,8 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     let directory = if inheritance == 0 {
         Some(
             OpenOptions::new()
-                // Keep the target from being renamed during the name-based
-                // root-only update. Data/delete access conflicts with live cwd handles.
-                .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+                // ACL-only access does not conflict with a live process cwd.
+                .access_mode(READ_CONTROL)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
                 .open(path)
@@ -652,11 +655,23 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         if code2 != ERROR_SUCCESS {
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
-        if directory.is_some() {
-            // SetSecurityInfo re-propagates existing inheritable ACEs. The legacy
-            // file setter updates only this object without requesting data/delete
-            // access; its non-propagating behavior is required for root-only grants.
-            // https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setfilesecurityw
+        if let Some(directory) = directory.as_ref() {
+            // Request WRITE_DAC only after finding a missing grant. ReOpenFile
+            // stays on the object whose ACL we read, even if its path is changed.
+            let update = ReOpenFile(
+                directory.as_raw_handle() as HANDLE,
+                WRITE_DAC,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+            if update == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::last_os_error())
+                    .context("reopen root-only ACL target for update");
+            }
+            let update = OwnedHandle::from_raw_handle(update as _);
+            // SetSecurityInfo re-propagates inheritable ACEs. Apply the DACL
+            // directly to this object without walking or resolving its name.
+            // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetsecurityobject
             let mut descriptor: SECURITY_DESCRIPTOR = std::mem::zeroed();
             let sd = std::ptr::addr_of_mut!(descriptor).cast();
             if InitializeSecurityDescriptor(sd, /*dwrevision*/ 1) == 0 {
@@ -669,9 +684,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
                 return Err(std::io::Error::last_os_error())
                     .context("read root-only ACL control flags");
             }
-            // Retain DACL protection in the absolute descriptor. The legacy
-            // setter clears auto-inheritance bookkeeping, without changing
-            // inherited ACEs or child permissions.
+            // Retain the DACL's control flags in the absolute descriptor.
             descriptor.Control = control & !SE_SELF_RELATIVE;
             if SetSecurityDescriptorDacl(
                 sd,
@@ -683,12 +696,16 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
                 return Err(std::io::Error::last_os_error())
                     .context("prepare root-only ACL update");
             }
-            // The open handle blocks replacement, and Rust's canonical path
-            // supplies the extended-length spelling for the legacy setter.
-            let target =
-                std::fs::canonicalize(path).context("resolve ACL target for root-only update")?;
-            if SetFileSecurityW(to_wide(&target).as_ptr(), DACL_SECURITY_INFORMATION, sd) == 0 {
-                return Err(std::io::Error::last_os_error()).context("write root-only ACL update");
+            let status = NtSetSecurityObject(
+                update.as_raw_handle() as HANDLE,
+                DACL_SECURITY_INFORMATION,
+                sd,
+            );
+            if status < 0 {
+                return Err(std::io::Error::from_raw_os_error(
+                    RtlNtStatusToDosError(status) as i32,
+                ))
+                .context("write root-only ACL update");
             }
             return Ok(true);
         }
