@@ -98,7 +98,6 @@ const WRITE_ROOT_ALLOW_MASK: u32 =
 mod sandbox_users;
 mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
-use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::commit_setup_marker;
 use sandbox_users::prepare_setup_marker;
 use sandbox_users::provision_sandbox_users;
@@ -345,6 +344,8 @@ fn read_mask_allows_or_log(
 fn ensure_sandbox_directory_metadata_access(
     path: &Path,
     sandbox_group_psid: *mut c_void,
+    account_names: &[&str],
+    log: &mut dyn Write,
 ) -> Result<bool> {
     let mut users = resolve_sid("Users")?;
     let mut authenticated_users = resolve_sid("Authenticated Users")?;
@@ -355,7 +356,28 @@ fn ensure_sandbox_directory_metadata_access(
         authenticated_users.as_mut_ptr().cast(),
         everyone.as_mut_ptr().cast(),
     ];
-    if crate::acl::path_grants_mask(path, &subjects, FILE_READ_ATTRIBUTES)? {
+    let mut account_sids = account_names
+        .iter()
+        .map(|name| resolve_sid(name))
+        .collect::<Result<Vec<_>>>()?;
+    let accounts = account_sids
+        .iter_mut()
+        .map(|sid| sid.as_mut_ptr().cast())
+        .collect::<Vec<_>>();
+    if crate::acl::path_grants_mask(path, &subjects, &accounts, FILE_READ_ATTRIBUTES)? {
+        return Ok(false);
+    }
+    log_line(
+        log,
+        &format!(
+            "waiting for read ACL updates before granting directory metadata access to {}",
+            path.display(),
+        ),
+    )?;
+    let _read_acl_guard = acquire_read_acl_mutex()?;
+    // The preceding helper may have supplied full read access while we waited.
+    // Re-read before constructing a metadata-only DACL from a stale snapshot.
+    if crate::acl::path_grants_mask(path, &subjects, &accounts, FILE_READ_ATTRIBUTES)? {
         return Ok(false);
     }
     let granted = unsafe {
@@ -696,13 +718,7 @@ fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<(
 }
 
 fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
-    let _read_acl_guard = match acquire_read_acl_mutex()? {
-        Some(guard) => guard,
-        None => {
-            log_line(log, "read ACL helper already running; skipping")?;
-            return Ok(());
-        }
-    };
+    let _read_acl_guard = acquire_read_acl_mutex()?;
     log_line(log, "read-acl-only mode: applying read ACLs")?;
     let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
     let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
@@ -986,6 +1002,10 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     })?;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
+    let account_names = [
+        payload.offline_username.as_str(),
+        payload.online_username.as_str(),
+    ];
 
     let mut refresh_errors: Vec<String> = Vec::new();
 
@@ -1021,7 +1041,12 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             })
         });
         if cwd_is_under_profile {
-            match ensure_sandbox_directory_metadata_access(user_profile, sandbox_group_psid) {
+            match ensure_sandbox_directory_metadata_access(
+                user_profile,
+                sandbox_group_psid,
+                &account_names,
+                log,
+            ) {
                 Ok(true) => {
                     log_line(
                         log,
@@ -1048,39 +1073,23 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     // CreateProcessWithLogonW opens its working directory as the sandbox
     // account before the background read helper can reach it. Grant only
     // metadata access here; content reads remain governed by the read roots.
-    ensure_sandbox_directory_metadata_access(&payload.command_cwd, sandbox_group_psid)
-        .context("grant command working-directory metadata access")?;
+    ensure_sandbox_directory_metadata_access(
+        &payload.command_cwd,
+        sandbox_group_psid,
+        &account_names,
+        log,
+    )
+    .context("grant command working-directory metadata access")?;
 
     if payload.read_roots.is_empty() {
         log_line(log, "no read roots to grant; skipping read ACL helper")?;
     } else {
-        match read_acl_mutex_exists() {
-            Ok(true) => {
-                log_line(log, "read ACL helper already running; skipping spawn")?;
-            }
-            Ok(false) => {
-                spawn_read_acl_helper(payload, log).map_err(|err| {
-                    anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperReadAclHelperSpawnFailed,
-                        format!("spawn read ACL helper failed: {err}"),
-                    ))
-                })?;
-            }
-            Err(err) => {
-                log_line(
-                    log,
-                    &format!("read ACL mutex check failed: {err}; spawning anyway"),
-                )?;
-                spawn_read_acl_helper(payload, log).map_err(|spawn_err| {
-                    anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperReadAclHelperSpawnFailed,
-                        format!(
-                            "spawn read ACL helper failed after mutex error {err}: {spawn_err}"
-                        ),
-                    ))
-                })?;
-            }
-        }
+        spawn_read_acl_helper(payload, log).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperReadAclHelperSpawnFailed,
+                format!("spawn read ACL helper failed: {err}"),
+            ))
+        })?;
     }
 
     if refresh_only {

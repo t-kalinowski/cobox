@@ -252,20 +252,29 @@ pub fn path_mask_allows(
     )
 }
 
-/// Whether known principals already grant the mask without an applicable deny.
+/// Whether each account already has the mask through its SID or shared principals.
 /// A NULL DACL grants access. Matching denies are treated conservatively rather
 /// than reconstructing a sandbox token's complete, ordered access check.
 pub(crate) fn path_grants_mask(
     path: &Path,
     psids: &[*mut c_void],
+    account_psids: &[*mut c_void],
     desired_mask: u32,
 ) -> Result<bool> {
     unsafe {
         let (dacl, descriptor) = fetch_dacl_handle(path)?;
         let granted = dacl.is_null()
-            || (!psids.iter().any(|psid| {
-                dacl_has_deny_mask(dacl, DenyAceScope::EffectiveForSid(*psid), desired_mask)
-            }) && dacl_mask_allows(dacl, psids, desired_mask, /*require_all_bits*/ true));
+            || account_psids.iter().all(|account| {
+                !psids.iter().chain(std::iter::once(account)).any(|psid| {
+                    dacl_has_deny_mask(dacl, DenyAceScope::EffectiveForSid(*psid), desired_mask)
+                }) && (dacl_mask_allows(dacl, psids, desired_mask, /*require_all_bits*/ true)
+                    || dacl_mask_allows(
+                        dacl,
+                        &[*account],
+                        desired_mask,
+                        /*require_all_bits*/ true,
+                    ))
+            });
         if !descriptor.is_null() {
             LocalFree(descriptor as HLOCAL);
         }
