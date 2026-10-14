@@ -639,7 +639,7 @@ fn run_payload(payload: &Payload) -> Result<()> {
         let failure = extract_setup_failure(err)
             .map(|f| SetupFailure::new(f.code, f.message.clone()))
             .unwrap_or_else(|| {
-                SetupFailure::new(SetupErrorCode::HelperUnknownError, err.to_string())
+                SetupFailure::new(SetupErrorCode::HelperUnknownError, format!("{err:#}"))
             });
         let report = SetupErrorReport {
             code: failure.code,
