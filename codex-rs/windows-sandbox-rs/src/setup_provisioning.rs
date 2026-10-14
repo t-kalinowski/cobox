@@ -339,6 +339,39 @@ fn read_mask_allows_or_log(
     }
 }
 
+// Sandbox accounts also carry these built-in read principals. Existing access
+// must not require WRITE_DAC merely to add an equivalent sandbox-group ACE.
+fn ensure_sandbox_directory_metadata_access(
+    path: &Path,
+    sandbox_group_psid: *mut c_void,
+) -> Result<bool> {
+    let mut users = resolve_sid("Users")?;
+    let mut authenticated_users = resolve_sid("Authenticated Users")?;
+    let mut everyone = resolve_sid("Everyone")?;
+    let subjects = [
+        sandbox_group_psid,
+        users.as_mut_ptr().cast(),
+        authenticated_users.as_mut_ptr().cast(),
+        everyone.as_mut_ptr().cast(),
+    ];
+    if path_mask_allows(
+        path,
+        &subjects,
+        FILE_READ_ATTRIBUTES,
+        /*require_all_bits*/ true,
+    )? {
+        return Ok(false);
+    }
+    unsafe {
+        ensure_allow_mask_aces_with_inheritance(
+            path,
+            &[sandbox_group_psid],
+            FILE_READ_ATTRIBUTES,
+            /*inheritance*/ 0,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lock_sandbox_dir(
     dir: &Path,
@@ -986,14 +1019,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             })
         });
         if cwd_is_under_profile {
-            match unsafe {
-                ensure_allow_mask_aces_with_inheritance(
-                    user_profile,
-                    &[sandbox_group_psid],
-                    FILE_READ_ATTRIBUTES,
-                    /*inheritance*/ 0,
-                )
-            } {
+            match ensure_sandbox_directory_metadata_access(user_profile, sandbox_group_psid) {
                 Ok(true) => {
                     log_line(
                         log,
@@ -1020,15 +1046,8 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     // CreateProcessWithLogonW opens its working directory as the sandbox
     // account before the background read helper can reach it. Grant only
     // metadata access here; content reads remain governed by the read roots.
-    unsafe {
-        ensure_allow_mask_aces_with_inheritance(
-            &payload.command_cwd,
-            &[sandbox_group_psid],
-            FILE_READ_ATTRIBUTES,
-            /*inheritance*/ 0,
-        )
-    }
-    .context("grant command working-directory metadata access")?;
+    ensure_sandbox_directory_metadata_access(&payload.command_cwd, sandbox_group_psid)
+        .context("grant command working-directory metadata access")?;
 
     if payload.read_roots.is_empty() {
         log_line(log, "no read roots to grant; skipping read ACL helper")?;
