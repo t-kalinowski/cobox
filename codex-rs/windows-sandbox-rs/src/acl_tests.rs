@@ -8,8 +8,12 @@ use crate::winutil::to_wide;
 use pretty_assertions::assert_eq;
 use std::ffi::c_void;
 use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
+use std::process::Command;
+use std::process::Stdio;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -25,8 +29,6 @@ use windows_sys::Win32::Security::SetFileSecurityW;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
 #[test]
@@ -186,23 +188,33 @@ fn noninheriting_read_attributes_preserve_unprotected_child_dacl_while_directory
     let before = acl_snapshot(&child);
     assert_eq!(before.0 & SE_DACL_PROTECTED, 0);
 
-    // A live working-directory handle does not share deletion. ACL updates
-    // must request only ACL access and leave existing child permissions intact.
-    let _working_directory = OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(parent.path())
+    // A real process cwd handle restricts sharing differently from a handle
+    // opened only for metadata. Wait for the child to own that directory.
+    let cmd =
+        std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+    let mut cwd_owner = Command::new(cmd)
+        .args(["/d", "/c", "echo cwd ready&set /p STOP= >nul&exit /b 0"])
+        .current_dir(parent.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
         .expect("hold the working directory open");
+    let mut ready = String::new();
+    BufReader::new(cwd_owner.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
 
-    assert!(unsafe {
+    let granted = unsafe {
         ensure_allow_mask_aces_with_inheritance(
             parent.path(),
             &[target.as_ptr()],
             FILE_READ_ATTRIBUTES,
             /*inheritance*/ 0,
         )
-        .unwrap()
-    });
+    };
+    drop(cwd_owner.stdin.take());
+    assert!(cwd_owner.wait().unwrap().success());
+    assert_eq!(ready.trim(), "cwd ready");
+    assert!(granted.unwrap());
     assert_eq!(acl_snapshot(&child), before);
 }
