@@ -28,8 +28,12 @@ use windows_sys::Win32::Security::SE_DACL_PROTECTED;
 use windows_sys::Win32::Security::SetFileSecurityW;
 use windows_sys::Win32::Security::SetSecurityDescriptorControl;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
 #[test]
@@ -149,6 +153,31 @@ fn acl_snapshot(path: &Path) -> (u16, Vec<u8>) {
         LocalFree(descriptor as HLOCAL);
         (control, dacl)
     }
+}
+
+#[test]
+fn noninheriting_read_attributes_accept_existing_delete_handle() {
+    // Exercise the public grant with an existing DELETE handle. Its ACL-only
+    // opens must remain compatible with this handle as well as a live cwd.
+    let directory = tempfile::tempdir().expect("create directory");
+    let _delete_handle = OpenOptions::new()
+        .access_mode(DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(directory.path())
+        .expect("hold delete access with permissive sharing");
+    let target = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4244").unwrap();
+    assert!(
+        unsafe {
+            crate::ensure_allow_mask_aces_with_inheritance(
+                directory.path(),
+                &[target.as_ptr()],
+                FILE_READ_ATTRIBUTES,
+                /*inheritance*/ 0,
+            )
+        }
+        .expect("grant metadata access with a shared delete handle")
+    );
 }
 
 #[test]
