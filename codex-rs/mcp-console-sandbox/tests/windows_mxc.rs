@@ -55,6 +55,9 @@ fn mxc_does_not_require_localappdata_or_a_state_directory() -> Result<()> {
                 }),
                 "{error}"
             );
+            if mode == "mxc" {
+                assert!(error.contains("WINDOWS.html#"), "{error}");
+            }
         }
     }
     Ok(())
@@ -150,6 +153,11 @@ fn public_backend_selection_preserves_legacy_ownership_without_provisioning() ->
                 "mcp-console-sandbox setup"
             };
             assert!(diagnostic.contains(expected), "{diagnostic}");
+            if mode == Some("mxc") && accounts.iter().any(Option::is_some) {
+                assert!(diagnostic.contains("WINDOWS.html#legacy-installation-cleanup"));
+                assert!(diagnostic.contains("launch never deletes accounts or credentials"));
+                assert!(!diagnostic.contains("use elevated mode"));
+            }
         }
         assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     }

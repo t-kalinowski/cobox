@@ -9,8 +9,11 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cargo_bin::cargo_bin;
+use codex_utils_cargo_bin::copy_executable;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[tokio::test]
@@ -33,8 +36,49 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
     fs::write(work.join("public/secret"), "outside").unwrap();
     fs::write(private.join("reopened/secret"), "private").unwrap();
     fs::write(private.join("sibling"), "sibling").unwrap();
-    codex_utils_cargo_bin::copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox"))
-        .unwrap();
+    copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox")).unwrap();
+    // The approved policy makes the synthetic root writable, so PATH helpers
+    // have writable ancestors. Supply the built helper in the bundled layout.
+    let bundled_bwrap = if std::env::var_os("CARGO_BIN_EXE_bwrap").is_some() {
+        // Bazel and explicit Cargo invocations supply the matching artifact.
+        cargo_bin("bwrap").unwrap()
+    } else {
+        // A focused Cargo test does not build binary targets from other packages.
+        let Some(cargo) = option_env!("CARGO") else {
+            panic!("non-Cargo tests must supply CARGO_BIN_EXE_bwrap");
+        };
+        let output = Command::new(cargo)
+            .args([
+                "build",
+                "--locked",
+                "--offline",
+                "-p",
+                "codex-bwrap",
+                "--bin",
+                "bwrap",
+                "--message-format=json",
+            ])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "build bwrap: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let artifact = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|message| {
+                message["reason"] == "compiler-artifact" && message["target"]["name"] == "bwrap"
+            })
+            .expect("Cargo should report the built bwrap executable");
+        PathBuf::from(artifact["executable"].as_str().unwrap())
+    };
+    let resources = work.join("codex-resources");
+    fs::create_dir(&resources).unwrap();
+    copy_executable(&bundled_bwrap, &resources.join("bwrap")).unwrap();
 
     let path_entry = |path: &str, access| {
         FileSystemSandboxEntry::new(
