@@ -27,11 +27,29 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::System::Console::GetStdHandle;
+use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
+use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Threading::*;
 
 use crate::windows_backend::WindowsSandboxPreference;
 
 pub(crate) fn run() -> Result<i32> {
+    // This standalone process owns its stdio. Rust spawns inherit every
+    // inheritable handle, even when the child's own stdio points at NUL.
+    // Background preparation must not retain Console's protocol pipes after
+    // the root exits. Explicit target stdio hand-offs create their own copies.
+    for selector in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        let handle = unsafe { GetStdHandle(selector) };
+        if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+            ensure!(
+                unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } != 0,
+                "clear standard handle inheritance: {}",
+                std::io::Error::last_os_error(),
+            );
+        }
+    }
     let crate::bootstrap::Input::Environment(mut request) = crate::bootstrap::take_input()?;
     request.proxy = request.proxy.filter(|proxy| proxy.enabled);
     ensure!(

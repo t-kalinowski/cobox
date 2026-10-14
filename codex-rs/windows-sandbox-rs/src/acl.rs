@@ -10,12 +10,14 @@ use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
+use windows_sys::Wdk::Storage::FileSystem::NtSetSecurityObject;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 use windows_sys::Win32::Security::ACCESS_DENIED_ACE;
 use windows_sys::Win32::Security::ACE_HEADER;
@@ -39,9 +41,15 @@ use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::GetSecurityDescriptorControl;
+use windows_sys::Win32::Security::InitializeSecurityDescriptor;
 use windows_sys::Win32::Security::IsValidAcl;
 use windows_sys::Win32::Security::MapGenericMask;
 use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::SE_DACL_DEFAULTED;
+use windows_sys::Win32::Security::SE_SELF_RELATIVE;
+use windows_sys::Win32::Security::SECURITY_DESCRIPTOR;
+use windows_sys::Win32::Security::SetSecurityDescriptorDacl;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
@@ -52,19 +60,21 @@ use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_INFO;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
+use windows_sys::Win32::Storage::FileSystem::FileIdInfo;
+use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandleEx;
 use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_NONE;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::Storage::FileSystem::WRITE_OWNER;
-use windows_sys::Win32::System::SystemServices::MAXIMUM_ALLOWED;
 const SE_KERNEL_OBJECT: u32 = 6;
 const OBJECT_INHERIT_ACE_FLAG: u8 = 0x01;
 const INHERIT_ONLY_ACE: u8 = 0x08;
@@ -240,6 +250,36 @@ pub fn path_mask_allows(
         require_all_bits,
         AceScope::Effective,
     )
+}
+
+/// Whether each account already has the mask through its SID or shared principals.
+/// A NULL DACL grants access. Matching denies are treated conservatively rather
+/// than reconstructing a sandbox token's complete, ordered access check.
+pub(crate) fn path_grants_mask(
+    path: &Path,
+    psids: &[*mut c_void],
+    account_psids: &[*mut c_void],
+    desired_mask: u32,
+) -> Result<bool> {
+    unsafe {
+        let (dacl, descriptor) = fetch_dacl_handle(path)?;
+        let granted = dacl.is_null()
+            || account_psids.iter().all(|account| {
+                !psids.iter().chain(std::iter::once(account)).any(|psid| {
+                    dacl_has_deny_mask(dacl, DenyAceScope::EffectiveForSid(*psid), desired_mask)
+                }) && (dacl_mask_allows(dacl, psids, desired_mask, /*require_all_bits*/ true)
+                    || dacl_mask_allows(
+                        dacl,
+                        &[*account],
+                        desired_mask,
+                        /*require_all_bits*/ true,
+                    ))
+            });
+        if !descriptor.is_null() {
+            LocalFree(descriptor as HLOCAL);
+        }
+        Ok(granted)
+    }
 }
 
 /// Whether a broad standard-user principal has an allow ACE that can mutate
@@ -549,8 +589,9 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     let directory = if inheritance == 0 {
         Some(
             OpenOptions::new()
-                .access_mode(MAXIMUM_ALLOWED)
-                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                // ACL-only access does not conflict with a live process cwd.
+                .access_mode(READ_CONTROL)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
                 .open(path)
                 .context("open ACL target for root-only update")?,
@@ -643,18 +684,82 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         if code2 != ERROR_SUCCESS {
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
-        // For inheriting grants, request ACL-write access only when an update
-        // is needed. Use the same long-path support as the read handle.
-        let handle = match directory {
-            // MAXIMUM_ALLOWED suppresses propagation of existing inheritable ACEs too.
-            Some(directory) => directory,
-            None => OpenOptions::new()
+        if let Some(directory) = directory.as_ref() {
+            // Request WRITE_DAC only after finding a missing grant. Validate
+            // both live object identities before using the second handle; a
+            // renamed path or switched junction must not redirect this ACL.
+            let update = OpenOptions::new()
                 .access_mode(READ_CONTROL | WRITE_DAC)
-                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
                 .open(path)
-                .context("open ACL target for update")?,
-        };
+                .context("open root-only ACL target for update")?;
+            let mut identities: [FILE_ID_INFO; 2] = std::mem::zeroed();
+            for (file, identity) in [directory, &update].into_iter().zip(&mut identities) {
+                if GetFileInformationByHandleEx(
+                    file.as_raw_handle() as HANDLE,
+                    FileIdInfo,
+                    std::ptr::from_mut(identity).cast(),
+                    std::mem::size_of_val(identity) as u32,
+                ) == 0
+                {
+                    return Err(std::io::Error::last_os_error())
+                        .context("read root-only ACL target identity");
+                }
+            }
+            ensure!(
+                identities[0].VolumeSerialNumber == identities[1].VolumeSerialNumber
+                    && identities[0].FileId.Identifier == identities[1].FileId.Identifier,
+                "root-only ACL target changed before update"
+            );
+            // SetSecurityInfo re-propagates inheritable ACEs. Apply the DACL
+            // directly to this object without walking or resolving its name.
+            // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetsecurityobject
+            let mut descriptor: SECURITY_DESCRIPTOR = std::mem::zeroed();
+            let sd = std::ptr::addr_of_mut!(descriptor).cast();
+            if InitializeSecurityDescriptor(sd, /*dwrevision*/ 1) == 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("initialize root-only ACL update");
+            }
+            let mut control = 0;
+            let mut revision = 0;
+            if GetSecurityDescriptorControl(p_sd, &mut control, &mut revision) == 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("read root-only ACL control flags");
+            }
+            // Retain the DACL's control flags in the absolute descriptor.
+            descriptor.Control = control & !SE_SELF_RELATIVE;
+            if SetSecurityDescriptorDacl(
+                sd,
+                /*bdaclpresent*/ 1,
+                p_new_dacl,
+                i32::from(control & SE_DACL_DEFAULTED != 0),
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("prepare root-only ACL update");
+            }
+            let status = NtSetSecurityObject(
+                update.as_raw_handle() as HANDLE,
+                DACL_SECURITY_INFORMATION,
+                sd,
+            );
+            if status < 0 {
+                return Err(std::io::Error::from_raw_os_error(
+                    RtlNtStatusToDosError(status) as i32,
+                ))
+                .context("write root-only ACL update");
+            }
+            return Ok(true);
+        }
+        // For inheriting grants, request ACL-write access only when an update
+        // is needed. Use the same long-path support as the read handle.
+        let handle = OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .context("open ACL target for update")?;
         let code3 = SetSecurityInfo(
             handle.as_raw_handle() as _,
             1,
