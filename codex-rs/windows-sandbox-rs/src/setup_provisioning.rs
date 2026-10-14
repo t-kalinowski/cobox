@@ -43,6 +43,7 @@ use crate::write_file_atomically;
 use crate::write_setup_error_report;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::ensure;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use codex_otel::StatsigMetricsSettings;
@@ -362,14 +363,20 @@ fn ensure_sandbox_directory_metadata_access(
     )? {
         return Ok(false);
     }
-    unsafe {
+    let granted = unsafe {
         ensure_allow_mask_aces_with_inheritance(
             path,
             &[sandbox_group_psid],
             FILE_READ_ATTRIBUTES,
             /*inheritance*/ 0,
-        )
-    }
+        )?
+    };
+    ensure!(
+        granted,
+        "directory metadata access is blocked by an existing deny ACE: {}",
+        path.display()
+    );
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]

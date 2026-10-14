@@ -88,6 +88,7 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 The ordinary command arguments, cwd, and stdio remain the target's inputs. Environment inheritance and overrides retain the shared protocol rules. Private storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
 
 Elevated setup grants non-inheriting directory metadata access to the command's working directory before launching the sandbox account. Content read grants still run through the read helper; opening the working directory must not race that helper.
+Existing access through the sandbox group or built-in read principals avoids an ACL write. If an existing deny ACE prevents a missing metadata grant, setup fails before launching the command; it never overrides that deny.
 
 ## Command interface
 
