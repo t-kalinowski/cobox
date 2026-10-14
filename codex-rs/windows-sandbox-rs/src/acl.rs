@@ -9,8 +9,6 @@ use std::ffi::c_void;
 use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
-use std::os::windows::io::FromRawHandle;
-use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use windows_sys::Wdk::Storage::FileSystem::NtSetSecurityObject;
 use windows_sys::Win32::Foundation::CloseHandle;
@@ -59,20 +57,21 @@ use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
-use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_INFO;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
+use windows_sys::Win32::Storage::FileSystem::FileIdInfo;
+use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandleEx;
 use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
-use windows_sys::Win32::Storage::FileSystem::ReOpenFile;
 use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_NONE;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::Storage::FileSystem::WRITE_OWNER;
@@ -656,19 +655,33 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
         if let Some(directory) = directory.as_ref() {
-            // Request WRITE_DAC only after finding a missing grant. ReOpenFile
-            // stays on the object whose ACL we read, even if its path is changed.
-            let update = ReOpenFile(
-                directory.as_raw_handle() as HANDLE,
-                WRITE_DAC,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            );
-            if update == INVALID_HANDLE_VALUE {
-                return Err(std::io::Error::last_os_error())
-                    .context("reopen root-only ACL target for update");
+            // Request WRITE_DAC only after finding a missing grant. Validate
+            // both live object identities before using the second handle; a
+            // renamed path or switched junction must not redirect this ACL.
+            let update = OpenOptions::new()
+                .access_mode(READ_CONTROL | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .context("open root-only ACL target for update")?;
+            let mut identities: [FILE_ID_INFO; 2] = std::mem::zeroed();
+            for (file, identity) in [directory, &update].into_iter().zip(&mut identities) {
+                if GetFileInformationByHandleEx(
+                    file.as_raw_handle() as HANDLE,
+                    FileIdInfo,
+                    std::ptr::from_mut(identity).cast(),
+                    std::mem::size_of_val(identity) as u32,
+                ) == 0
+                {
+                    return Err(std::io::Error::last_os_error())
+                        .context("read root-only ACL target identity");
+                }
             }
-            let update = OwnedHandle::from_raw_handle(update as _);
+            ensure!(
+                identities[0].VolumeSerialNumber == identities[1].VolumeSerialNumber
+                    && identities[0].FileId.Identifier == identities[1].FileId.Identifier,
+                "root-only ACL target changed before update"
+            );
             // SetSecurityInfo re-propagates inheritable ACEs. Apply the DACL
             // directly to this object without walking or resolving its name.
             // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetsecurityobject
