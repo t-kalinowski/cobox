@@ -90,6 +90,7 @@ The ordinary command arguments, cwd, and stdio remain the target's inputs. Envir
 Elevated setup grants non-inheriting directory metadata access to the command's working directory before launching the sandbox account. Content read grants still run through the read helper; opening the working directory must not race that helper.
 Existing access through each sandbox account, the sandbox group or built-in read principals avoids an ACL write, including a NULL DACL. The check conservatively rejects metadata denies that apply to either account or those shared principals even when an allow is also present. If an existing deny ACE prevents a missing metadata grant, setup fails before launching the command; it never overrides that deny.
 Missing metadata grants share the read-ACL mutex with background content grants. Setup rechecks access after acquiring the mutex, preserving a read grant completed while it waited. Read helpers wait for their turn rather than dropping requested roots when a foreground grant holds the mutex.
+The standalone Console launcher clears inheritance on its own standard handles before spawning helpers. Background preparation must not retain the protocol pipes after the root exits. Target stdio uses explicit hand-offs, and shutdown still requires native retirement and completed I/O drains.
 
 ## Command interface
 
