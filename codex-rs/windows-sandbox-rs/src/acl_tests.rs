@@ -26,6 +26,7 @@ use windows_sys::Win32::Security::GetAclInformation;
 use windows_sys::Win32::Security::GetSecurityDescriptorControl;
 use windows_sys::Win32::Security::SE_DACL_PROTECTED;
 use windows_sys::Win32::Security::SetFileSecurityW;
+use windows_sys::Win32::Security::SetSecurityDescriptorControl;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
@@ -152,72 +153,94 @@ fn acl_snapshot(path: &Path) -> (u16, Vec<u8>) {
 
 #[test]
 fn noninheriting_read_attributes_preserve_unprotected_child_dacl_while_directory_is_open() {
-    let parent = tempfile::tempdir().expect("create parent");
-    let child = parent.path().join("child");
-    let marker = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4243").unwrap();
-    let target = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4244").unwrap();
-    std::fs::create_dir(&child).unwrap();
-    let original = acl_snapshot(&child).1;
+    for protected in [false, true] {
+        let parent = tempfile::tempdir().expect("create parent");
+        let child = parent.path().join("child");
+        let marker = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4243").unwrap();
+        let target = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4244").unwrap();
+        std::fs::create_dir(&child).unwrap();
+        let original = acl_snapshot(&child).1;
 
-    // Restore the original child DACL after adding an inheritable parent ACE.
-    // An ordinary parent update would re-propagate this missing permission.
-    unsafe {
-        let (_, descriptor) = fetch_dacl_handle(&child).unwrap();
-        ensure_allow_mask_aces_with_inheritance(
-            parent.path(),
-            &[marker.as_ptr()],
-            FILE_READ_ATTRIBUTES,
-            super::CONTAINER_INHERIT_ACE | super::OBJECT_INHERIT_ACE,
-        )
-        .unwrap();
-        assert_ne!(
-            acl_snapshot(&child).1,
-            original,
-            "child should inherit the ACE"
+        // Restore the original child DACL after adding an inheritable parent ACE.
+        // An ordinary parent update would re-propagate this missing permission.
+        unsafe {
+            let (_, descriptor) = fetch_dacl_handle(&child).unwrap();
+            ensure_allow_mask_aces_with_inheritance(
+                parent.path(),
+                &[marker.as_ptr()],
+                FILE_READ_ATTRIBUTES,
+                super::CONTAINER_INHERIT_ACE | super::OBJECT_INHERIT_ACE,
+            )
+            .unwrap();
+            assert_ne!(
+                acl_snapshot(&child).1,
+                original,
+                "child should inherit the ACE"
+            );
+            assert_ne!(
+                SetFileSecurityW(
+                    to_wide(&child).as_ptr(),
+                    DACL_SECURITY_INFORMATION,
+                    descriptor
+                ),
+                0
+            );
+            LocalFree(descriptor as HLOCAL);
+        }
+        let before = acl_snapshot(&child);
+        assert_eq!(before.0 & SE_DACL_PROTECTED, 0);
+        if protected {
+            unsafe {
+                let (_, descriptor) = fetch_dacl_handle(parent.path()).unwrap();
+                assert_ne!(
+                    SetSecurityDescriptorControl(descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED),
+                    0
+                );
+                let set = SetFileSecurityW(
+                    to_wide(parent.path()).as_ptr(),
+                    DACL_SECURITY_INFORMATION,
+                    descriptor,
+                );
+                LocalFree(descriptor as HLOCAL);
+                assert_ne!(set, 0);
+            }
+        }
+        let parent_protection = acl_snapshot(parent.path()).0 & SE_DACL_PROTECTED;
+        assert_eq!(parent_protection != 0, protected);
+
+        // A real process cwd handle restricts sharing differently from a handle
+        // opened only for metadata. Wait for the child to own that directory.
+        let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("cmd.exe");
+        let mut cwd_owner = Command::new(cmd)
+            .args(["/d", "/c", "echo cwd ready&set /p STOP= >nul&exit /b 0"])
+            .current_dir(parent.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("hold the working directory open");
+        let mut ready = String::new();
+        BufReader::new(cwd_owner.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+
+        let granted = unsafe {
+            ensure_allow_mask_aces_with_inheritance(
+                parent.path(),
+                &[target.as_ptr()],
+                FILE_READ_ATTRIBUTES,
+                /*inheritance*/ 0,
+            )
+        };
+        drop(cwd_owner.stdin.take());
+        assert!(cwd_owner.wait().unwrap().success());
+        assert_eq!(ready.trim(), "cwd ready");
+        assert!(granted.unwrap());
+        assert_eq!(
+            acl_snapshot(parent.path()).0 & SE_DACL_PROTECTED,
+            parent_protection
         );
-        assert_ne!(
-            SetFileSecurityW(
-                to_wide(&child).as_ptr(),
-                DACL_SECURITY_INFORMATION,
-                descriptor
-            ),
-            0
-        );
-        LocalFree(descriptor as HLOCAL);
+        assert_eq!(acl_snapshot(&child), before);
     }
-    let before = acl_snapshot(&child);
-    assert_eq!(before.0 & SE_DACL_PROTECTED, 0);
-    let parent_control = acl_snapshot(parent.path()).0;
-
-    // A real process cwd handle restricts sharing differently from a handle
-    // opened only for metadata. Wait for the child to own that directory.
-    let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-        .join("System32")
-        .join("cmd.exe");
-    let mut cwd_owner = Command::new(cmd)
-        .args(["/d", "/c", "echo cwd ready&set /p STOP= >nul&exit /b 0"])
-        .current_dir(parent.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("hold the working directory open");
-    let mut ready = String::new();
-    BufReader::new(cwd_owner.stdout.take().unwrap())
-        .read_line(&mut ready)
-        .unwrap();
-
-    let granted = unsafe {
-        ensure_allow_mask_aces_with_inheritance(
-            parent.path(),
-            &[target.as_ptr()],
-            FILE_READ_ATTRIBUTES,
-            /*inheritance*/ 0,
-        )
-    };
-    drop(cwd_owner.stdin.take());
-    assert!(cwd_owner.wait().unwrap().success());
-    assert_eq!(ready.trim(), "cwd ready");
-    assert!(granted.unwrap());
-    assert_eq!(acl_snapshot(parent.path()).0, parent_control);
-    assert_eq!(acl_snapshot(&child), before);
 }
