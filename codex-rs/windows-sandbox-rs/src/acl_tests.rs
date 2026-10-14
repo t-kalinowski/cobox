@@ -25,6 +25,8 @@ use windows_sys::Win32::Security::SetFileSecurityW;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
 #[test]
@@ -147,7 +149,7 @@ fn acl_snapshot(path: &Path) -> (u16, Vec<u8>) {
 }
 
 #[test]
-fn noninheriting_read_attributes_preserve_unprotected_child_dacl() {
+fn noninheriting_read_attributes_preserve_unprotected_child_dacl_while_directory_is_open() {
     let parent = tempfile::tempdir().expect("create parent");
     let child = parent.path().join("child");
     let marker = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4243").unwrap();
@@ -183,6 +185,15 @@ fn noninheriting_read_attributes_preserve_unprotected_child_dacl() {
     }
     let before = acl_snapshot(&child);
     assert_eq!(before.0 & SE_DACL_PROTECTED, 0);
+
+    // A live working-directory handle does not share deletion. ACL updates
+    // must request only ACL access and leave existing child permissions intact.
+    let _working_directory = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(parent.path())
+        .expect("hold the working directory open");
 
     assert!(unsafe {
         ensure_allow_mask_aces_with_inheritance(

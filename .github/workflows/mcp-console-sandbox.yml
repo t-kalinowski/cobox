@@ -35,6 +35,8 @@ jobs:
           tool: nextest@0.9.144,just@1.51.0
       - name: Build standalone debug executable and companions
         run: cargo build --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+      - name: Check root-only ACL updates with an open working directory
+        run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(noninheriting_read_attributes_)'
       - name: Run Windows executable contracts
         run: just test --locked -p mcp-console-sandbox --retries 0 --success-output final
       - name: Check shared bridge and product identity
