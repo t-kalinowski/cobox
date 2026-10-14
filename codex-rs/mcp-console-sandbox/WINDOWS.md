@@ -87,6 +87,8 @@ Console display names are **McpConsoleSandboxOffline** and **McpConsoleSandboxOn
 
 The ordinary command arguments, cwd, and stdio remain the target's inputs. Environment inheritance and overrides retain the shared protocol rules. Private storage grants its data directory and can export `TMPDIR`, `TEMP`, and `TMP`.
 
+Elevated setup grants non-inheriting directory metadata access to the command's working directory before launching the sandbox account. Content read grants still run through the read helper; opening the working directory must not race that helper.
+
 ## Command interface
 
 Run `--help` for `setup` and `status`. Execute workloads with `--config-env NAME -- command [args...]`. Arguments after `--` pass through unchanged. Cwd comes from the caller; target environment and policy use the shared JSON fields. Elevated mode requires explicit initial provisioning.

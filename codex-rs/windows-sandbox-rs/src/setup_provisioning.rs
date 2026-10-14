@@ -1017,6 +1017,19 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         }
     }
 
+    // CreateProcessWithLogonW opens its working directory as the sandbox
+    // account before the background read helper can reach it. Grant only
+    // metadata access here; content reads remain governed by the read roots.
+    unsafe {
+        ensure_allow_mask_aces_with_inheritance(
+            &payload.command_cwd,
+            &[sandbox_group_psid],
+            FILE_READ_ATTRIBUTES,
+            /*inheritance*/ 0,
+        )
+    }
+    .context("grant command working-directory metadata access")?;
+
     if payload.read_roots.is_empty() {
         log_line(log, "no read roots to grant; skipping read ACL helper")?;
     } else {
