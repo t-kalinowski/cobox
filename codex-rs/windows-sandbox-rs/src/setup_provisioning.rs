@@ -355,12 +355,7 @@ fn ensure_sandbox_directory_metadata_access(
         authenticated_users.as_mut_ptr().cast(),
         everyone.as_mut_ptr().cast(),
     ];
-    if path_mask_allows(
-        path,
-        &subjects,
-        FILE_READ_ATTRIBUTES,
-        /*require_all_bits*/ true,
-    )? {
+    if crate::acl::path_grants_mask(path, &subjects, FILE_READ_ATTRIBUTES)? {
         return Ok(false);
     }
     let granted = unsafe {
