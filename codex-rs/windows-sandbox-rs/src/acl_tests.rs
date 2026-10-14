@@ -187,11 +187,13 @@ fn noninheriting_read_attributes_preserve_unprotected_child_dacl_while_directory
     }
     let before = acl_snapshot(&child);
     assert_eq!(before.0 & SE_DACL_PROTECTED, 0);
+    let parent_control = acl_snapshot(parent.path()).0;
 
     // A real process cwd handle restricts sharing differently from a handle
     // opened only for metadata. Wait for the child to own that directory.
-    let cmd =
-        std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+    let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32")
+        .join("cmd.exe");
     let mut cwd_owner = Command::new(cmd)
         .args(["/d", "/c", "echo cwd ready&set /p STOP= >nul&exit /b 0"])
         .current_dir(parent.path())
@@ -216,5 +218,6 @@ fn noninheriting_read_attributes_preserve_unprotected_child_dacl_while_directory
     assert!(cwd_owner.wait().unwrap().success());
     assert_eq!(ready.trim(), "cwd ready");
     assert!(granted.unwrap());
+    assert_eq!(acl_snapshot(parent.path()).0, parent_control);
     assert_eq!(acl_snapshot(&child), before);
 }
