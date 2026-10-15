@@ -35,11 +35,7 @@ struct SandboxUser {
 
 impl DisabledSandboxUsers {
     pub(super) fn disable(&mut self) -> Result<()> {
-        for name in [
-            crate::sandbox_name(OFFLINE_USERNAME),
-            crate::sandbox_name(ONLINE_USERNAME),
-        ] {
-            let name = name.as_ref();
+        for name in [OFFLINE_USERNAME, ONLINE_USERNAME] {
             let Some(original_flags) = local_user_flags(name)? else {
                 continue;
             };
@@ -60,11 +56,7 @@ impl DisabledSandboxUsers {
     }
 
     pub(super) fn validate_current(&self) -> Result<()> {
-        for name in [
-            crate::sandbox_name(OFFLINE_USERNAME),
-            crate::sandbox_name(ONLINE_USERNAME),
-        ] {
-            let name = name.as_ref();
+        for name in [OFFLINE_USERNAME, ONLINE_USERNAME] {
             let Some(flags) = local_user_flags(name)? else {
                 continue;
             };
@@ -167,7 +159,7 @@ impl DisabledSandboxUsers {
     pub(super) fn for_token_test(sid: Vec<u8>) -> Self {
         Self {
             users: vec![SandboxUser {
-                name: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
+                name: OFFLINE_USERNAME.to_owned(),
                 original_flags: network::UF_ACCOUNTDISABLE,
                 sid,
             }],
@@ -177,7 +169,7 @@ impl DisabledSandboxUsers {
 
 pub(super) fn remove_sandbox_principal(name: &str) -> Result<()> {
     let name_wide = to_wide(name);
-    let status = if name == crate::sandbox_name("CodexSandboxUsers").as_ref() {
+    let status = if name == "CodexSandboxUsers" {
         unsafe { network::NetLocalGroupDel(null(), name_wide.as_ptr()) }
     } else {
         unsafe { network::NetUserDel(null(), name_wide.as_ptr()) }

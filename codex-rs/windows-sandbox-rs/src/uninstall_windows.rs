@@ -161,10 +161,7 @@ impl PreparedWindowsSandboxCleanup {
             ("remove firewall rules", firewall::cleanup_firewall_rules()),
             (
                 "remove hidden-user entries",
-                crate::hide_users::unhide_sandbox_users(&[
-                    crate::sandbox_name(OFFLINE_USERNAME).as_ref(),
-                    crate::sandbox_name(ONLINE_USERNAME).as_ref(),
-                ]),
+                crate::hide_users::unhide_sandbox_users(&[OFFLINE_USERNAME, ONLINE_USERNAME]),
             ),
         ] {
             match result {
@@ -187,9 +184,7 @@ impl PreparedWindowsSandboxCleanup {
                 .sids()
                 .any(|sid| self._retained_logons.contains_sid(sid))
         {
-            match principals::remove_sandbox_principal(
-                crate::sandbox_name("CodexSandboxUsers").as_ref(),
-            ) {
+            match principals::remove_sandbox_principal("CodexSandboxUsers") {
                 Ok(()) => report("remove sandbox group: completed"),
                 Err(error) => {
                     report(&format!("remove sandbox group: failed, {error:#}"));

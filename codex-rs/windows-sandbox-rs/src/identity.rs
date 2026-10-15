@@ -166,8 +166,8 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
     };
     match serde_json::from_str::<SandboxUsersFile>(&file) {
         Ok(users) => {
-            if users.offline.username != crate::sandbox_name(OFFLINE_USERNAME)
-                || users.online.username != crate::sandbox_name(ONLINE_USERNAME)
+            if users.offline.username != OFFLINE_USERNAME
+                || users.online.username != ONLINE_USERNAME
             {
                 anyhow::bail!(
                     "sandbox state belongs to a different product; choose a separate state directory"
@@ -402,11 +402,8 @@ fn require_sandbox_account_with_setup(
         // Cleanup may also have removed the group, so repair missing or disabled accounts before ACL
         // refresh can fail. Expired passwords also require full setup, since an ACL refresh
         // cannot rotate the account passwords and update the stored DPAPI credentials.
-        for username in [
-            crate::sandbox_name(OFFLINE_USERNAME),
-            crate::sandbox_name(ONLINE_USERNAME),
-        ] {
-            let needs_repair = match read_local_user_flags(&username) {
+        for username in [OFFLINE_USERNAME, ONLINE_USERNAME] {
+            let needs_repair = match read_local_user_flags(username) {
                 Ok(Some(flags)) => flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) != 0,
                 Ok(None) => true,
                 Err(_) => false,
@@ -441,11 +438,8 @@ fn require_sandbox_account_with_setup(
             },
             &desired_offline_proxy_settings,
         )?;
-        for username in [
-            crate::sandbox_name(OFFLINE_USERNAME),
-            crate::sandbox_name(ONLINE_USERNAME),
-        ] {
-            if let Ok(Some(flags)) = read_local_user_flags(&username) {
+        for username in [OFFLINE_USERNAME, ONLINE_USERNAME] {
+            if let Ok(Some(flags)) = read_local_user_flags(username) {
                 anyhow::ensure!(
                     flags & UF_PASSWORD_EXPIRED == 0,
                     "Windows sandbox account password is still expired after setup"

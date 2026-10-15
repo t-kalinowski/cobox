@@ -1,8 +1,6 @@
 # Windows native sandbox
 
-The Windows executable runs commands through native MXC using Codex's shared capability, policy conversion, and launch APIs.
-It requires neither a running Codex application nor account provisioning.
-The environment transport is the same as on Unix:
+The Windows executable runs commands through native MXC using Codex's shared capability, policy conversion, and launch APIs. It requires neither a running Codex application nor account provisioning. The environment transport is the same as on Unix:
 
 ```powershell
 $env:CONSOLE_POLICY = '{"extends":":read-only"}'
@@ -11,57 +9,33 @@ mcp-console-sandbox --config-env CONSOLE_POLICY -- cmd.exe /d /c "echo MXC ready
 
 ## Build and distribute
 
-Install Rust 1.95.0 with the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++ build tools, a Windows SDK, and CMake.
-From `codex-rs`:
+Install Rust 1.95.0 with the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++ build tools, a Windows SDK, and CMake. From `codex-rs`:
 
 ```powershell
 cargo build --locked --release -p mcp-console-sandbox --bin mcp-console-sandbox
 just test --locked --release -p mcp-console-sandbox --retries 0
 ```
 
-Distribute `mcp-console-sandbox.exe`.
-For debug builds omit `--release`.
-The [Bazel targets](BUILD.bazel) build the executable and its public contract tests on Windows using the upstream MSVC host toolchain.
+Distribute `mcp-console-sandbox.exe`. For debug builds omit `--release`. The [Bazel targets](BUILD.bazel) build the executable and its public contract tests on Windows using the upstream MSVC host toolchain.
 
 ## Console transport
 
-The complete JSON reference is [PROTOCOL.md](PROTOCOL.md).
-Windows accepts `--config-env NAME -- command [args...]`; the descriptor transport is Unix-only.
-Environment-variable matching is case-insensitive.
-Hidden per-drive current-directory entries such as `=C:` are omitted from inherited target variables; explicit names containing `=` are invalid.
-The selected configuration variable never reaches the target.
+The complete JSON reference is [PROTOCOL.md](PROTOCOL.md). Windows accepts `--config-env NAME -- command [args...]`; the descriptor transport is Unix-only. Environment-variable matching is case-insensitive. Hidden per-drive current-directory entries such as `=C:` are omitted from inherited target variables; explicit names containing `=` are invalid. The selected configuration variable never reaches the target. Native Windows process creation requires the target's `LOCALAPPDATA` variable to be defined, even if empty; omitting it produces Windows error 203.
 
-Every launch requires MXC support for its requested filesystem policy.
-Capability detection creates and closes a native process security environment; exported API names alone are insufficient.
-Unsupported hosts and policies fail before target execution, with no backend retry.
-External filesystem enforcement is unsupported on Windows.
+Every launch requires MXC support for its requested filesystem policy. Capability detection creates and closes a native process security environment; exported API names alone are insufficient. Unsupported hosts and policies fail before target execution, with no backend retry. External filesystem enforcement is unsupported on Windows.
 
-Filesystem access uses native MXC permissions.
-Read-deny entries require native deny-path support.
-Working directories resolve through directory handles, including Windows 8.3 aliases, without requiring parent enumeration.
+Filesystem access uses native MXC permissions. Read-deny entries require native deny-path support. Working directories resolve through directory handles, including Windows 8.3 aliases, without requiring parent enumeration.
 
-Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional.
-Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight.
-The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
+Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional. Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight. The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
 
 ## Lifetime and storage
 
-Each workload has a non-breakaway Job.
-The retained parent process handle and the waiting frontend define its lifetime.
-Successful retirement requires zero active Job members; private temporary storage is removed only after that native receipt.
-Every Windows exit-status bit is preserved.
-Binary stdin and inherited output handles do not delay retirement indefinitely.
+Each workload has a non-breakaway Job. The retained parent process handle and the waiting frontend define its lifetime. Successful retirement requires zero active Job members; private temporary storage is removed only after that native receipt. Every Windows exit-status bit is preserved. Binary stdin and inherited output handles do not delay retirement indefinitely.
 
-Private storage uses `lifecycle.private_tmp` and is independent of filesystem built-in selection.
-Storage removal retries sharing violations for up to five seconds.
-Other errors and persistent sharing violations withhold success.
-Runner loss closes kill-on-close Jobs but does not guarantee storage deletion.
+Private storage uses `lifecycle.private_tmp` and is independent of filesystem built-in selection. Storage removal retries sharing violations for up to five seconds. Other errors and persistent sharing violations withhold success. Runner loss closes kill-on-close Jobs but does not guarantee storage deletion.
 
 ## Validation limits
 
-Public tests cover native filesystem/network policy, managed HTTP and SOCKS allow/deny decisions, environment transport, binary stdin, status codes, descendant retirement, owner death, and storage cleanup.
-Runtime-dependent cases report native MXC unavailability separately from a pass.
-Configuration and unsupported-policy rejection remain testable without MXC.
+Public tests cover native filesystem/network policy, managed HTTP and SOCKS allow/deny decisions, environment transport, binary stdin, status codes, descendant retirement, owner death, and storage cleanup. Runtime-dependent cases report native MXC unavailability separately from a pass. Configuration and unsupported-policy rejection remain testable without MXC.
 
-The fixture executable uses native Windows process APIs.
-For upstream tests invoking Python by name, put an actual interpreter on PATH rather than a Windows app execution alias.
+The fixture executable uses native Windows process APIs. For upstream tests invoking Python by name, put an actual interpreter on PATH rather than a Windows app execution alias.

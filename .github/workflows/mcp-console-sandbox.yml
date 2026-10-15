@@ -35,14 +35,12 @@ jobs:
           tool: nextest@0.9.144,just@1.51.0
       - name: Build standalone debug executable
         run: cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox
-      - name: Check root-only ACL updates with an open working directory
-        run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(noninheriting_read_attributes_)'
       - name: Run Windows executable contracts
         run: just test --locked -p mcp-console-sandbox --retries 0 --success-output final
-      - name: Check shared bridge and product identity
-        run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(stdio_bridge::) | test(wfp::product_tests::) | test(windows_common::)'
+      - name: Check Windows stdio bridge
+        run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(stdio_bridge::)'
       - name: Check supervised Windows Job lifetime
-        run: just test --locked -p codex-utils-pty -p codex-sandboxing --retries 0 -E 'test(supervised_job_) | test(win::job::tests::) | test(spawn::tests::)'
+        run: just test --locked -p codex-utils-pty --retries 0 -E 'test(supervised_job_) | test(win::job::tests::)'
       - name: Check Windows proxy Job admission
         run: just test --locked -p codex-network-proxy --retries 0 -E 'test(job_admission_)'
       - name: Build standalone release executable

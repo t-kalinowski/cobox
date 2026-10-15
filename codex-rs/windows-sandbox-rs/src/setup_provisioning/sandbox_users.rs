@@ -60,7 +60,7 @@ mod tests;
 const SID_USERS: &str = "S-1-5-32-545";
 
 pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
-    resolve_sid(&crate::sandbox_name(SANDBOX_USERS_GROUP))
+    resolve_sid(SANDBOX_USERS_GROUP)
 }
 
 pub(super) fn provision_sandbox_users(
@@ -71,7 +71,7 @@ pub(super) fn provision_sandbox_users(
     log: &mut dyn Write,
     mode: SetupMode,
 ) -> Result<()> {
-    let group = crate::sandbox_name(SANDBOX_USERS_GROUP);
+    let group = SANDBOX_USERS_GROUP;
     if let Err(err) = ensure_sandbox_users_group() {
         let message = format!("failed to create local group {group}: {err}");
         super::log_line(log, &message)?;
@@ -106,7 +106,7 @@ pub fn ensure_sandbox_user(
     log: &mut dyn Write,
 ) -> Result<()> {
     ensure_local_user(username, password, new_user_flags, log)?;
-    ensure_local_group_member(&crate::sandbox_name(SANDBOX_USERS_GROUP), username)?;
+    ensure_local_group_member(SANDBOX_USERS_GROUP, username)?;
     Ok(())
 }
 

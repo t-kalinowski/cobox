@@ -10,7 +10,6 @@ use super::ensure_sublayer;
 use super::ensure_success;
 use super::filter_specs::ConditionSpec;
 use super::filter_specs::FilterSpec;
-use crate::WindowsSandboxProduct;
 use crate::WindowsSandboxProvisioningSettings;
 use anyhow::Result;
 use std::ptr::null;
@@ -150,7 +149,7 @@ pub(super) fn remove_filters(engine: HANDLE) -> Result<()> {
         "FwpmFilterCreateEnumHandle0(loopback)",
     )?;
     let result: Result<()> = (|| {
-        let prefix = WindowsSandboxProduct::current().wfp_key(KEY_PREFIX);
+        let prefix = KEY_PREFIX;
         let mut keys = Vec::new();
         loop {
             let mut entries = null_mut();

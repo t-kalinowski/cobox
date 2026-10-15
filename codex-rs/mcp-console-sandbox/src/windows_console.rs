@@ -4,7 +4,6 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::config_types::WindowsSandboxProxySettingsMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -13,11 +12,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
-use codex_sandboxing::SpawnRequest;
-use codex_sandboxing::WindowsSandboxLaunchContext;
-use codex_sandboxing::WindowsSandboxSpawnRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_windows_sandbox::WindowsSandboxProduct;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
@@ -69,7 +64,6 @@ pub(crate) fn run() -> Result<i32> {
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
-    WindowsSandboxProduct::Console.initialize()?;
     ensure!(
         !matches!(permissions, PermissionProfile::External { .. }),
         "Windows sandbox execution requires MXC; external-sandbox policies are unsupported"
@@ -174,30 +168,16 @@ pub(crate) fn run() -> Result<i32> {
             // Before a launch attempt TempDir removes failed preflight storage.
             // Afterwards cleanup requires a confirmed native retirement receipt.
             retained_storage = storage.take().map(tempfile::TempDir::keep);
-            let spawned = codex_sandboxing::spawn_process_with_windows_context(
-                SpawnRequest {
-                    command: &prepared.command,
-                    cwd: request.cwd.as_path(),
-                    env: &prepared.env,
-                    arg0: &prepared.arg0,
-                    sandbox: prepared.sandbox,
-                    windows_sandbox: Some(WindowsSandboxSpawnRequest {
-                        permission_profile: &prepared.permission_profile,
-                        workspace_roots: std::slice::from_ref(&workspace),
-                        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-                        proxy_enforced: proxy.is_some(),
-                        network_proxy_restricting_sid: None,
-                        proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
-                        filesystem_overrides: None,
-                    }),
-                    tty: false,
-                    stdin_open: true,
-                    inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
-                },
-                WindowsSandboxLaunchContext {
-                    state_dir: request.cwd.as_path(),
-                    job: Some(job),
-                },
+            let (program, args) = prepared
+                .command
+                .split_first()
+                .context("missing MXC command")?;
+            let spawned = codex_utils_pty::pipe::spawn_process_in_job(
+                program,
+                args,
+                request.cwd.as_path(),
+                &prepared.env,
+                job,
             )
             .await?;
             // The bridge owns I/O and waits for the backend's confirmed Job retirement.

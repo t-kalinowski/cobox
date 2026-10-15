@@ -1,17 +1,12 @@
 # Integration inventory
 
-The patch extracts a standalone sandbox from `rust-v0.162.1`, commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`.
-Use this inventory with the full upstream diff and [reapplication procedure](REBASE.md).
+The patch extracts a standalone sandbox from `rust-v0.162.1`, commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`. Use this inventory with the full upstream diff and [reapplication procedure](REBASE.md).
 
-Upstream owns filesystem/network policy, managed proxy routing, Seatbelt, seccomp, and bubblewrap.
-The runner adds the [configuration boundary](PROTOCOL.md), target-environment isolation, trusted Seatbelt extensions, and [supervised lifetime](LIFECYCLE.md).
-Application policy belongs to MCP Console.
-The patch has no `codex-core` dependency or changes to protocol policy types, native policy files, or vendored bubblewrap.
+Upstream owns filesystem/network policy, managed proxy routing, Seatbelt, seccomp, and bubblewrap. The runner adds the [configuration boundary](PROTOCOL.md), target-environment isolation, trusted Seatbelt extensions, and [supervised lifetime](LIFECYCLE.md). Application policy belongs to MCP Console. The patch has no `codex-core` dependency or changes to protocol policy types, native policy files, or vendored bubblewrap.
 
 ## Native integration
 
-Paths below are relative to `codex-rs/`.
-Review the changed APIs and ordinary upstream callers together.
+Paths below are relative to `codex-rs/`. Review the changed APIs and ordinary upstream callers together.
 
 | Paths                                                                                                                                       | Responsibility and review points                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,23 +14,20 @@ Review the changed APIs and ordinary upstream callers together.
 | `linux-sandbox/src/lib.rs`, `linux_run_main.rs`                                                                                             | Carries a private setup descriptor through native enforcement to the non-returning target hook. The runner owns target spawning and namespace-init lifetime. Without a descriptor, native fork/exec/wait applies. Preserve mount/capability verification, proxy routing, and the ordinary Landlock guard. |
 | `linux-sandbox/src/bwrap.rs`                                                                                                                | Requires process isolation when target setup needs namespace init, including full filesystem/network access. Other callers retain the native optimization.                                                                                                                                                |
 | `linux-sandbox/src/launcher.rs`, `linux_run_main.rs`                                                                                        | Transfers stdin through an extra descriptor and releases waiting helpers' readers. Preserve policy-aware helper selection before preflight, rejection of sandbox-writable helpers, bundled verification, and re-exec without `--argv0`.                                                                   |
-| `mxc-sandbox/src/lib.rs`; `sandboxing/src/lib.rs`, `spawn.rs`, `spawn_tests.rs`                                                             | Exposes policy-aware MXC availability and host-owned Windows state/Job context. Ordinary callers retain their state discovery and lifetime.                                                                                                                                                               |
+| `mxc-sandbox/src/lib.rs`; `sandboxing/src/lib.rs`                                                                                           | Exposes policy-aware MXC availability. The standalone runner uses the shared pipe launcher's owned Job and confirmed retirement.                                                                                                                                                                          |
 | `utils/pty/src/child_command.rs`, `lib.rs`, `pipe.rs`, `pipe_tests.rs`, `win/job.rs`, `win/job_tests.rs`, `win/mod.rs`, `win/retirement.rs` | Opt-in atomic containment in a non-breakaway Job and confirmed retirement. Keep single-workload ownership, assignment-failure cleanup, missing-receipt reporting, and ordinary descendant preservation.                                                                                                   |
 | `network-proxy/src/attribution.rs`, `attribution_tests.rs`, `runtime.rs`, `windows_tcp_attribution.rs`, `windows_tcp_attribution_tests.rs`  | Dedicated Windows proxy listeners admit clients by kernel-observed Job membership before reading routing metadata. Preserve retained process identity and rejection on query failure.                                                                                                                     |
 
 ## Windows integration
 
-Console selects an immutable product identity at executable startup for its confirmed retirement receipt.
-The leaf modules own native MXC capability validation, environment transport, owner monitoring, and private storage.
-See [WINDOWS.md](WINDOWS.md) for supported policy and enforcement limits.
+The leaf modules own native MXC capability validation, environment transport, owner monitoring, and private storage. The shared pipe launcher publishes an exit receipt only after confirmed Job retirement. See [WINDOWS.md](WINDOWS.md) for supported policy and enforcement limits.
 
 Paths below are relative to `codex-rs/windows-sandbox-rs/`.
 
-| Paths                                                                                                                     | Responsibility and review points                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/product.rs`, `src/lib.rs`                                                                                            | Immutable identity and public integration hooks. Retain Console's strict native retirement receipt independently of ordinary Codex process lifetimes.              |
-| `src/stdio_bridge.rs`, `src/unified_exec/backends/windows_common.rs`, `src/unified_exec/backends/windows_common_tests.rs` | Caller cancellation, prompt stdin release, and receipt-presence propagation. Preserve the distinction between a missing receipt and every valid Windows exit code. |
-| `src/unified_exec/tests.rs`                                                                                               | PowerShell fixture discovery and lifetime checks: keep ConPTY input open through startup and observe root exit independently of inherited output handles.          |
+| Paths                       | Responsibility and review points                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/stdio_bridge.rs`       | Caller cancellation, prompt stdin release, and receipt-presence propagation. Preserve the distinction between a missing receipt and every valid Windows exit code. |
+| `src/unified_exec/tests.rs` | PowerShell fixture discovery and lifetime checks: keep ConPTY input open through startup and observe root exit independently of inherited output handles.          |
 
 ## Standalone modules
 
@@ -52,15 +44,11 @@ All paths below are in `mcp-console-sandbox/src/`.
 | `storage.rs`                                           | Descriptor-relative no-follow removal after confirmed retirement, including mode-zero directories. Keep storage separate from native mount bookkeeping.                                                                         |
 | `windows.rs`, `windows_console.rs`, `windows_proxy.rs` | Native MXC validation, target environment, retained owner handles, Job-owned proxy admission, and cleanup only after a native retirement receipt.                                                                               |
 
-[LINUX_COMPATIBILITY.md](LINUX_COMPATIBILITY.md) describes runtime prerequisites and procfs review.
-Review creating-thread death signals, credential/exec transitions, native proxy and synthetic-mount supervision, and bubblewrap's parent-death links together.
-The [lifecycle contract](LIFECYCLE.md#owned-stdio-process-groups-and-linux-parent-death) documents startup windows and incomplete-retirement behavior.
-External execution without a proxy has no native handshake; Linux's outer sandbox owns descendants that escape the original process group.
+[LINUX_COMPATIBILITY.md](LINUX_COMPATIBILITY.md) describes runtime prerequisites and procfs review. Review creating-thread death signals, credential/exec transitions, native proxy and synthetic-mount supervision, and bubblewrap's parent-death links together. The [lifecycle contract](LIFECYCLE.md#owned-stdio-process-groups-and-linux-parent-death) documents startup windows and incomplete-retirement behavior. External execution without a proxy has no native handshake; Linux's outer sandbox owns descendants that escape the original process group.
 
 ## Build and repository integration
 
-The standalone package has local [naming instructions](AGENTS.md).
-Preserve its package and executable name.
+The standalone package has local [naming instructions](AGENTS.md). Preserve its package and executable name.
 
 | Paths                                                                                                                                                           | Responsibility and review points                                                                                                                                                                                |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,6 +58,4 @@ Preserve its package and executable name.
 | `.github/workflows/mcp-console-sandbox.yml`                                                                                                                     | Windows debug/release, macOS/GNU executable and native contracts, Bazel/lints, and both musl architectures. Preserve helper strip/hash/build order and musl-only environment scoping.                           |
 | `.github/scripts/verify_cargo_workspace_manifests.py`, `.github/workflows/blocking-ci.yml`, `.github/workflows/v8-canary.yml`, `scripts/format.py`, `README.md` | Package-name exceptions, focused fork CI, package-at-a-time Windows formatting, and fork overview. Broad upstream checks remain available by manual dispatch.                                                   |
 
-The [build instructions](README.md#build-and-validation) describe packaging.
-[REBASE.md](REBASE.md#validation-checklist) defines upgrade checks; the workflow owns executable commands.
-Keep validation reports in the PR or task summary.
+The [build instructions](README.md#build-and-validation) describe packaging. [REBASE.md](REBASE.md#validation-checklist) defines upgrade checks; the workflow owns executable commands. Keep validation reports in the PR or task summary.

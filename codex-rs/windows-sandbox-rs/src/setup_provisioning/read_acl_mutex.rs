@@ -30,9 +30,7 @@ impl Drop for ReadAclMutexGuard {
 // Every helper waits for its turn so a foreground grant cannot suppress a
 // queued helper's content grants merely by keeping the mutex object alive.
 pub(super) fn acquire_read_acl_mutex() -> Result<ReadAclMutexGuard> {
-    let name = to_wide(OsStr::new(
-        crate::sandbox_name(READ_ACL_MUTEX_NAME).as_ref(),
-    ));
+    let name = to_wide(OsStr::new(READ_ACL_MUTEX_NAME));
     let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
     if handle.is_null() {
         return Err(anyhow::anyhow!("CreateMutexW failed: {}", unsafe {

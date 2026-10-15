@@ -102,12 +102,6 @@ mod path_normalization;
 #[cfg(target_os = "windows")]
 mod process;
 #[cfg(target_os = "windows")]
-mod product;
-#[cfg(target_os = "windows")]
-pub use product::WindowsSandboxProduct;
-#[cfg(target_os = "windows")]
-pub use product::sandbox_name;
-#[cfg(target_os = "windows")]
 mod provisioning_client;
 #[cfg(target_os = "windows")]
 mod provisioning_protocol;

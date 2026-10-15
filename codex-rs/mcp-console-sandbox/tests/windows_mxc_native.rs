@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -218,22 +219,16 @@ async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })?;
-        let mut spawned = spawn_process_with_windows_context(
-            SpawnRequest {
-                command: &prepared.command,
-                cwd: cwd.as_path(),
-                env: &prepared.env,
-                arg0: &prepared.arg0,
-                sandbox: prepared.sandbox,
-                windows_sandbox: None,
-                tty: false,
-                stdin_open: true,
-                inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
-            },
-            WindowsSandboxLaunchContext {
-                state_dir: root.path(),
-                job: Some(job),
-            },
+        let (program, args) = prepared
+            .command
+            .split_first()
+            .context("missing MXC command")?;
+        let mut spawned = codex_utils_pty::pipe::spawn_process_in_job(
+            program,
+            args,
+            cwd.as_path(),
+            &prepared.env,
+            job,
         )
         .await?;
         let receipt =

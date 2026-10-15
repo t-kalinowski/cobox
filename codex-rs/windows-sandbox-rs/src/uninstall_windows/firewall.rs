@@ -23,8 +23,7 @@ pub(super) fn cleanup_firewall_rules() -> Result<()> {
         "codex_sandbox_offline_block_loopback_udp",
         "codex_sandbox_offline_allow_loopback_proxy",
     ] {
-        if let Err(error) = unsafe { rules.Remove(&BSTR::from(crate::sandbox_name(name).as_ref())) }
-        {
+        if let Err(error) = unsafe { rules.Remove(&BSTR::from(name)) } {
             errors.push(format!("remove sandbox firewall rule {name}: {error}"));
         }
     }
