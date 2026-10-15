@@ -9,7 +9,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -22,7 +21,6 @@ use codex_windows_sandbox::WindowsSandboxProduct;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -32,8 +30,6 @@ use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Threading::*;
-
-use crate::windows_backend::WindowsSandboxPreference;
 
 pub(crate) fn run() -> Result<i32> {
     // This standalone process owns its stdio. Rust spawns inherit every
@@ -69,64 +65,25 @@ pub(crate) fn run() -> Result<i32> {
         request.lifecycle.cleanup_timeout_ms.is_none(),
         "cleanup_timeout_ms is not configurable on Windows"
     );
-    let preference = request.windows_backend.unwrap_or_default();
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
     WindowsSandboxProduct::Console.initialize()?;
-    // Old setup does not register its credential directory. MXC's host identity
-    // could read an unknown copy of those credentials, unlike the legacy accounts.
-    let mut host_mxc_restriction = None;
-    if matches!(
-        preference,
-        WindowsSandboxPreference::Auto | WindowsSandboxPreference::Mxc
-    ) && !(matches!(permissions, PermissionProfile::External { .. }) && request.proxy.is_none())
-    {
-        for account in ["McpConsoleSandboxOff", "McpConsoleSandboxOn"] {
-            if codex_windows_sandbox::local_user_flags(account)?.is_some() {
-                host_mxc_restriction = Some(
-                    "MXC is unavailable while legacy Console sandbox accounts exist; complete the one-time cleanup at https://t-kalinowski.github.io/mcp-console/WINDOWS.html#legacy-installation-cleanup before retrying; launch never deletes accounts or credentials",
-                );
-            }
-        }
+    ensure!(
+        !matches!(permissions, PermissionProfile::External { .. }),
+        "Windows sandbox execution requires MXC; external-sandbox policies are unsupported"
+    );
+    if let Some(proxy) = &request.proxy {
+        crate::windows_proxy::validate(proxy)?;
+        ensure!(
+            proxy.allow_local_binding,
+            "MXC cannot enforce allow_local_binding=false: native host-loopback access is bidirectional"
+        );
     }
-    let (sandbox, level) = crate::windows_backend::select_windows_sandbox(
-        preference,
-        &permissions,
-        request.proxy.as_ref(),
-        host_mxc_restriction,
-    )?;
     ensure!(
-        request.proxy.is_none() || sandbox == SandboxType::WindowsMxc,
-        "managed proxy configuration is not supported by the legacy Windows sandbox"
-    );
-    ensure!(
-        level != WindowsSandboxLevel::RestrictedToken || network == NetworkSandboxPolicy::Enabled,
-        "restricted networking requires the elevated Windows sandbox; unelevated requires network: enabled"
-    );
-    ensure!(
-        level != WindowsSandboxLevel::RestrictedToken
-            || (filesystem.has_full_disk_read_access()
-                && !filesystem.has_denied_read_restrictions()),
-        "unelevated requires host reads and cannot enforce read restrictions"
-    );
-    // Only legacy backends consume state_dir; the shared context ignores it for MXC.
-    let state = if sandbox == SandboxType::WindowsRestrictedToken {
-        match request.windows_state_dir.take() {
-            Some(state) => state.into_path_buf(),
-            None => PathBuf::from(
-                std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?,
-            )
-            .join("mcp-console"),
-        }
-    } else {
-        request.cwd.as_path().to_path_buf()
-    };
-    ensure!(
-        level != WindowsSandboxLevel::Elevated
-            || codex_windows_sandbox::check_sandbox_setup(&state)?,
-        "Windows sandbox setup is required; run `mcp-console-sandbox setup` with the same state directory from an interactive terminal"
+        codex_sandboxing::windows_mxc_available_for(&permissions),
+        "MXC is unavailable for this filesystem policy on this executor; update Windows to a build supporting native MXC and the requested filesystem permissions; see https://t-kalinowski.github.io/mcp-console/WINDOWS.html#native-sandbox"
     );
     let parent = Parent::new(request.lifecycle.parent_pid)?;
     for name in &request.excluded_environment {
@@ -175,24 +132,16 @@ pub(crate) fn run() -> Result<i32> {
         .transpose()?;
     let profile = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
-    let job = matches!(sandbox, SandboxType::WindowsMxc | SandboxType::None)
-        .then(codex_utils_pty::JobObject::create_without_breakaway)
-        .transpose()?
-        .map(Arc::new);
+    let job = Arc::new(codex_utils_pty::JobObject::create_without_breakaway()?);
     let mut retained_storage = None;
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(async {
             let proxy = match request.proxy {
-                Some(config) => Some(
-                    crate::windows_proxy::start(
-                        config,
-                        job.as_ref().context("MXC proxy Job")?,
-                        &mut request.environment,
-                    )
-                    .await?,
-                ),
+                Some(config) => {
+                    Some(crate::windows_proxy::start(config, &job, &mut request.environment).await?)
+                }
                 None => None,
             };
             let executable = std::env::current_exe()?;
@@ -213,57 +162,44 @@ pub(crate) fn run() -> Result<i32> {
                     additional_permissions: None,
                 },
                 permissions: &profile,
-                sandbox,
+                sandbox: SandboxType::WindowsMxc,
                 enforce_managed_network: proxy.is_some(),
                 environment_id: None,
                 network: proxy.as_ref().map(|proxy| &proxy.proxy),
                 sandbox_policy_cwd: &request.cwd.clone().into(),
                 sandbox_exe: Some(&executable),
                 use_legacy_landlock: false,
-                windows_sandbox_level: level,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
             })?;
             // Before a launch attempt TempDir removes failed preflight storage.
             // Afterwards cleanup requires a confirmed native retirement receipt.
             retained_storage = storage.take().map(tempfile::TempDir::keep);
-            let spawned = if prepared.sandbox == SandboxType::None {
-                // External enforcement still needs the existing supervised Job lifetime.
-                let (program, args) = prepared.command.split_first().context("missing command")?;
-                codex_utils_pty::pipe::spawn_process_in_job(
-                    program,
-                    args,
-                    request.cwd.as_path(),
-                    &prepared.env,
-                    job.context("external sandbox Job")?,
-                )
-                .await?
-            } else {
-                codex_sandboxing::spawn_process_with_windows_context(
-                    SpawnRequest {
-                        command: &prepared.command,
-                        cwd: request.cwd.as_path(),
-                        env: &prepared.env,
-                        arg0: &prepared.arg0,
-                        sandbox: prepared.sandbox,
-                        windows_sandbox: Some(WindowsSandboxSpawnRequest {
-                            permission_profile: &prepared.permission_profile,
-                            workspace_roots: std::slice::from_ref(&workspace),
-                            windows_sandbox_level: level,
-                            proxy_enforced: proxy.is_some(),
-                            network_proxy_restricting_sid: None,
-                            proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
-                            filesystem_overrides: None,
-                        }),
-                        tty: false,
-                        stdin_open: true,
-                        inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
-                    },
-                    WindowsSandboxLaunchContext {
-                        state_dir: &state,
-                        job,
-                    },
-                )
-                .await?
-            };
+            let spawned = codex_sandboxing::spawn_process_with_windows_context(
+                SpawnRequest {
+                    command: &prepared.command,
+                    cwd: request.cwd.as_path(),
+                    env: &prepared.env,
+                    arg0: &prepared.arg0,
+                    sandbox: prepared.sandbox,
+                    windows_sandbox: Some(WindowsSandboxSpawnRequest {
+                        permission_profile: &prepared.permission_profile,
+                        workspace_roots: std::slice::from_ref(&workspace),
+                        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                        proxy_enforced: proxy.is_some(),
+                        network_proxy_restricting_sid: None,
+                        proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
+                        filesystem_overrides: None,
+                    }),
+                    tty: false,
+                    stdin_open: true,
+                    inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
+                },
+                WindowsSandboxLaunchContext {
+                    state_dir: request.cwd.as_path(),
+                    job: Some(job),
+                },
+            )
+            .await?;
             // The bridge owns I/O and waits for the backend's confirmed Job retirement.
             let cancellation = async move {
                 parent.exited().await;

@@ -14,8 +14,6 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-#[path = "../src/windows_backend.rs"]
-mod windows_backend;
 #[path = "../src/windows_proxy.rs"]
 mod windows_proxy;
 
@@ -189,7 +187,6 @@ async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
         assert_ne!(projected[0].1, "http://127.0.0.1:1");
         let permissions = PermissionProfile::read_only();
         let executable = cargo_bin("mcp-console-sandbox")?;
-        // Only this known test command bypasses Console's legacy-account admission gate.
         let prepared = SandboxManager::default().transform(SandboxTransformRequest {
             command: SandboxCommand {
                 program: "curl.exe".into(),

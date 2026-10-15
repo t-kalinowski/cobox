@@ -33,8 +33,8 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.144,just@1.51.0
-      - name: Build standalone debug executable and companions
-        run: cargo build --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+      - name: Build standalone debug executable
+        run: cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox
       - name: Check root-only ACL updates with an open working directory
         run: just test --locked -p codex-windows-sandbox --retries 0 -E 'test(noninheriting_read_attributes_)'
       - name: Run Windows executable contracts
@@ -45,12 +45,12 @@ jobs:
         run: just test --locked -p codex-utils-pty -p codex-sandboxing --retries 0 -E 'test(supervised_job_) | test(win::job::tests::) | test(spawn::tests::)'
       - name: Check Windows proxy Job admission
         run: just test --locked -p codex-network-proxy --retries 0 -E 'test(job_admission_)'
-      - name: Build standalone release executable and companions
-        run: cargo build --locked --release -p mcp-console-sandbox -p mcp-console-sandbox-windows --bin mcp-console-sandbox --bin mcp-console-sandbox-setup --bin mcp-console-sandbox-runner
+      - name: Build standalone release executable
+        run: cargo build --locked --release -p mcp-console-sandbox --bin mcp-console-sandbox
       - name: Exercise release artifacts
         run: just test --locked --release -p mcp-console-sandbox --retries 0
       - name: Lint native executable
-        run: cargo clippy --locked -p mcp-console-sandbox -p mcp-console-sandbox-windows --all-targets -- -D warnings
+        run: cargo clippy --locked -p mcp-console-sandbox --all-targets -- -D warnings
 
   linux-release:
     name: Linux release (${{ matrix.target }})

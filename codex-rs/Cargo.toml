@@ -85,7 +85,6 @@ members = [
     "login",
     "codex-mcp",
     "mcp-console-sandbox",
-    "mcp-console-sandbox-windows",
     "memories/read",
     "memories/write",
     "mermaid",

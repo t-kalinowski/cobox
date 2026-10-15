@@ -36,14 +36,9 @@ impl WindowsSandboxProduct {
     pub fn name(self, name: &str) -> Cow<'_, str> {
         match self {
             Self::Codex => Cow::Borrowed(name),
-            Self::Console => match name {
-                // NetUserAdd limits account login names to 20 characters.
-                "CodexSandboxOffline" => Cow::Borrowed("McpConsoleSandboxOff"),
-                "CodexSandboxOnline" => Cow::Borrowed("McpConsoleSandboxOn"),
-                "codex-windows-sandbox-setup.exe" => Cow::Borrowed("mcp-console-sandbox-setup.exe"),
-                "codex-command-runner.exe" => Cow::Borrowed("mcp-console-sandbox-runner.exe"),
-                _ => Cow::Owned(name.replace("Codex", "Console").replace("codex", "console")),
-            },
+            Self::Console => {
+                Cow::Owned(name.replace("Codex", "Console").replace("codex", "console"))
+            }
         }
     }
 

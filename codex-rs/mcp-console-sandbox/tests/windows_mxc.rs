@@ -4,7 +4,6 @@
 mod mxc_support;
 
 use anyhow::Result;
-use codex_sandboxing::*;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -32,33 +31,19 @@ fn console(policy: Value) -> Result<Command> {
 }
 
 #[test]
-fn mxc_does_not_require_localappdata_or_a_state_directory() -> Result<()> {
+fn mxc_launch_uses_the_default_policy() -> Result<()> {
     let available = mxc_support::available()?;
-    for mode in ["auto", "mxc"] {
-        let output = console(json!({"extends":":read-only", "windows_backend":mode}))?
-            .env_remove("LOCALAPPDATA")
-            .arg("echo MXC_OK")
-            .output()?;
-        if available {
-            assert_eq!(
-                (output.status.code(), output.stdout, output.stderr),
-                (Some(0), b"MXC_OK\r\n".to_vec(), vec![])
-            );
-        } else {
-            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
-            let error = String::from_utf8(output.stderr)?;
-            assert!(
-                error.contains(if mode == "auto" {
-                    "LOCALAPPDATA"
-                } else {
-                    "MXC is unavailable"
-                }),
-                "{error}"
-            );
-            if mode == "mxc" {
-                assert!(error.contains("WINDOWS.html#"), "{error}");
-            }
-        }
+    let output = console(json!({"extends":":read-only"}))?
+        .arg("echo MXC_OK")
+        .output()?;
+    if available {
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), b"MXC_OK\r\n".to_vec(), vec![])
+        );
+    } else {
+        assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+        assert!(String::from_utf8(output.stderr)?.contains("WINDOWS.html#native-sandbox"));
     }
     Ok(())
 }
@@ -85,11 +70,9 @@ fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result
         Ok(())
     });
     for allowed in [true, false] {
-        let output = console(json!({"extends":":read-only", "windows_backend":"mxc",
-                "proxy":proxy(/*allow_local_binding*/ true, allowed)}))?
-            .env_remove("LOCALAPPDATA")
-            .env("hTtP_pRoXy", "http://127.0.0.1:1")
-            .arg(format!("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy \"\" --proxy \"%HTTP_PROXY%\" {url}"))
+        let output = console(json!({"extends":":read-only", "proxy":proxy(/*allow_local_binding*/ true, allowed)}))?
+                .env("hTtP_pRoXy", "http://127.0.0.1:1")
+            .arg(format!("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy localhost --proxy %HTTP_PROXY% {url}"))
             .output()?;
         assert_eq!(
             (output.status.code(), output.stdout),
@@ -106,61 +89,6 @@ fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result
         }
     }
     origin.join().expect("origin thread")?;
-    Ok(())
-}
-
-#[test]
-fn public_backend_selection_preserves_legacy_ownership_without_provisioning() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let accounts = ["McpConsoleSandboxOff", "McpConsoleSandboxOn"]
-        .into_iter()
-        .map(codex_windows_sandbox::local_user_flags)
-        .collect::<Result<Vec<_>>>()?;
-    let available = accounts.iter().all(Option::is_none) && windows_mxc_available();
-    for (mode, strict_proxy) in [
-        (None, false),
-        (Some("auto"), false),
-        (Some("mxc"), false),
-        (Some("auto"), true),
-        (Some("mxc"), true),
-    ] {
-        let mut policy = json!({"extends":":read-only","network":"restricted",
-            "windows_state_dir":root.path().join("unprovisioned")});
-        if let Some(mode) = mode {
-            policy["windows_backend"] = json!(mode);
-        }
-        if strict_proxy {
-            policy["proxy"] = proxy(
-                /*allow_local_binding*/ false, /*allow_destination*/ true,
-            );
-        }
-        let output = console(policy)?
-            .arg("if defined CONSOLE_POLICY (exit /b 42) else echo MXC_OK")
-            .output()?;
-        if available && !strict_proxy {
-            assert_eq!(
-                (output.status.code(), output.stdout, output.stderr),
-                (Some(0), b"MXC_OK\r\n".to_vec(), vec![])
-            );
-        } else {
-            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
-            let diagnostic = String::from_utf8(output.stderr)?;
-            let expected = if mode == Some("mxc") {
-                "MXC"
-            } else if strict_proxy {
-                "legacy Windows sandbox"
-            } else {
-                "mcp-console-sandbox setup"
-            };
-            assert!(diagnostic.contains(expected), "{diagnostic}");
-            if mode == Some("mxc") && accounts.iter().any(Option::is_some) {
-                assert!(diagnostic.contains("WINDOWS.html#legacy-installation-cleanup"));
-                assert!(diagnostic.contains("launch never deletes accounts or credentials"));
-                assert!(!diagnostic.contains("use elevated mode"));
-            }
-        }
-        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
-    }
     Ok(())
 }
 
@@ -184,67 +112,37 @@ fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> 
             /*allow_local_binding*/ true, /*allow_destination*/ true,
         );
         proxy[key] = value;
-        for mode in ["auto", "mxc", "elevated", "unelevated"] {
-            let output = console(json!({"extends":":read-only", "windows_backend":mode,
-                        "windows_state_dir":root.path().join("state"), "proxy":proxy,
+        let output = console(json!({"extends":":read-only", "proxy":proxy,
                         "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["TMP"]}}}))?
-            .arg("echo launched")
-            .output()?;
-            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
-            let error = String::from_utf8(output.stderr)?;
-            assert!(error.contains(diagnostic), "{mode}: {error}");
-            assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
-        }
+        .arg("echo launched")
+        .output()?;
+        assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+        let error = String::from_utf8(output.stderr)?;
+        assert!(error.contains(diagnostic), "{error}");
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     }
     Ok(())
 }
 
 #[test]
-fn disabled_proxy_matches_absent_proxy_across_backends() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let available = mxc_support::available()?;
-    let mut disabled = proxy(
-        /*allow_local_binding*/ false, /*allow_destination*/ false,
-    );
+fn disabled_proxy_matches_absent_proxy() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let mut disabled = proxy(false, false);
     disabled["enabled"] = json!(false);
     disabled["enableSocks5Udp"] = json!(true);
     disabled["dangerouslyAllowAllUnixSockets"] = json!(true);
-    for filesystem in ["restricted", "external-sandbox"] {
-        for mode in ["auto", "mxc", "elevated", "unelevated"] {
-            let mut outputs = Vec::new();
-            for proxy in [Value::Null, disabled.clone()] {
-                let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-                    .env(
-                        "hTtP_pRoXy",
-                        json!({"extends":":read-only", "network":"enabled",
-                            "filesystem":{"kind":filesystem}, "windows_backend":mode,
-                            "windows_state_dir":root.path().join("state"), "proxy":proxy})
-                        .to_string(),
-                    )
-                    .args([
-                        "--config-env",
-                        "hTtP_pRoXy",
-                        "--",
-                        "cmd.exe",
-                        "/d",
-                        "/c",
-                        "if defined HTTP_PROXY (exit /b 42) else echo PROXY_DISABLED",
-                    ])
-                    .output()?;
-                outputs.push((output.status.code(), output.stdout, output.stderr));
-            }
-            assert_eq!(outputs[0], outputs[1], "{filesystem}, {mode}");
-            if filesystem == "external-sandbox"
-                || mode == "unelevated"
-                || (available && matches!(mode, "auto" | "mxc"))
-            {
-                assert_eq!(
-                    outputs[1],
-                    (Some(0), b"PROXY_DISABLED\r\n".to_vec(), vec![]),
-                    "{filesystem}, {mode}"
-                );
-            }
-        }
+    for selected in [Value::Null, disabled] {
+        let output =
+            console(json!({"extends":":read-only", "network":"enabled", "proxy":selected}))?
+                .env_remove("HTTP_PROXY")
+                .arg("if defined HTTP_PROXY (exit /b 42) else echo PROXY_DISABLED")
+                .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(0), b"PROXY_DISABLED\r\n".to_vec(), vec![])
+        );
     }
     Ok(())
 }
@@ -260,8 +158,7 @@ fn managed_proxy_rejects_configuration_transport_collisions_before_launch() -> R
         let output = Command::new(cargo_bin("mcp-console-sandbox")?)
             .env(
                 name,
-                json!({"extends":":read-only", "windows_backend":"mxc",
-                    "windows_state_dir":root.path().join("state"),
+                json!({"extends":":read-only",
                     "proxy":proxy(/*allow_local_binding*/ true, /*allow_destination*/ true)})
                 .to_string(),
             )
@@ -282,51 +179,6 @@ fn managed_proxy_rejects_configuration_transport_collisions_before_launch() -> R
             "{diagnostic}"
         );
         assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
-    }
-    Ok(())
-}
-
-#[test]
-fn mxc_does_not_validate_unused_legacy_setup_records() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let secrets = root.path().join(".sandbox-secrets");
-    std::fs::create_dir(&secrets)?;
-    let users = secrets.join("sandbox_users.json");
-    let foreign = json!({"version":0,
-        "offline":{"username":"CodexSandboxOffline","password":""},
-        "online":{"username":"CodexSandboxOnline","password":""}})
-    .to_string();
-    std::fs::write(&users, &foreign)?;
-    let accounts = ["McpConsoleSandboxOff", "McpConsoleSandboxOn"]
-        .into_iter()
-        .map(codex_windows_sandbox::local_user_flags)
-        .collect::<Result<Vec<_>>>()?;
-    let available = accounts.iter().all(Option::is_none) && windows_mxc_available();
-    for mode in ["mxc", "elevated"] {
-        let output = console(json!({"extends":":read-only", "windows_backend":mode,
-                    "windows_state_dir":root.path()}))?
-        .arg("echo MXC_OK")
-        .output()?;
-        if mode == "mxc" && available {
-            assert_eq!(
-                (output.status.code(), output.stdout, output.stderr),
-                (Some(0), b"MXC_OK\r\n".to_vec(), vec![])
-            );
-        } else {
-            assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
-            let diagnostic = String::from_utf8(output.stderr)?;
-            let expected = if mode == "elevated" {
-                "sandbox state belongs to a different product"
-            } else if accounts.iter().any(Option::is_some) {
-                "legacy Console sandbox accounts exist"
-            } else {
-                "MXC is unavailable"
-            };
-            assert!(diagnostic.contains(expected), "{diagnostic}");
-        }
-        assert_eq!(std::fs::read_to_string(&users)?, foreign);
-        assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
-        assert_eq!(std::fs::read_dir(&secrets)?.count(), 1);
     }
     Ok(())
 }

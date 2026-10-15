@@ -1,91 +1,27 @@
 #![cfg(windows)]
 
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
+
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command;
 
 #[test]
-fn windows_backend_accepts_the_legacy_field_name() -> anyhow::Result<()> {
-    let root = tempfile::tempdir()?;
-    for field in ["windows_backend", "windows_sandbox_level"] {
-        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-            .env(
-                "CONSOLE_POLICY",
-                json!({"extends":":read-only", "network":"enabled",
-                    (field):"unelevated", "windows_state_dir":root.path().join("state")})
-                .to_string(),
-            )
-            .args([
-                "--config-env",
-                "CONSOLE_POLICY",
-                "--",
-                "cmd.exe",
-                "/d",
-                "/c",
-                "echo BACKEND_OK",
-            ])
-            .output()?;
-        assert_eq!(
-            (output.status.code(), output.stdout, output.stderr),
-            (Some(0), b"BACKEND_OK\r\n".to_vec(), vec![]),
-            "{field}"
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn external_enforcement_delegates_network_without_legacy_state() -> anyhow::Result<()> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    for mode in ["auto", "mxc", "elevated", "unelevated"] {
-        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-            .env_remove("LOCALAPPDATA")
-            .env(
-                "CONSOLE_POLICY",
-                json!({"filesystem":{"kind":"external-sandbox"},
-                "network":"restricted", "windows_backend":mode})
-                .to_string(),
-            )
-            .args(["--config-env", "CONSOLE_POLICY", "--"])
-            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
-            .arg("connect")
-            .arg(listener.local_addr()?.to_string())
-            .output()?;
-        assert_eq!(
-            (output.status.code(), output.stdout, output.stderr),
-            (Some(0), b"connected\n".to_vec(), vec![]),
-            "{mode}"
-        );
-    }
-    Ok(())
-}
-
-#[test]
 fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     for (overrides, diagnostic) in [
-        (
-            json!({"windows_backend":"elevated"}),
-            "mcp-console-sandbox setup",
-        ),
-        (
-            json!({"network":"restricted"}),
-            "restricted networking requires",
-        ),
-        (
-            json!({"filesystem":{"kind":"restricted","entries":[
-                {"path":{"type":"path","path":root.path()},"access":"deny"}
-            ]}}),
-            "cannot enforce read restrictions",
-        ),
         (
             json!({"proxy":{
                 "enabled":true,"enableSocks5":true,"enableSocks5Udp":false,
                 "allowUpstreamProxy":false,"dangerouslyAllowAllUnixSockets":false,
                 "mode":"full","domains":null,"unixSockets":null,"allowLocalBinding":false
             }}),
-            "managed proxy configuration",
+            "allow_local_binding=false",
         ),
         (
             json!({"linux_backend":"bubblewrap"}),
@@ -110,8 +46,7 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
     ] {
         let mut config = json!({
             "extends":":read-only", "network":"enabled",
-            "windows_backend":"unelevated",
-            "windows_state_dir":root.path().join("state"),
+
         });
         if let (Some(config), Some(overrides)) = (config.as_object_mut(), overrides.as_object()) {
             config.extend(overrides.clone());
@@ -138,6 +73,9 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
 
 #[test]
 fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     use std::os::windows::io::AsRawHandle;
     use std::process::Stdio;
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
@@ -146,8 +84,7 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let config = json!({
         "extends": ":read-only", "network": "enabled",
-        "windows_backend": "unelevated",
-        "windows_state_dir": root.path().join("state"),
+
         "lifecycle": {"private_tmp": {"parent": root.path(), "environment": ["TMPDIR"]}},
     });
     for code in [0i32, 125, -1, -1_073_741_819] {
@@ -180,19 +117,21 @@ fn root_exit_does_not_wait_for_caller_stdin_eof() -> anyhow::Result<()> {
             (output.status.code(), output.stdout, output.stderr),
             (Some(code), vec![], vec![])
         );
-        assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     }
     Ok(())
 }
 
 #[test]
 fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let config = json!({
         "extends": ":read-only",
         "network": "enabled",
-        "windows_backend": "unelevated",
-        "windows_state_dir": root.path().join("state"),
+
         "environment": { "test_case_value": "target" },
         "lifecycle": { "private_tmp": { "parent": root.path(), "environment": ["TMPDIR", "TEMP", "TMP"] } },
     });
@@ -207,17 +146,20 @@ fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
         (output.status.code(), output.stdout, output.stderr),
         (Some(0), b"works\r\ntarget\r\n".to_vec(), vec![])
     );
-    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     Ok(())
 }
 
 #[test]
 fn environment_transport_preserves_target_arguments() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let arguments = [
-        "--state-dir",
+        "--target-option",
         "--help",
-        "--windows-sandbox-level",
+        "--other-option",
         "",
         "two words",
         "quote\"inside",
@@ -230,8 +172,7 @@ fn environment_transport_preserves_target_arguments() -> anyhow::Result<()> {
             "CONSOLE_POLICY",
             json!({
                 "extends": ":read-only", "network": "enabled",
-                "windows_backend": "unelevated",
-                "windows_state_dir": root.path().join("state"),
+
             })
             .to_string(),
         )
@@ -254,13 +195,7 @@ fn invalid_configuration_fails_before_creating_state() -> anyhow::Result<()> {
     for (payload, diagnostic) in [
         ("not-json".to_owned(), "invalid configuration JSON (Syntax"),
         (
-            json!({"extends":":read-only", "windows_backend":"unelevated",
-                "windows_sandbox_level":"mxc"})
-            .to_string(),
-            "invalid configuration JSON (Data",
-        ),
-        (
-            json!({"extends": ":read-only", "windows_state_dir": "relative"}).to_string(),
+            json!({"unsupported": null}).to_string(),
             "invalid configuration JSON (Data",
         ),
         (

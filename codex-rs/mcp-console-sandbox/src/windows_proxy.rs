@@ -21,8 +21,7 @@ pub(crate) struct Prepared {
     pub context: ManagedNetworkSandboxContext,
 }
 
-// Console supports only TCP proxies on Windows. Reject unsupported modes before
-// selecting a backend: legacy Console does not support managed proxies either.
+// Reject unsupported transports before creating native MXC resources.
 pub(crate) fn validate(config: &RemoteNetworkProxyConfig) -> Result<()> {
     ensure!(config.enabled, "proxy.enabled must be true");
     ensure!(

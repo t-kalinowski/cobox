@@ -37,7 +37,6 @@ codex-linux-sandbox = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }

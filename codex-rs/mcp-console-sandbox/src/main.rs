@@ -23,10 +23,6 @@ mod target_control;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-mod windows_backend;
-#[cfg(windows)]
-mod windows_cli;
-#[cfg(windows)]
 mod windows_console;
 #[cfg(windows)]
 mod windows_proxy;
