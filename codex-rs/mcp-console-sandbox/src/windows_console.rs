@@ -76,8 +76,8 @@ pub(crate) fn run() -> Result<i32> {
         );
     }
     ensure!(
-        codex_sandboxing::windows_mxc_available_for(&permissions),
-        "MXC is unavailable for this filesystem policy on this executor; update Windows to a build supporting native MXC and the requested filesystem permissions; see https://t-kalinowski.github.io/mcp-console/WINDOWS.html#native-sandbox"
+        codex_sandboxing::windows_mxc_available(),
+        "MXC is unavailable on this executor; update Windows to a build supporting native MXC; see https://t-kalinowski.github.io/mcp-console/WINDOWS.html#native-sandbox"
     );
     let parent = Parent::new(request.lifecycle.parent_pid)?;
     for name in &request.excluded_environment {
@@ -124,6 +124,7 @@ pub(crate) fn run() -> Result<i32> {
             Ok(directory)
         })
         .transpose()?;
+    crate::windows_target::materialize_tmpdir(&mut filesystem, &request.environment)?;
     let profile = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
     let job = Arc::new(codex_utils_pty::JobObject::create_without_breakaway()?);
@@ -145,13 +146,14 @@ pub(crate) fn run() -> Result<i32> {
                     .iter()
                     .any(|excluded| name.eq_ignore_ascii_case(excluded))
             });
-            let (program, args) = request.command.split_first().context("missing command")?;
-            let prepared = SandboxManager::default().transform(SandboxTransformRequest {
+            let target_environment =
+                crate::windows_target::encode(request.command, request.environment)?;
+            let mut prepared = SandboxManager::default().transform(SandboxTransformRequest {
                 command: SandboxCommand {
-                    program: program.into(),
-                    args: args.to_vec(),
+                    program: executable.clone().into_os_string(),
+                    args: vec![crate::windows_target::ARG1.to_owned()],
                     cwd: request.cwd.clone().into(),
-                    env: request.environment,
+                    env: target_environment,
                     managed_network: proxy.as_ref().map(|proxy| proxy.context.clone()),
                     additional_permissions: None,
                 },
@@ -165,6 +167,9 @@ pub(crate) fn run() -> Result<i32> {
                 use_legacy_landlock: false,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
             })?;
+            let mut helper_environment = crate::windows_target::helper_environment()?;
+            helper_environment.extend(prepared.env);
+            prepared.env = helper_environment;
             // Before a launch attempt TempDir removes failed preflight storage.
             // Afterwards cleanup requires a confirmed native retirement receipt.
             retained_storage = storage.take().map(tempfile::TempDir::keep);

@@ -71,9 +71,8 @@ pub(super) fn provision_sandbox_users(
     log: &mut dyn Write,
     mode: SetupMode,
 ) -> Result<()> {
-    let group = SANDBOX_USERS_GROUP;
     if let Err(err) = ensure_sandbox_users_group() {
-        let message = format!("failed to create local group {group}: {err}");
+        let message = format!("failed to create local group {SANDBOX_USERS_GROUP}: {err}");
         super::log_line(log, &message)?;
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersGroupCreateFailed,

@@ -261,6 +261,7 @@ fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finalize_exit(
     exit_tx: oneshot::Sender<i32>,
     process_handle: Arc<StdMutex<Option<NonOwningProcessHandle>>>,

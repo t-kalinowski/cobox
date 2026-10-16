@@ -15,6 +15,8 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
 #[path = "../src/windows_proxy.rs"]
 mod windows_proxy;
 
@@ -152,8 +154,7 @@ async fn proxy_removes_mixed_case_managed_ca_variables() -> Result<()> {
 
 #[tokio::test]
 async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
-    if !windows_mxc_available() {
-        eprintln!("skipping native MXC integration: this Windows worker has no usable MXC runtime");
+    if !mxc_support::available()? {
         return Ok(());
     }
     let root = tempfile::tempdir()?;

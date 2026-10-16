@@ -26,6 +26,8 @@ mod windows;
 mod windows_console;
 #[cfg(windows)]
 mod windows_proxy;
+#[cfg(windows)]
+mod windows_target;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {

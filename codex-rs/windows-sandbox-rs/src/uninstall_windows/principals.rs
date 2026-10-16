@@ -28,7 +28,7 @@ pub(super) struct DisabledSandboxUsers {
 }
 
 struct SandboxUser {
-    name: String,
+    name: &'static str,
     original_flags: u32,
     sid: Vec<u8>,
 }
@@ -42,7 +42,7 @@ impl DisabledSandboxUsers {
             let sid = resolve_sid(name)?;
 
             self.users.push(SandboxUser {
-                name: name.to_owned(),
+                name,
                 original_flags,
                 sid,
             });
@@ -73,7 +73,7 @@ impl DisabledSandboxUsers {
     pub(super) fn restore(&self) -> Result<()> {
         let mut errors = Vec::new();
         for user in &self.users {
-            if let Err(error) = set_local_user_flags(&user.name, user.original_flags)
+            if let Err(error) = set_local_user_flags(user.name, user.original_flags)
                 && error
                     .downcast_ref::<std::io::Error>()
                     .and_then(std::io::Error::raw_os_error)
@@ -159,7 +159,7 @@ impl DisabledSandboxUsers {
     pub(super) fn for_token_test(sid: Vec<u8>) -> Self {
         Self {
             users: vec![SandboxUser {
-                name: OFFLINE_USERNAME.to_owned(),
+                name: OFFLINE_USERNAME,
                 original_flags: network::UF_ACCOUNTDISABLE,
                 sid,
             }],

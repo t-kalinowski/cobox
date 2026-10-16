@@ -63,7 +63,10 @@ rust_test(
 
 rust_test(
     name = "windows-console-test",
-    srcs = ["tests/windows_console.rs", "tests/windows_mxc_support/mod.rs"],
+    srcs = [
+        "tests/windows_console.rs",
+        "tests/windows_mxc_support/mod.rs",
+    ],
     crate_root = "tests/windows_console.rs",
     data = [
         ":mcp-console-sandbox",
@@ -84,7 +87,10 @@ rust_test(
 
 rust_test(
     name = "windows-cli-test",
-    srcs = ["tests/windows_cli.rs", "tests/windows_mxc_support/mod.rs"],
+    srcs = [
+        "tests/windows_cli.rs",
+        "tests/windows_mxc_support/mod.rs",
+    ],
     crate_root = "tests/windows_cli.rs",
     data = [
         ":mcp-console-sandbox",
@@ -124,6 +130,7 @@ rust_test(
     srcs = [
         "src/windows_proxy.rs",
         "tests/windows_mxc_native.rs",
+        "tests/windows_mxc_support/mod.rs",
     ],
     crate_root = "tests/windows_mxc_native.rs",
     data = [":mcp-console-sandbox"],

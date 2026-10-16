@@ -33,8 +33,41 @@ fn console(policy: Value) -> Result<Command> {
 #[test]
 fn mxc_launch_uses_the_default_policy() -> Result<()> {
     let available = mxc_support::available()?;
-    let output = console(json!({"extends":":read-only"}))?
-        .arg("echo MXC_OK")
+    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        use std::io::Write;
+        let mut summary = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(
+            summary,
+            "- Native MXC: {}.",
+            if available {
+                "available; runtime contracts execute"
+            } else {
+                "unavailable; runtime contracts skipped; unsupported-host rejection checked"
+            }
+        )?;
+    }
+    // Exercise the shipping layout independently of other Cargo artifacts.
+    let directory = tempfile::tempdir()?;
+    let executable = directory.path().join("mcp-console-sandbox.exe");
+    std::fs::copy(cargo_bin("mcp-console-sandbox")?, &executable)?;
+    let output = Command::new(executable)
+        .current_dir(directory.path())
+        .env(
+            "CONSOLE_POLICY",
+            json!({"extends":":read-only"}).to_string(),
+        )
+        .args([
+            "--config-env",
+            "CONSOLE_POLICY",
+            "--",
+            "cmd.exe",
+            "/d",
+            "/c",
+            "echo MXC_OK",
+        ])
         .output()?;
     if available {
         assert_eq!(
@@ -45,6 +78,7 @@ fn mxc_launch_uses_the_default_policy() -> Result<()> {
         assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
         assert!(String::from_utf8(output.stderr)?.contains("WINDOWS.html#native-sandbox"));
     }
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
     Ok(())
 }
 
@@ -129,7 +163,9 @@ fn disabled_proxy_matches_absent_proxy() -> Result<()> {
     if !mxc_support::available()? {
         return Ok(());
     }
-    let mut disabled = proxy(false, false);
+    let mut disabled = proxy(
+        /*allow_local_binding*/ false, /*allow_destination*/ false,
+    );
     disabled["enabled"] = json!(false);
     disabled["enableSocks5Udp"] = json!(true);
     disabled["dangerouslyAllowAllUnixSockets"] = json!(true);

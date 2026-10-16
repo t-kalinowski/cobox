@@ -46,7 +46,7 @@ jobs:
       - name: Build standalone release executable
         run: cargo build --locked --release -p mcp-console-sandbox --bin mcp-console-sandbox
       - name: Exercise release artifacts
-        run: just test --locked --release -p mcp-console-sandbox --retries 0
+        run: just test --locked --release -p mcp-console-sandbox --retries 0 --success-output final
       - name: Lint native executable
         run: cargo clippy --locked -p mcp-console-sandbox --all-targets -- -D warnings
 

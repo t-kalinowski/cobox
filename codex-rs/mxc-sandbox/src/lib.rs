@@ -46,7 +46,6 @@ struct MxcCommand {
     sandbox_policy_cwd: PathBuf,
     managed_network: Option<ManagedNetworkSandboxContext>,
     command: Vec<String>,
-    environment: HashMap<String, String>,
 }
 
 /// Inputs used to build an MXC helper invocation.
@@ -56,13 +55,11 @@ pub struct CreateMxcCommandArgsParams<'a> {
     pub permission_profile: &'a PermissionProfile,
     pub sandbox_policy_cwd: &'a Path,
     pub managed_network: Option<&'a ManagedNetworkSandboxContext>,
-    /// Input target environment, replaced with the executor's helper environment.
     pub env: &'a mut HashMap<String, String>,
 }
 
-/// Carry exact argv and target variables in bounded launcher-only transport.
-/// Native setup uses the executor environment; the in-MXC relay installs the
-/// target environment without forwarding transport or native package variables.
+/// Wrap exact argv and add bounded launcher-only environment variables. The
+/// helper removes these variables before starting the sandboxed command.
 pub fn create_command_args(args: CreateMxcCommandArgsParams<'_>) -> Result<Vec<String>> {
     let CreateMxcCommandArgsParams {
         command,
@@ -77,26 +74,15 @@ pub fn create_command_args(args: CreateMxcCommandArgsParams<'_>) -> Result<Vec<S
     if let Some(network) = managed_network {
         validate_managed_network(network)?;
     }
-    // Native setup needs the executor's Windows environment. Target overrides
-    // must neither configure that setup nor be rewritten by native creation.
-    let mut executor_environment = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .filter(|(key, _)| !key.starts_with('='))
-        .collect();
-    let mut environment = env.clone();
-    environment
-        .retain(|key, _| !codex_windows_sandbox::environment_transport::is_key(key.as_ref()));
     transport::encode(
         &MxcCommand {
             permissions: permission_profile.clone(),
             sandbox_policy_cwd: sandbox_policy_cwd.to_owned(),
             managed_network: managed_network.cloned(),
             command,
-            environment,
         },
-        &mut executor_environment,
+        env,
     )?;
-    *env = executor_environment;
     Ok(vec![CODEX_WINDOWS_MXC_ARG1.to_owned()])
 }
 
@@ -113,34 +99,21 @@ pub fn is_available() -> bool {
     }
 }
 
-/// Whether the native backend supports this profile, including deny-path enforcement.
-pub fn is_available_for(permissions: &PermissionProfile) -> bool {
-    if !is_available() {
-        return false;
-    }
-    if !permissions
-        .file_system_sandbox_policy()
-        .has_denied_read_restrictions()
-    {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        learning_mode_windows::SecurityEnvironmentApi::load()
-            .and_then(|api| api.supports_deny_paths())
-            .unwrap_or(/*default*/ false)
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
 /// Entry point dispatched before ordinary Codex CLI parsing.
 pub fn run_main() -> ! {
+    run_main_inner(/*environment*/ None)
+}
+
+/// Keep native setup in the executor environment while supplying explicit child variables.
+/// Temporary-directory policy paths resolve from the supplied variables.
+pub fn run_main_with_environment(environment: HashMap<String, String>) -> ! {
+    run_main_inner(Some(environment))
+}
+
+fn run_main_inner(environment: Option<HashMap<String, String>>) -> ! {
     #[cfg(windows)]
     {
-        match windows::run() {
+        match windows::run(environment) {
             Ok(exit_code) => std::process::exit(exit_code),
             Err(error) => {
                 eprintln!("MXC launcher: {error:#}");
@@ -150,6 +123,7 @@ pub fn run_main() -> ! {
     }
     #[cfg(not(windows))]
     {
+        let _ = environment;
         eprintln!("MXC sandbox execution requires Windows");
         std::process::exit(1);
     }

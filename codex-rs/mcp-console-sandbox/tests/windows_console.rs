@@ -175,6 +175,11 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
             .current_dir(root.path())
             .env("CONSOLE_HOST_ONLY", "must not reach a cleared workload")
             .env(
+                "mcp_console_sandbox_target_stale",
+                "must not reach the workload",
+            )
+            .env("CoDeX_SaNdBoX_LaUnCh_stale", "must not reach the workload")
+            .env(
                 "CONSOLE_POLICY",
                 json!({
                     "extends": ":read-only", "network": "enabled",
@@ -197,12 +202,82 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
             assert_eq!(environment.get(name), Some(value), "{name}");
         }
         assert!(environment.keys().all(|name| {
-            name != "CONSOLE_POLICY" && !name.starts_with("CODEX_SANDBOX_LAUNCH_")
+            let name = name.to_ascii_uppercase();
+            name != "CONSOLE_POLICY"
+                && !name.starts_with("CODEX_SANDBOX_LAUNCH_")
+                && !name.starts_with("MCP_CONSOLE_SANDBOX_TARGET_")
         }));
         if !inherit {
             assert_eq!(environment, expected.as_object().unwrap());
         }
     }
+    Ok(())
+}
+
+#[test]
+fn tmpdir_grants_use_target_variables_and_preserve_read_only_overrides() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let target_tmp = root.path().join("target-temp");
+    let readonly = target_tmp.join("readonly");
+    let helper_tmp = root.path().join("helper-temp");
+    std::fs::create_dir(&target_tmp)?;
+    std::fs::create_dir(&readonly)?;
+    std::fs::create_dir(&helper_tmp)?;
+    std::fs::create_dir(root.path().join("workspace"))?;
+    for allowed in [true, false] {
+        let mut config = json!({
+            "extends": ":workspace", "workspace": root.path().join("workspace"),
+            "inherit_environment": false,
+            "environment": {"Temp": target_tmp, "tMp": target_tmp},
+        });
+        if !allowed {
+            config["filesystem"] = json!({"kind":"restricted","entries":[{
+                "path":{"type":"path","path":readonly},"access":"read"
+            }]});
+        }
+        let marker = format!("target-{allowed}.txt");
+        let target_path = if allowed { &target_tmp } else { &readonly }.join(marker);
+        for (operation, path, expected_code) in [
+            ("write", target_path.clone(), if allowed { 0 } else { 1 }),
+            ("probe-write", helper_tmp.join("forbidden.txt"), 0),
+        ] {
+            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+                .current_dir(root.path())
+                .env("TEMP", &helper_tmp)
+                .env("TMP", &helper_tmp)
+                .env("CONSOLE_POLICY", config.to_string())
+                .args(["--config-env", "CONSOLE_POLICY", "--"])
+                .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+                .arg(operation)
+                .arg(&path)
+                .output()?;
+            assert_eq!(output.status.code(), Some(expected_code), "{output:?}");
+        }
+        assert_eq!(target_path.exists(), allowed);
+        assert!(!helper_tmp.join("forbidden.txt").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn target_relay_rejects_invalid_transport_without_echoing_it() -> anyhow::Result<()> {
+    let payload = "not-json-with-private-workload-data";
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .arg("--__mcp-console-target")
+        .env("MCP_CONSOLE_SANDBOX_TARGET_CODEX_SANDBOX_LAUNCH_COUNT", "1")
+        .env(
+            "MCP_CONSOLE_SANDBOX_TARGET_CODEX_SANDBOX_LAUNCH_BYTES",
+            payload.len().to_string(),
+        )
+        .env("MCP_CONSOLE_SANDBOX_TARGET_CODEX_SANDBOX_LAUNCH_0", payload)
+        .output()?;
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let diagnostic = String::from_utf8(output.stderr)?;
+    assert!(diagnostic.contains("invalid Windows target request"));
+    assert!(!diagnostic.contains(payload));
     Ok(())
 }
 

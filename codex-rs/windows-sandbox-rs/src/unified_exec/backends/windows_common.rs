@@ -138,11 +138,7 @@ pub(crate) fn start_runner_stdout_reader(
             }
         };
         crate::elevated::runner_metrics::record_command(exit);
-        if let Some((code, _)) = exit {
-            let _ = exit_tx.send(code);
-        } else {
-            let _ = exit_tx.send(-1);
-        }
+        let _ = exit_tx.send(exit.map_or(-1, |(code, _)| code));
     });
 }
 

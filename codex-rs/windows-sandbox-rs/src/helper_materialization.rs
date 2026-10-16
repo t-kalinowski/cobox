@@ -189,9 +189,7 @@ pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Op
 }
 
 fn materialized_file_name(suffix: &str) -> String {
-    let name = COMMAND_RUNNER_EXE;
-    let stem = name.trim_end_matches(".exe");
-    format!("{stem}-{suffix}.exe")
+    format!("codex-command-runner-{suffix}.exe")
 }
 
 fn helper_version_suffix(source: &Path) -> Result<String> {

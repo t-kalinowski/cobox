@@ -287,8 +287,6 @@ pub use hide_users::hide_newly_created_users;
 #[cfg(target_os = "windows")]
 pub use identity::SandboxAccountCredentialMismatch;
 #[cfg(target_os = "windows")]
-pub use identity::check_sandbox_setup;
-#[cfg(target_os = "windows")]
 pub use identity::logon_existing_sandbox_account;
 #[cfg(target_os = "windows")]
 pub use identity::require_logon_sandbox_creds;
@@ -503,8 +501,6 @@ pub use uninstall_windows::clean_up_packaged_windows_sandbox;
 pub use uninstall_windows::prepare_packaged_windows_sandbox_cleanup;
 #[cfg(target_os = "windows")]
 pub use uninstall_windows::prepare_packaged_windows_sandbox_cleanup_with_retained_tokens;
-#[cfg(target_os = "windows")]
-pub use wfp::install_loopback_filters_for_account;
 #[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
 #[cfg(target_os = "windows")]

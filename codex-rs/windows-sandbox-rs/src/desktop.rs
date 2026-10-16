@@ -312,8 +312,7 @@ pub(crate) fn shared_private_desktop_for_user(
         bInheritHandle: 0,
     };
     let mut rng = SmallRng::from_entropy();
-    let prefix = PRIVATE_DESKTOP_PREFIX;
-    let name = format!("{prefix}{:032x}", rng.r#gen::<u128>());
+    let name = format!("{PRIVATE_DESKTOP_PREFIX}{:032x}", rng.r#gen::<u128>());
     let name_wide = to_wide(&name);
     let handle = unsafe {
         CreateDesktopW(
@@ -362,7 +361,7 @@ unsafe impl Send for PrivateDesktop {}
 impl PrivateDesktop {
     fn create(logs_base_dir: Option<&Path>) -> Result<Self> {
         let mut rng = SmallRng::from_entropy();
-        let name = format!("{}{:x}", PRIVATE_DESKTOP_PREFIX, rng.r#gen::<u128>());
+        let name = format!("CodexSandboxDesktop-{:x}", rng.r#gen::<u128>());
         let name_wide = to_wide(&name);
         let handle = unsafe {
             CreateDesktopW(

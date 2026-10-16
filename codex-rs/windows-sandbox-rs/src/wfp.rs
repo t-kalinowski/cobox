@@ -1,7 +1,4 @@
 mod filter_specs;
-mod loopback;
-
-pub use loopback::install_loopback_filters_for_account;
 
 use crate::to_wide;
 use anyhow::Result;
@@ -106,7 +103,6 @@ pub(crate) fn remove_wfp_filters() -> Result<()> {
     // Leave time for other cleanup if a WFP policy writer holds the transaction lock.
     let engine = Engine::open(/*transaction_wait_timeout_ms*/ 1_000)?;
     let mut transaction = engine.begin_transaction()?;
-    loopback::remove_filters(engine.handle)?;
     for spec in FILTER_SPECS {
         delete_filter_if_present(engine.handle, &spec.key)?;
     }
@@ -302,17 +298,9 @@ fn add_filter(
     spec: &FilterSpec,
     user_condition: &UserMatchCondition,
 ) -> Result<()> {
-    let mut filter_conditions = build_conditions(spec.conditions, user_condition);
-    add_filter_with_conditions(engine, spec, &mut filter_conditions)
-}
-
-fn add_filter_with_conditions(
-    engine: HANDLE,
-    spec: &FilterSpec,
-    filter_conditions: &mut [FWPM_FILTER_CONDITION0],
-) -> Result<()> {
     let filter_name = to_wide(OsStr::new(spec.name));
     let filter_description = to_wide(OsStr::new(spec.description));
+    let mut filter_conditions = build_conditions(spec.conditions, user_condition);
     let provider_key = PROVIDER_KEY;
     let filter = FWPM_FILTER0 {
         filterKey: spec.key,

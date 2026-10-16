@@ -49,7 +49,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 6;
+pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
@@ -348,8 +348,8 @@ fn run_setup_refresh_inner(
         offline_proxy_settings_for_request(&request, offline_proxy_settings_override);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_owned(),
-        online_username: ONLINE_USERNAME.to_owned(),
+        offline_username: OFFLINE_USERNAME.to_string(),
+        online_username: ONLINE_USERNAME.to_string(),
         codex_home: request.codex_home.to_path_buf(),
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
@@ -1160,8 +1160,8 @@ fn elevated_provisioning_payload(
         offline_proxy_settings_for_request(request, offline_proxy_settings_override);
     ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_owned(),
-        online_username: ONLINE_USERNAME.to_owned(),
+        offline_username: OFFLINE_USERNAME.to_string(),
+        online_username: ONLINE_USERNAME.to_string(),
         codex_home: request.codex_home.to_path_buf(),
         command_cwd: request.codex_home.to_path_buf(),
         read_roots: Vec::new(),
@@ -1241,8 +1241,8 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
     }
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_owned(),
-        online_username: ONLINE_USERNAME.to_owned(),
+        offline_username: OFFLINE_USERNAME.to_string(),
+        online_username: ONLINE_USERNAME.to_string(),
         codex_home: codex_home.to_path_buf(),
         command_cwd: codex_home.to_path_buf(),
         read_roots: Vec::new(),
