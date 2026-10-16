@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   policy-comparison:
-    name: Compare native and upstream proxy policy on macOS 14
+    name: Compare proxy policy application APIs on macOS 14
     runs-on: macos-14
     timeout-minutes: 30
     defaults:
@@ -17,6 +17,7 @@ jobs:
         shell: bash
     env:
       SANDBOX_PROXY_TRIALS: "5"
+      SANDBOX_API_TRIALS: "3"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -28,9 +29,16 @@ jobs:
       - name: Record host and endpoint allocation policy
         run: |
           echo "SANDBOX_DIAGNOSTIC_DIR=$RUNNER_TEMP/macos-proxy-policy" >> "$GITHUB_ENV"
+          echo "SANDBOX_POLICY_LAUNCHER=$RUNNER_TEMP/seatbelt-api-launcher" >> "$GITHUB_ENV"
           sw_vers
+          uname -m
           sysctl net.inet.ip.portrange
           git rev-parse HEAD
+      - name: Build the isolated policy API launcher
+        run: |
+          clang --version
+          clang -Wall -Wextra -Werror mcp-console-sandbox/tests/seatbelt_api_launcher.c \
+            -o "$SANDBOX_POLICY_LAUNCHER"
       - name: Compare public proxy execution paths
         run: |
           mkdir -p "$SANDBOX_DIAGNOSTIC_DIR"
