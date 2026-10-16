@@ -61,13 +61,18 @@ fn explicit_backend_selection_does_not_fall_back_when_namespaces_are_denied() {
 
 #[derive(Clone, Copy)]
 enum Unavailable {
-    ReadinessPidfd,
+    ReadinessPidfd(i32),
     PidfdSignal,
     NumericPidfd,
 }
 
 fn constrained_runner(directory: &Path, unavailable: Unavailable) -> Command {
     let mut command = runner(directory);
+    constrain(&mut command, unavailable);
+    command
+}
+
+fn constrain(command: &mut Command, unavailable: Unavailable) {
     // Restrict the actual process and all of its native helpers, not a mocked
     // capability probe. Namespace lifetime must still retire detached children.
     let statement = |code, k| libc::sock_filter {
@@ -83,12 +88,14 @@ fn constrained_runner(directory: &Path, unavailable: Unavailable) -> Command {
         k,
     };
     let mut filters = match unavailable {
-        Unavailable::ReadinessPidfd => vec![
+        Unavailable::ReadinessPidfd(error) => vec![
             statement(0x20, 0),
-            equal(libc::SYS_setsockopt as u32, 0, 3),
+            equal(libc::SYS_setsockopt as u32, 0, 5),
+            statement(0x20, 24),
+            equal(libc::SOL_SOCKET as u32, 0, 3),
             statement(0x20, 32),
             equal(libc::SO_PASSPIDFD as u32, 0, 1),
-            statement(0x06, 0x00050000 | libc::ENOPROTOOPT as u32),
+            statement(0x06, 0x00050000 | error as u32),
         ],
         Unavailable::PidfdSignal | Unavailable::NumericPidfd => {
             let (number, error) = match unavailable {
@@ -124,13 +131,15 @@ fn constrained_runner(directory: &Path, unavailable: Unavailable) -> Command {
             Ok(())
         });
     }
-    command
 }
 
 #[test]
 fn namespace_lifetime_does_not_require_pidfds_or_a_host_subreaper() {
     let directory = tempfile::tempdir().unwrap();
-    let command = constrained_runner(directory.path(), Unavailable::ReadinessPidfd);
+    let command = constrained_runner(
+        directory.path(),
+        Unavailable::ReadinessPidfd(libc::ENOPROTOOPT),
+    );
     let mut request = fixture("lifecycle", &["nonzero"]);
     request["lifecycle"] =
         json!({"parent_pid": std::process::id(), "private_tmp": {"environment": ["TMPDIR"]}});
@@ -151,11 +160,47 @@ fn readiness_never_opens_a_handle_from_a_numeric_pid() {
     assert_eq!(output.stderr, b"");
 }
 
+#[test]
+fn policy_denied_readiness_handles_preserve_public_contracts() {
+    for error in [libc::EPERM, libc::EACCES] {
+        let directory = tempfile::tempdir().unwrap();
+        let command = constrained_runner(directory.path(), Unavailable::ReadinessPidfd(error));
+        let output = run_command(command, frame(&request(&["/bin/echo", "launched"])), &[]);
+        assert_eq!(output.status.code(), Some(0), "{error}: {output:?}");
+        assert_eq!(output.stdout, b"launched\n");
+        assert_eq!(output.stderr, b"");
+
+        // Apply the host policy to the executable test process as well. The
+        // pidfd-only contracts must recognize the same supported host as the
+        // public runner above, without attempting their injected-handle cases.
+        for test in [
+            "prerequisite::invalid_readiness_closes_received_handles_before_retirement",
+            "prerequisite::retirement_uses_the_readiness_handle_instead_of_a_numeric_pid",
+        ] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", test, "--nocapture"]);
+            constrain(&mut command, Unavailable::ReadinessPidfd(error));
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{error}: {test}: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{error}: {test}: {output:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("kernel-attached pidfds are unavailable"),
+                "{error}: {test}: {output:?}"
+            );
+        }
+    }
+}
+
 fn readiness_pidfds_available() -> bool {
     use std::os::unix::net::UnixStream;
 
     // The replacement-identity check needs kernel-attached handles. Older
-    // kernels exercise channel-only retirement in the constrained-host tests.
+    // kernels and host policies can disable the option; the constrained-host
+    // contracts exercise the runner's channel-only retirement in those cases.
     let (probe, _) = UnixStream::pair().unwrap();
     let enabled: libc::c_int = 1;
     if unsafe {
@@ -168,11 +213,15 @@ fn readiness_pidfds_available() -> bool {
         )
     } < 0
     {
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ENOPROTOOPT)
+        let error = std::io::Error::last_os_error();
+        assert!(
+            matches!(
+                error.raw_os_error(),
+                Some(libc::ENOPROTOOPT | libc::EPERM | libc::EACCES)
+            ),
+            "probe kernel-attached pidfds: {error}"
         );
-        eprintln!("kernel-attached pidfds are unavailable");
+        eprintln!("kernel-attached pidfds are unavailable: {error}");
         return false;
     }
     true
@@ -274,9 +323,15 @@ fn constrained_host_retires_detached_children_and_forwards_interrupts() {
     use std::io::BufRead;
     use std::io::BufReader;
     for (operation, unavailable) in [
-        ("normal-tree", Unavailable::ReadinessPidfd),
-        ("interrupted", Unavailable::ReadinessPidfd),
-        ("detached", Unavailable::ReadinessPidfd),
+        (
+            "normal-tree",
+            Unavailable::ReadinessPidfd(libc::ENOPROTOOPT),
+        ),
+        (
+            "interrupted",
+            Unavailable::ReadinessPidfd(libc::ENOPROTOOPT),
+        ),
+        ("detached", Unavailable::ReadinessPidfd(libc::ENOPROTOOPT)),
         ("detached", Unavailable::PidfdSignal),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -317,7 +372,10 @@ fn constrained_host_retires_detached_children_and_forwards_interrupts() {
 fn a_stopped_init_without_pidfds_reports_incomplete_cleanup() {
     let directory = tempfile::tempdir().unwrap();
     let library = startup::interposer(directory.path());
-    let mut command = constrained_runner(directory.path(), Unavailable::ReadinessPidfd);
+    let mut command = constrained_runner(
+        directory.path(),
+        Unavailable::ReadinessPidfd(libc::ENOPROTOOPT),
+    );
     startup::preload(&mut command, &library);
     let (mut events, event_writer) = std::io::pipe().unwrap();
     let (release, mut release_writer) = std::io::pipe().unwrap();
