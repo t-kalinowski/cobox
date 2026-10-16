@@ -390,6 +390,51 @@ fn network_permission_controls_direct_connections() {
 }
 
 #[test]
+fn managed_proxy_removes_stale_internal_environment() {
+    let mut request = fixture("context", &[]);
+    request["proxy"] = proxy_config();
+    request["environment"] = json!({
+        "CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE": "stale-broker",
+        "CODEX_NETWORK_PROXY_BROKERED_CREDENTIALS": "stale-credentials",
+        "CODEX_NETWORK_PROXY_ATTRIBUTION": "stale-attribution",
+        "HTTP_PROXY": "http://stale-proxy:1",
+        "TARGET_VALUE": "preserved"
+    });
+    let output = run(frame(&request), &[]);
+    assert!(output.status.success(), "{output:?}");
+    let context: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let environment = &context["environment"];
+    for name in [
+        "CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE",
+        "CODEX_NETWORK_PROXY_BROKERED_CREDENTIALS",
+        "CODEX_NETWORK_PROXY_ATTRIBUTION",
+    ] {
+        assert_eq!(environment[name], Value::Null, "{context}");
+    }
+    assert_eq!(environment["TARGET_VALUE"], "preserved");
+    assert!(
+        environment["HTTP_PROXY"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://127.0.0.1:"),
+        "{context}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn managed_proxy_preserves_custom_macos_ssh_command() {
+    let mut request = fixture("context", &[]);
+    request["proxy"] = proxy_config();
+    let ssh = "/custom/ssh-wrapper --identity target";
+    request["environment"]["GIT_SSH_COMMAND"] = json!(ssh);
+    let output = run(frame(&request), &[]);
+    assert!(output.status.success(), "{output:?}");
+    let context: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(context["environment"]["GIT_SSH_COMMAND"], ssh);
+}
+
+#[test]
 fn managed_proxy_applies_the_upstream_allowlist() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

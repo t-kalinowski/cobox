@@ -298,14 +298,17 @@ fn target_path_cannot_select_a_host_helper() {
     let mut request = fixture("context", &[]);
     request["environment"]["PATH"] = json!(host);
     request["environment"]["TMPDIR"] = json!("/target-only-missing-directory");
-    let output = run_command(runner(directory.path()), frame(&request), &[]);
-    assert!(output.status.success(), "{output:?}");
-    let context: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(context["environment"]["PATH"], json!(host));
-    assert_eq!(
-        context["environment"]["TMPDIR"],
-        "/target-only-missing-directory"
-    );
+    for proxy in [Value::Null, proxy_config()] {
+        request["proxy"] = proxy;
+        let output = run_command(runner(directory.path()), frame(&request), &[]);
+        assert!(output.status.success(), "{output:?}");
+        let context: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(context["environment"]["PATH"], json!(host));
+        assert_eq!(
+            context["environment"]["TMPDIR"],
+            "/target-only-missing-directory"
+        );
+    }
 }
 
 #[test]

@@ -117,14 +117,18 @@ pub async fn prepare(
         None
     };
     let (managed_network, mut proxy_environment) = if let Some(proxy) = &proxy {
+        // Upstream projection removes stale values and preserves caller inputs
+        // such as SSH wrappers. Build the helper map without target inputs.
+        proxy.apply_to_env_for_optional_environment(
+            &mut environment,
+            /*environment_id*/ None,
+        )?;
         let prepared = proxy
             .prepare_for_optional_environment(Default::default(), /*environment_id*/ None)?;
         (Some(prepared.sandbox_context), prepared.env)
     } else {
         (None, Default::default())
     };
-    // Native proxy overrides take precedence over ordinary target inputs.
-    environment.extend(proxy_environment.clone());
     for name in &request.excluded_environment {
         environment.remove(name);
         proxy_environment.remove(name);

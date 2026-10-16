@@ -167,13 +167,16 @@ fn target_loader_runs_only_after_native_enforcement() {
     let variable = "LD_PRELOAD";
     request["environment"][variable] = json!(library);
     request["environment"]["SANDBOX_TEST_LOADER_MARKER"] = json!(marker);
-    let output = run_command(runner(directory.path()), frame(&request), &[]);
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(
-        output.stdout.starts_with(b"loader restricted\n"),
-        "{output:?}"
-    );
-    assert!(!marker.exists());
+    for proxy in [Value::Null, proxy_config()] {
+        request["proxy"] = proxy;
+        let output = run_command(runner(directory.path()), frame(&request), &[]);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(
+            output.stdout.starts_with(b"loader restricted\n"),
+            "{output:?}"
+        );
+        assert!(!marker.exists());
+    }
 }
 
 #[test]
