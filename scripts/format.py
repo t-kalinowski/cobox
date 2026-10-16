@@ -2,6 +2,7 @@
 """Format repository sources or check that they are already formatted."""
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
@@ -44,7 +45,24 @@ def rust_formatter_group(*, check: bool) -> FormatterGroup:
     args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
     if check:
         args.append("--check")
-    command = Command(tuple(args), REPO_ROOT / "codex-rs")
+    workspace = REPO_ROOT / "codex-rs"
+    if os.name == "nt":
+        # Cargo expands package targets into absolute rustfmt arguments. The
+        # whole workspace exceeds Windows' command-line limit; one package fits.
+        metadata = json.loads(
+            subprocess.check_output(
+                ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                cwd=workspace,
+            )
+        )
+        members = set(metadata["workspace_members"])
+        commands = tuple(
+            Command((*args[:2], "--package", package["name"], *args[2:]), workspace)
+            for package in metadata["packages"]
+            if package["id"] in members
+        )
+        return FormatterGroup("Rust", commands)
+    command = Command(tuple(args), workspace)
     return FormatterGroup("Rust", (command,))
 
 

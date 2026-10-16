@@ -1,15 +1,12 @@
 name: blocking-ci
 
-# This is the single entrypoint for checks that block a PR merge. It also runs
-# after pushes to main so the same check family stays grouped in the Actions UI.
+# Broad upstream application checks are opt-in in this sandbox fork.
+# Pull requests and release-branch pushes use mcp-console-sandbox.yml.
 on:
-  pull_request: {}
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  # Keep reusable workflow calls alphabetized. The `required` job below is the
-  # version-controlled list that the main-branch ruleset should require.
+  # Keep reusable workflow calls alphabetized.
   bazel:
     name: Bazel
     uses: ./.github/workflows/bazel.yml
@@ -46,9 +43,8 @@ jobs:
     secrets: inherit
 
   required:
-    name: CI required
-    # Without `always()`, GitHub skips this job after a failed dependency and a
-    # required check can appear successful instead of reporting the failure.
+    name: Upstream CI results
+    # Collect results even when a child workflow fails or is cancelled.
     if: ${{ always() }}
     needs:
       - bazel
