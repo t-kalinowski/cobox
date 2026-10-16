@@ -29,10 +29,7 @@ jobs:
         run: |
           sw_vers
           sysctl net.inet.ip.portrange
-      - name: Isolate native Seatbelt endpoint matching
-        run: python3 mcp-console-sandbox/tests/seatbelt_proxy_diagnostic.py
       - name: Reproduce the public proxy contract
-        if: always()
         run: |
           set -eu
           for iteration in $(seq 1 100); do
@@ -41,6 +38,12 @@ jobs:
               --test bootstrap_contract \
               unrestricted_and_external_managed_proxy_preserve_routing_and_allowlist
           done
+      - name: Compare full policy enforcement paths and recorded ports
+        if: always()
+        run: python3 mcp-console-sandbox/tests/seatbelt_profile_diagnostic.py
+      - name: Isolate native Seatbelt endpoint matching
+        if: always()
+        run: python3 mcp-console-sandbox/tests/seatbelt_proxy_diagnostic.py
       - name: Collect matching sandbox denials
         if: failure()
         run: |
