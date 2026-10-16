@@ -15,6 +15,7 @@
 #include <sys/event.h>
 #define NEXT(name) name
 #else
+#include <netinet/in.h>
 #define NEXT(name) dlsym(RTLD_NEXT, #name)
 #endif
 
@@ -213,6 +214,30 @@ INTERPOSE(observed_kill, kill)
 INTERPOSE(observed_unlinkat, unlinkat)
 INTERPOSE(observed_children, proc_listchildpids)
 #else
+int bind(int fd, const struct sockaddr *address, socklen_t length) {
+    int (*real)(int, const struct sockaddr *, socklen_t) = NEXT(bind);
+    const char *port = getenv("SANDBOX_TEST_BRIDGE_PORT");
+    static int forced;
+    if (port && !forced && getpid() == 1 && length == sizeof(struct sockaddr_in)
+        && address->sa_family == AF_INET) {
+        struct sockaddr_in endpoint = *(const struct sockaddr_in *)address;
+        int type;
+        socklen_t size = sizeof(type);
+        if (endpoint.sin_port == 0 && endpoint.sin_addr.s_addr == htonl(INADDR_LOOPBACK)
+            && getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &size) == 0 && type == SOCK_STREAM) {
+            endpoint.sin_port = htons(atoi(port));
+            int result = real(fd, (const struct sockaddr *)&endpoint, sizeof(endpoint));
+            if (result == 0) {
+                forced = 1;
+                const char message[] = "forced bridge port\n";
+                if (write(2, message, sizeof(message) - 1) != sizeof(message) - 1) _exit(125);
+            }
+            return result;
+        }
+    }
+    return real(fd, address, length);
+}
+
 int execvp(const char *file, char *const argv[]) {
     int (*real)(const char *, char *const[]) = NEXT(execvp);
     // Production strips host loader variables before native setup. This test
