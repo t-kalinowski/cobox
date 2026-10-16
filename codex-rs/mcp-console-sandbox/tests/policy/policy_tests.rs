@@ -5,6 +5,66 @@ use std::io::BufReader;
 
 #[cfg(target_os = "linux")]
 #[test]
+fn replaceable_foreign_parent_cannot_remove_metadata_protection() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("requires a disposable root fixture for a foreign-owned directory");
+        return;
+    }
+    let workspace = tempfile::tempdir().unwrap();
+    let foreign = workspace.path().join("foreign");
+    let protected = foreign.join(".git");
+    std::fs::create_dir(&foreign).unwrap();
+    let foreign_uid = 65534;
+    std::os::unix::fs::chown(&foreign, Some(foreign_uid), Some(foreign_uid)).unwrap();
+    std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(/*mode*/ 0o555)).unwrap();
+    let mut request = request(&[
+        "/bin/sh",
+        "-c",
+        r#"
+set -eu
+mv foreign previous
+mkdir -p foreign/.git
+printf compromised > foreign/.git/config
+printf 'metadata write escaped\n'
+"#,
+    ]);
+    request["cwd"] = json!(workspace.path());
+    request["environment"] = json!({"PATH": "/usr/bin:/bin"});
+    request["filesystem"] = json!({"kind": "restricted", "entries": [
+        {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"},
+        {"path": {"type": "path", "path": workspace.path()}, "access": "write"},
+        {"path": {"type": "path", "path": protected}, "access": "read"}
+    ]});
+    request["network"] = json!("enabled");
+    let staging = tempfile::tempdir().unwrap();
+    let staged_runner = runner(staging.path());
+    let mut command = Command::new("/usr/bin/setpriv");
+    command
+        .arg("--bounding-set=-dac_override,-dac_read_search,-chown,-fowner")
+        .arg(staged_runner.get_program())
+        // Use the staged bubblewrap so the startup diagnostic is deterministic.
+        .env("PATH", staging.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_command(command, frame(&request), &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        output.stderr,
+        format!(
+            "bwrap: Can't mkdir {}: Permission denied\n",
+            protected.display()
+        )
+        .as_bytes()
+    );
+    assert!(!workspace.path().join("previous").exists());
+    assert!(!protected.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn root_write_with_local_denial_respects_foreign_host_ownership() {
     use std::os::unix::fs::MetadataExt;
 

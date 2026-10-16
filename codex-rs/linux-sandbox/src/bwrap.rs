@@ -1294,16 +1294,17 @@ fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path
         let parent = path
             .parent()
             .ok_or_else(|| CodexErr::Fatal("metadata path must have a parent".to_string()))?;
-        if fs::metadata(parent)?.uid() != unsafe { libc::geteuid() } {
+        // Only the filesystem root cannot be replaced through a writable
+        // ancestor. Other foreign parents still need native metadata masks.
+        if parent == Path::new("/") && fs::metadata(parent)?.uid() != unsafe { libc::geteuid() } {
             match rustix::fs::accessat(
                 rustix::fs::CWD,
                 parent,
                 rustix::fs::Access::WRITE_OK,
                 rustix::fs::AtFlags::EACCESS,
             ) {
-                // A grant cannot override host ownership. The sandbox drops
-                // capabilities and cannot chmod this foreign, unwritable parent
-                // to create metadata, so no synthetic mount target is needed.
+                // The sandbox drops capabilities, so host root ownership
+                // prevents both metadata creation and changing its permissions.
                 Err(rustix::io::Errno::ACCESS) => return Ok(()),
                 Ok(()) => {}
                 Err(error) => return Err(io::Error::from(error).into()),
@@ -2359,26 +2360,41 @@ mod tests {
 
     #[test]
     fn mounts_dev_before_writable_dev_binds() {
-        let sandbox_policy = FileSystemSandboxPolicy::workspace_write(
-            &[AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut sandbox_policy = FileSystemSandboxPolicy::workspace_write(
+            &[
+                AbsolutePathBuf::try_from(Path::new("/")).expect("root path"),
+                AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path"),
+            ],
             /*exclude_tmpdir_env_var*/ true,
             /*exclude_slash_tmp*/ true,
         );
+        // Root metadata ownership is unrelated to device mount ordering.
+        // Keep metadata assertions under the owned temporary workspace.
+        for name in [".git", ".agents", ".codex", ".aws"] {
+            sandbox_policy.entries.push(FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(Path::new("/").join(name))
+                    .expect("metadata path")
+                    .into(),
+                FileSystemAccessMode::Write,
+            ));
+        }
 
-        let args = create_filesystem_args(&sandbox_policy, Path::new("/"), BwrapOptions::default())
-            .expect("bwrap fs args");
+        let args =
+            create_filesystem_args(&sandbox_policy, temp_dir.path(), BwrapOptions::default())
+                .expect("bwrap fs args");
         assert!(args.preserved_files.is_empty());
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
-                PathBuf::from("/.aws"),
-                PathBuf::from("/.git"),
-                PathBuf::from("/.agents"),
-                PathBuf::from("/.codex"),
                 PathBuf::from("/dev/.git"),
                 PathBuf::from("/dev/.agents"),
                 PathBuf::from("/dev/.codex"),
                 PathBuf::from("/dev/.aws"),
+                temp_dir.path().join(".aws"),
+                temp_dir.path().join(".git"),
+                temp_dir.path().join(".agents"),
+                temp_dir.path().join(".codex"),
             ]
         );
         let dev_mounts = args
