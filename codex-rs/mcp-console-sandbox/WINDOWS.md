@@ -1,6 +1,10 @@
 # Windows native sandbox
 
-The Windows executable runs commands through native MXC using Codex's shared capability, policy conversion, and launch APIs. It requires neither a running Codex application nor account provisioning. The environment transport is the same as on Unix:
+The Windows executable runs commands through native MXC using Codex's shared capability, policy conversion, and launch APIs. It requires neither a running Codex application nor account provisioning.
+
+Only fresh hosts are supported. Previously provisioned hosts require independent removal of legacy Console sandbox accounts, stored account credentials, and persistent firewall rules before use. MXC runs as the host identity, so a workload can decrypt readable DPAPI-protected legacy passwords. The runner does not detect or clean up legacy state.
+
+The environment transport is the same as on Unix:
 
 ```powershell
 $env:CONSOLE_POLICY = '{"extends":":read-only"}'

@@ -49,22 +49,21 @@ pub(crate) fn encode(
         .collect())
 }
 
-pub(crate) fn helper_environment() -> Result<HashMap<String, String>> {
-    let mut environment = std::env::vars_os()
-        .map(|(name, value)| {
-            Ok((
-                name.into_string()
-                    .map_err(|_| anyhow::anyhow!("MXC requires Unicode environment names"))?,
-                value
-                    .into_string()
-                    .map_err(|_| anyhow::anyhow!("MXC requires Unicode environment values"))?,
-            ))
+pub(crate) fn helper_environment() -> HashMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| {
+            // Target inheritance is validated separately. Unrelated host entries
+            // that cannot enter the Unicode helper transport need not block it.
+            let name = name.into_string().ok()?;
+            if name.starts_with('=')
+                || is_key(&name)
+                || environment_transport::is_key(name.as_ref())
+            {
+                return None;
+            }
+            Some((name, value.into_string().ok()?))
         })
-        .collect::<Result<HashMap<_, _>>>()?;
-    environment.retain(|name, _| {
-        !name.starts_with('=') && !is_key(name) && !environment_transport::is_key(name.as_ref())
-    });
-    Ok(environment)
+        .collect()
 }
 
 fn transport_environment() -> Result<HashMap<String, String>> {

@@ -6,6 +6,8 @@ mod mxc_support;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
 use std::process::Command;
 
 #[test]
@@ -210,6 +212,37 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
         if !inherit {
             assert_eq!(environment, expected.as_object().unwrap());
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn cleared_target_environment_ignores_non_unicode_host_variables() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let invalid = OsString::from_wide(&[0xd800]);
+    for (name, value) in [
+        (invalid.clone(), OsString::from("host-only")),
+        (OsString::from("CONSOLE_NON_UNICODE"), invalid),
+    ] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env(name, value)
+            .env(
+                "CONSOLE_POLICY",
+                json!({
+                    "extends": ":read-only", "network": "enabled",
+                    "inherit_environment": false,
+                })
+                .to_string(),
+            )
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("context")
+            .output()?;
+        assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+        let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(context["environment"], json!({}));
     }
     Ok(())
 }

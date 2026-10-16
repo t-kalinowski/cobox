@@ -167,7 +167,7 @@ pub(crate) fn run() -> Result<i32> {
                 use_legacy_landlock: false,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
             })?;
-            let mut helper_environment = crate::windows_target::helper_environment()?;
+            let mut helper_environment = crate::windows_target::helper_environment();
             helper_environment.extend(prepared.env);
             prepared.env = helper_environment;
             // Before a launch attempt TempDir removes failed preflight storage.
