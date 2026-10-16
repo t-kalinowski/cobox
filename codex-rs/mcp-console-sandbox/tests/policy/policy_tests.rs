@@ -167,8 +167,14 @@ fn unrestricted_and_external_managed_proxy_preserve_routing_and_allowlist() {
             server.join().unwrap();
             request["proxy"]["domains"] = json!({"127.0.0.1": "deny"});
             let output = run(frame(&request), &[]);
-            assert!(output.status.success(), "{output:?}");
-            assert!(output.stdout.starts_with(b"HTTP/1.1 403"), "{output:?}");
+            assert!(
+                output.status.success(),
+                "{kind}/{network} deny response: {output:?}"
+            );
+            assert!(
+                output.stdout.starts_with(b"HTTP/1.1 403"),
+                "{kind}/{network} deny response: {output:?}"
+            );
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             request["command"] = fixture("connect", &[&listener.local_addr().unwrap().to_string()])
                 ["command"]
