@@ -81,6 +81,9 @@ pub(super) fn run() -> Result<()> {
                 .is_ok();
             println!("{}", if sent { "sent" } else { "blocked" });
         }
+        "write" => {
+            std::fs::write(args.next().context("write path")?, b"written")?;
+        }
         "probe-write" => {
             let path = args.next().context("probe path")?;
             let error = std::fs::write(path, b"escaped")

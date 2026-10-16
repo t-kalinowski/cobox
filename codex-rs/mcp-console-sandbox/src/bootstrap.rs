@@ -43,11 +43,6 @@ pub struct Bootstrap {
     #[serde(default)]
     pub lifecycle: Lifecycle,
     pub linux_backend: Option<crate::config::LinuxBackend>,
-    #[cfg(windows)]
-    #[serde(alias = "windows_sandbox_level")]
-    pub windows_backend: Option<crate::windows_backend::WindowsSandboxPreference>,
-    #[cfg(windows)]
-    pub windows_state_dir: Option<AbsolutePathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -65,11 +60,6 @@ struct EnvironmentConfiguration {
     #[serde(default)]
     lifecycle: Lifecycle,
     linux_backend: Option<crate::config::LinuxBackend>,
-    #[cfg(windows)]
-    #[serde(alias = "windows_sandbox_level")]
-    windows_backend: Option<crate::windows_backend::WindowsSandboxPreference>,
-    #[cfg(windows)]
-    windows_state_dir: Option<AbsolutePathBuf>,
     #[serde(default = "inherit_environment")]
     inherit_environment: bool,
     #[serde(default)]
@@ -179,10 +169,6 @@ pub fn take_input() -> Result<Input> {
             macos_seatbelt_profile_extension: config.macos_seatbelt_profile_extension,
             lifecycle: config.lifecycle,
             linux_backend: config.linux_backend,
-            #[cfg(windows)]
-            windows_backend: config.windows_backend,
-            #[cfg(windows)]
-            windows_state_dir: config.windows_state_dir,
         };
         validate(&mut request)?;
         return Ok(Input::Environment(Box::new(request)));

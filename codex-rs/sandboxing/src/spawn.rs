@@ -43,38 +43,6 @@ pub struct SpawnRequest<'a> {
 /// Spawn a process using the backend selected by the prepared sandbox request.
 #[tracing::instrument(name = "codex.process.spawn", skip_all)]
 pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess> {
-    spawn_process_inner(request, #[cfg(windows)] /*windows_context*/ None).await
-}
-
-/// Host-owned state and optional strict process-tree lifetime for an embedded executor.
-#[cfg(windows)]
-pub struct WindowsSandboxLaunchContext<'a> {
-    pub state_dir: &'a Path,
-    pub job: Option<std::sync::Arc<codex_utils_pty::JobObject>>,
-}
-
-/// Launch through the shared backend dispatch with the embedding host's state.
-#[cfg(windows)]
-pub async fn spawn_process_with_windows_context(
-    request: SpawnRequest<'_>,
-    context: WindowsSandboxLaunchContext<'_>,
-) -> Result<SpawnedProcess> {
-    anyhow::ensure!(
-        context.job.is_none()
-            || (request.sandbox == SandboxType::WindowsMxc
-                && !request.tty
-                && request.stdin_open
-                && request.arg0.is_none()
-                && request.inherited_fds.as_slice().is_empty()),
-        "host-owned Jobs require an MXC pipe session with open stdin"
-    );
-    spawn_process_inner(request, Some(context)).await
-}
-
-async fn spawn_process_inner(
-    request: SpawnRequest<'_>,
-    #[cfg(windows)] windows_context: Option<WindowsSandboxLaunchContext<'_>>,
-) -> Result<SpawnedProcess> {
     let tty = request.tty;
     let finish_spawn = |spawned| {
         if tty {
@@ -90,12 +58,8 @@ async fn spawn_process_inner(
             let windows = request
                 .windows_sandbox
                 .context("missing Windows sandbox spawn request")?;
-            let codex_home = match &windows_context {
-                Some(context) => context.state_dir.to_path_buf(),
-                None => codex_utils_home_dir::find_codex_home()
-                    .context("windows sandbox: failed to resolve codex_home")?
-                    .into_path_buf(),
-            };
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .context("windows sandbox: failed to resolve codex_home")?;
             let empty_paths = &[];
             let overrides = windows.filesystem_overrides;
 
@@ -142,17 +106,6 @@ async fn spawn_process_inner(
         .command
         .split_first()
         .context("missing program for process spawn")?;
-    #[cfg(windows)]
-    if let Some(job) = windows_context.and_then(|context| context.job) {
-        return codex_utils_pty::pipe::spawn_process_in_job(
-            program,
-            args,
-            request.cwd,
-            request.env,
-            job,
-        )
-        .await;
-    }
     let spawned = if tty {
         codex_utils_pty::pty::spawn_process(
             program,
@@ -187,7 +140,3 @@ async fn spawn_process_inner(
     };
     spawned.map(finish_spawn)
 }
-
-#[cfg(all(test, windows))]
-#[path = "spawn_tests.rs"]
-mod tests;

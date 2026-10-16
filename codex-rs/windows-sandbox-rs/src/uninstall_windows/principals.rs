@@ -28,25 +28,21 @@ pub(super) struct DisabledSandboxUsers {
 }
 
 struct SandboxUser {
-    name: String,
+    name: &'static str,
     original_flags: u32,
     sid: Vec<u8>,
 }
 
 impl DisabledSandboxUsers {
     pub(super) fn disable(&mut self) -> Result<()> {
-        for name in [
-            crate::sandbox_name(OFFLINE_USERNAME),
-            crate::sandbox_name(ONLINE_USERNAME),
-        ] {
-            let name = name.as_ref();
+        for name in [OFFLINE_USERNAME, ONLINE_USERNAME] {
             let Some(original_flags) = local_user_flags(name)? else {
                 continue;
             };
             let sid = resolve_sid(name)?;
 
             self.users.push(SandboxUser {
-                name: name.to_owned(),
+                name,
                 original_flags,
                 sid,
             });
@@ -60,11 +56,7 @@ impl DisabledSandboxUsers {
     }
 
     pub(super) fn validate_current(&self) -> Result<()> {
-        for name in [
-            crate::sandbox_name(OFFLINE_USERNAME),
-            crate::sandbox_name(ONLINE_USERNAME),
-        ] {
-            let name = name.as_ref();
+        for name in [OFFLINE_USERNAME, ONLINE_USERNAME] {
             let Some(flags) = local_user_flags(name)? else {
                 continue;
             };
@@ -81,7 +73,7 @@ impl DisabledSandboxUsers {
     pub(super) fn restore(&self) -> Result<()> {
         let mut errors = Vec::new();
         for user in &self.users {
-            if let Err(error) = set_local_user_flags(&user.name, user.original_flags)
+            if let Err(error) = set_local_user_flags(user.name, user.original_flags)
                 && error
                     .downcast_ref::<std::io::Error>()
                     .and_then(std::io::Error::raw_os_error)
@@ -167,7 +159,7 @@ impl DisabledSandboxUsers {
     pub(super) fn for_token_test(sid: Vec<u8>) -> Self {
         Self {
             users: vec![SandboxUser {
-                name: crate::sandbox_name(OFFLINE_USERNAME).into_owned(),
+                name: OFFLINE_USERNAME,
                 original_flags: network::UF_ACCOUNTDISABLE,
                 sid,
             }],
@@ -177,7 +169,7 @@ impl DisabledSandboxUsers {
 
 pub(super) fn remove_sandbox_principal(name: &str) -> Result<()> {
     let name_wide = to_wide(name);
-    let status = if name == crate::sandbox_name("CodexSandboxUsers").as_ref() {
+    let status = if name == "CodexSandboxUsers" {
         unsafe { network::NetLocalGroupDel(null(), name_wide.as_ptr()) }
     } else {
         unsafe { network::NetUserDel(null(), name_wide.as_ptr()) }

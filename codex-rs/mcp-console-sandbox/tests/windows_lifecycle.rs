@@ -16,7 +16,6 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
-use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
@@ -33,8 +32,6 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 fn configuration(root: &Path) -> Value {
     json!({
         "extends": ":read-only", "network": "enabled",
-        "windows_backend": "unelevated",
-        "windows_state_dir": root.join("state"),
         "lifecycle": {"private_tmp": {"parent": root, "environment": ["TMPDIR"]}},
     })
 }
@@ -101,6 +98,9 @@ fn ready(child: &mut Child) -> Result<Value> {
 
 #[test]
 fn binary_stdin_is_preserved_through_eof() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let mut child = runner(root.path(), "copy-stdin")?.spawn()?;
     let process = Process::open(child.id())?;
@@ -119,37 +119,17 @@ fn binary_stdin_is_preserved_through_eof() -> Result<()> {
         (output.status.code(), output.stdout, output.stderr),
         (Some(0), expected, vec![])
     );
-    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     Ok(())
 }
 
 #[test]
 fn read_only_policy_denies_target_writes() -> Result<()> {
-    assert_read_only_policy_denies_target_writes(Some("unelevated"))
-}
-
-#[test]
-fn mxc_read_only_policy_denies_target_writes() -> Result<()> {
     if !mxc_support::available()? {
         return Ok(());
     }
-    for mode in [None, Some("auto"), Some("mxc")] {
-        assert_read_only_policy_denies_target_writes(mode)?;
-    }
-    Ok(())
-}
-
-fn assert_read_only_policy_denies_target_writes(mode: Option<&str>) -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut config = configuration(root.path());
-    if let Some(mode) = mode {
-        config["windows_backend"] = json!(mode);
-    } else {
-        config
-            .as_object_mut()
-            .context("configuration object")?
-            .remove("windows_backend");
-    }
+    let config = configuration(root.path());
     let forbidden = root.path().join("forbidden");
     let output = runner(root.path(), "probe-write")?
         .env("CONSOLE_POLICY", config.to_string())
@@ -164,37 +144,12 @@ fn assert_read_only_policy_denies_target_writes(mode: Option<&str>) -> Result<()
 }
 
 #[test]
-fn target_uses_a_private_desktop() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let output = runner(root.path(), "desktop")?.output()?;
-    assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
-    let desktop = String::from_utf8(output.stdout)?;
-    assert!(desktop.starts_with("ConsoleSandboxDesktop-"), "{desktop:?}");
-    Ok(())
-}
-
-#[test]
 fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
-    assert_root_exit_retires_descendants("unelevated")?;
-    assert_root_exit_retires_descendants("external")
-}
-
-#[test]
-fn mxc_root_exit_retires_descendants_before_removing_storage() -> Result<()> {
     if !mxc_support::available()? {
         return Ok(());
     }
-    assert_root_exit_retires_descendants("mxc")
-}
-
-fn assert_root_exit_retires_descendants(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut config = configuration(root.path());
-    if mode == "external" {
-        config["filesystem"] = json!({"kind":"external-sandbox"});
-    } else {
-        config["windows_backend"] = json!(mode);
-    }
+    let config = configuration(root.path());
     let mut child = runner(root.path(), "tree")?
         .env("CONSOLE_POLICY", config.to_string())
         .spawn()?;
@@ -217,15 +172,15 @@ fn assert_root_exit_retires_descendants(mode: &str) -> Result<()> {
         (Some(42), vec![], vec![])
     );
     assert!(!temporary.exists());
-    assert_eq!(
-        std::fs::read_dir(root.path())?.count(),
-        usize::from(mode == "unelevated")
-    );
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     Ok(())
 }
 
 #[test]
 fn private_storage_waits_for_a_transient_sharing_violation() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let mut child = runner(root.path(), "tree")?.spawn()?;
     let process = Process::open(child.id())?;
@@ -263,6 +218,9 @@ fn private_storage_waits_for_a_transient_sharing_violation() -> Result<()> {
 
 #[test]
 fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let mut child = runner(root.path(), "tree")?.spawn()?;
     let process = Process::open(child.id())?;
@@ -296,26 +254,11 @@ fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
 
 #[test]
 fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
-    assert_caller_death_retires_workload("unelevated")?;
-    assert_caller_death_retires_workload("external")
-}
-
-#[test]
-fn mxc_direct_caller_death_retires_workload_and_storage() -> Result<()> {
     if !mxc_support::available()? {
         return Ok(());
     }
-    assert_caller_death_retires_workload("mxc")
-}
-
-fn assert_caller_death_retires_workload(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut config = configuration(root.path());
-    if mode == "external" {
-        config["filesystem"] = json!({"kind":"external-sandbox"});
-    } else {
-        config["windows_backend"] = json!(mode);
-    }
+    let config = configuration(root.path());
     let mut owner = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
         .arg("owner")
         .arg(cargo_bin("mcp-console-sandbox")?)
@@ -340,15 +283,15 @@ fn assert_caller_death_retires_workload(mode: &str) -> Result<()> {
     let output = owner.wait_with_output()?;
     assert_eq!(output.stderr, Vec::<u8>::new());
     assert!(!temporary.exists());
-    assert_eq!(
-        std::fs::read_dir(root.path())?.count(),
-        usize::from(mode == "unelevated")
-    );
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     Ok(())
 }
 
 #[test]
 fn runner_loss_retires_descendants_and_retains_storage() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let mut child = runner(root.path(), "tree-hold")?.spawn()?;
     let process = Process::open(child.id())?;
@@ -362,90 +305,5 @@ fn runner_loss_retires_descendants_and_retains_storage() -> Result<()> {
     descendant.wait();
     child.wait()?;
     assert!(Path::new(receipt["temporary"].as_str().context("private storage")?).is_dir());
-    Ok(())
-}
-
-#[test]
-#[ignore = "requires explicit elevated Console setup and access to the Public directory"]
-fn elevated_offline_account_denies_loopback_tcp() -> Result<()> {
-    let root = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
-    // The separate account needs ordinary host read access to its executable.
-    let fixture = root.path().join("fixture.exe");
-    std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
-    for address in ["127.0.0.1:0", "[::1]:0"] {
-        let listener = std::net::TcpListener::bind(address)?;
-        for (network, expected) in [("enabled", "connected\n"), ("restricted", "blocked\n")] {
-            let config = json!({
-                "extends":":read-only", "network":network,
-                "windows_backend":"elevated",
-                "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
-                    .map(PathBuf::from),
-            });
-            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-                .current_dir(root.path())
-                .env("CONSOLE_POLICY", config.to_string())
-                .args(["--config-env", "CONSOLE_POLICY", "--"])
-                .arg(&fixture)
-                .arg("connect")
-                .arg(listener.local_addr()?.to_string())
-                .output()?;
-            assert_eq!(
-                (output.status.code(), output.stdout, output.stderr),
-                (Some(0), expected.as_bytes().to_vec(), vec![]),
-                "{network}"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[test]
-#[ignore = "requires explicit elevated Console setup and access to the Public directory"]
-fn elevated_offline_account_denies_loopback_udp() -> Result<()> {
-    let root = tempfile::tempdir_in(std::env::var_os("PUBLIC").context("PUBLIC")?)?;
-    let fixture = root.path().join("fixture.exe");
-    std::fs::copy(cargo_bin("mcp-console-sandbox-fixture")?, &fixture)?;
-    for address in ["127.0.0.1:0", "[::1]:0"] {
-        let listener = std::net::UdpSocket::bind(address)?;
-        listener.set_read_timeout(Some(std::time::Duration::from_millis(/*millis*/ 200)))?;
-        for network in ["enabled", "restricted"] {
-            let config = json!({
-                "extends":":read-only", "network":network,
-                "windows_backend":"elevated",
-                "windows_state_dir": std::env::var_os("MCP_CONSOLE_SANDBOX_TEST_STATE_DIR")
-                    .map(PathBuf::from),
-            });
-            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-                .current_dir(root.path())
-                .env("CONSOLE_POLICY", config.to_string())
-                .args(["--config-env", "CONSOLE_POLICY", "--"])
-                .arg(&fixture)
-                .arg("datagram")
-                .arg(listener.local_addr()?.to_string())
-                .output()?;
-            assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
-            // UDP sends can succeed locally even when the firewall drops the packet.
-            // The host's receipt, with an online positive control, is the boundary.
-            assert!(matches!(output.stdout.as_slice(), b"sent\n" | b"blocked\n"));
-            let mut buffer = [0; 8];
-            let received = match listener.recv(&mut buffer) {
-                Ok(length) => Some(buffer[..length].to_vec()),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    None
-                }
-                Err(error) => return Err(error.into()),
-            };
-            assert_eq!(
-                received,
-                (network == "enabled").then(|| b"probe".to_vec()),
-                "{network} {address}"
-            );
-        }
-    }
     Ok(())
 }

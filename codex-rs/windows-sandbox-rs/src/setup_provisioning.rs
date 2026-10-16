@@ -43,7 +43,6 @@ use crate::write_file_atomically;
 use crate::write_setup_error_report;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::ensure;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use codex_otel::StatsigMetricsSettings;
@@ -98,6 +97,7 @@ const WRITE_ROOT_ALLOW_MASK: u32 =
 mod sandbox_users;
 mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
+use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::commit_setup_marker;
 use sandbox_users::prepare_setup_marker;
 use sandbox_users::provision_sandbox_users;
@@ -339,63 +339,6 @@ fn read_mask_allows_or_log(
     }
 }
 
-// Sandbox accounts also carry these built-in read principals. Existing access
-// must not require WRITE_DAC merely to add an equivalent sandbox-group ACE.
-fn ensure_sandbox_directory_metadata_access(
-    path: &Path,
-    sandbox_group_psid: *mut c_void,
-    account_names: &[&str],
-    log: &mut dyn Write,
-) -> Result<bool> {
-    let mut users = resolve_sid("Users")?;
-    let mut authenticated_users = resolve_sid("Authenticated Users")?;
-    let mut everyone = resolve_sid("Everyone")?;
-    let subjects = [
-        sandbox_group_psid,
-        users.as_mut_ptr().cast(),
-        authenticated_users.as_mut_ptr().cast(),
-        everyone.as_mut_ptr().cast(),
-    ];
-    let mut account_sids = account_names
-        .iter()
-        .map(|name| resolve_sid(name))
-        .collect::<Result<Vec<_>>>()?;
-    let accounts = account_sids
-        .iter_mut()
-        .map(|sid| sid.as_mut_ptr().cast())
-        .collect::<Vec<_>>();
-    if crate::acl::path_grants_mask(path, &subjects, &accounts, FILE_READ_ATTRIBUTES)? {
-        return Ok(false);
-    }
-    log_line(
-        log,
-        &format!(
-            "waiting for read ACL updates before granting directory metadata access to {}",
-            path.display(),
-        ),
-    )?;
-    let _read_acl_guard = acquire_read_acl_mutex()?;
-    // The preceding helper may have supplied full read access while we waited.
-    // Re-read before constructing a metadata-only DACL from a stale snapshot.
-    if crate::acl::path_grants_mask(path, &subjects, &accounts, FILE_READ_ATTRIBUTES)? {
-        return Ok(false);
-    }
-    let granted = unsafe {
-        ensure_allow_mask_aces_with_inheritance(
-            path,
-            &[sandbox_group_psid],
-            FILE_READ_ATTRIBUTES,
-            /*inheritance*/ 0,
-        )?
-    };
-    ensure!(
-        granted,
-        "directory metadata access is blocked by an existing deny ACE: {}",
-        path.display()
-    );
-    Ok(true)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn lock_sandbox_dir(
     dir: &Path,
@@ -537,9 +480,7 @@ pub fn main() -> Result<()> {
     let ret = real_main(&mut setup_mode);
     if let Err(e) = &ret {
         // Best-effort: log unexpected top-level errors.
-        if crate::WindowsSandboxProduct::current() == crate::WindowsSandboxProduct::Codex
-            && let Ok(codex_home) = std::env::var("CODEX_HOME")
-        {
+        if let Ok(codex_home) = std::env::var("CODEX_HOME") {
             let sbx_dir = sandbox_dir(Path::new(&codex_home));
             let _ = std::fs::create_dir_all(&sbx_dir);
             // An unparsed payload must not enable writes to an existing log.
@@ -600,11 +541,6 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
         ))
     })?;
     *setup_mode = Some(payload.mode);
-    if payload.offline_username != crate::sandbox_name(crate::OFFLINE_USERNAME)
-        || payload.online_username != crate::sandbox_name(crate::ONLINE_USERNAME)
-    {
-        anyhow::bail!("sandbox account names do not match this setup helper");
-    }
     if payload.version != SETUP_VERSION {
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
@@ -656,7 +592,7 @@ fn run_payload(payload: &Payload) -> Result<()> {
         let failure = extract_setup_failure(err)
             .map(|f| SetupFailure::new(f.code, f.message.clone()))
             .unwrap_or_else(|| {
-                SetupFailure::new(SetupErrorCode::HelperUnknownError, format!("{err:#}"))
+                SetupFailure::new(SetupErrorCode::HelperUnknownError, err.to_string())
             });
         let report = SetupErrorReport {
             code: failure.code,
@@ -718,7 +654,13 @@ fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<(
 }
 
 fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
-    let _read_acl_guard = acquire_read_acl_mutex()?;
+    let _read_acl_guard = match acquire_read_acl_mutex()? {
+        Some(guard) => guard,
+        None => {
+            log_line(log, "read ACL helper already running; skipping")?;
+            return Ok(());
+        }
+    };
     log_line(log, "read-acl-only mode: applying read ACLs")?;
     let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
     let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
@@ -874,23 +816,6 @@ fn configure_offline_sandbox_network(
             format!("ensure offline network blocks failed: {err}"),
         )));
     }
-    let count = crate::install_loopback_filters_for_account(
-        &payload.offline_username,
-        &crate::WindowsSandboxProvisioningSettings {
-            proxy_ports: payload.proxy_ports.clone(),
-            allow_local_binding: payload.allow_local_binding,
-        },
-    )
-    .map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-            format!("install offline loopback filters failed: {err}"),
-        ))
-    })?;
-    log_line(
-        log,
-        &format!("installed {count} offline loopback WFP filters"),
-    )?;
     Ok(())
 }
 
@@ -1002,10 +927,6 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     })?;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
-    let account_names = [
-        payload.offline_username.as_str(),
-        payload.online_username.as_str(),
-    ];
 
     let mut refresh_errors: Vec<String> = Vec::new();
 
@@ -1041,12 +962,14 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             })
         });
         if cwd_is_under_profile {
-            match ensure_sandbox_directory_metadata_access(
-                user_profile,
-                sandbox_group_psid,
-                &account_names,
-                log,
-            ) {
+            match unsafe {
+                ensure_allow_mask_aces_with_inheritance(
+                    user_profile,
+                    &[sandbox_group_psid],
+                    FILE_READ_ATTRIBUTES,
+                    /*inheritance*/ 0,
+                )
+            } {
                 Ok(true) => {
                     log_line(
                         log,
@@ -1070,26 +993,36 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         }
     }
 
-    // CreateProcessWithLogonW opens its working directory as the sandbox
-    // account before the background read helper can reach it. Grant only
-    // metadata access here; content reads remain governed by the read roots.
-    ensure_sandbox_directory_metadata_access(
-        &payload.command_cwd,
-        sandbox_group_psid,
-        &account_names,
-        log,
-    )
-    .context("grant command working-directory metadata access")?;
-
     if payload.read_roots.is_empty() {
         log_line(log, "no read roots to grant; skipping read ACL helper")?;
     } else {
-        spawn_read_acl_helper(payload, log).map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperReadAclHelperSpawnFailed,
-                format!("spawn read ACL helper failed: {err}"),
-            ))
-        })?;
+        match read_acl_mutex_exists() {
+            Ok(true) => {
+                log_line(log, "read ACL helper already running; skipping spawn")?;
+            }
+            Ok(false) => {
+                spawn_read_acl_helper(payload, log).map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperReadAclHelperSpawnFailed,
+                        format!("spawn read ACL helper failed: {err}"),
+                    ))
+                })?;
+            }
+            Err(err) => {
+                log_line(
+                    log,
+                    &format!("read ACL mutex check failed: {err}; spawning anyway"),
+                )?;
+                spawn_read_acl_helper(payload, log).map_err(|spawn_err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperReadAclHelperSpawnFailed,
+                        format!(
+                            "spawn read ACL helper failed after mutex error {err}: {spawn_err}"
+                        ),
+                    ))
+                })?;
+            }
+        }
     }
 
     if refresh_only {

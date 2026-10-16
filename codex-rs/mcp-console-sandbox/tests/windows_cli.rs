@@ -1,5 +1,8 @@
 #![cfg(windows)]
 
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
+
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -7,14 +10,15 @@ use std::process::Command;
 
 #[test]
 fn inherited_drive_directory_metadata_does_not_prevent_launch() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
     let root = tempfile::tempdir()?;
     let sandbox = cargo_bin("mcp-console-sandbox")?;
     let fixture = cargo_bin("mcp-console-sandbox-fixture")?;
     let policy = json!({
         "extends": ":read-only",
         "network": "enabled",
-        "windows_backend": "unelevated",
-        "windows_state_dir": root.path().join("state"),
     });
     // Windows callers can carry per-drive working directories as hidden entries.
     let output = Command::new(&sandbox)
@@ -48,15 +52,5 @@ fn inherited_drive_directory_metadata_does_not_prevent_launch() -> anyhow::Resul
         .output()?;
     assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
     assert!(String::from_utf8(output.stderr)?.contains("invalid target environment name"));
-    Ok(())
-}
-
-#[test]
-fn invalid_state_path_fails_before_creating_state() -> anyhow::Result<()> {
-    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
-        .args(["status", "--state-dir", "relative"])
-        .output()?;
-    assert_eq!((output.status.code(), output.stdout), (Some(2), vec![]));
-    assert!(String::from_utf8(output.stderr)?.contains("path is not absolute"));
     Ok(())
 }

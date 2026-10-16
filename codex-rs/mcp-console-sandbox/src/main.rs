@@ -23,13 +23,11 @@ mod target_control;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-mod windows_backend;
-#[cfg(windows)]
-mod windows_cli;
-#[cfg(windows)]
 mod windows_console;
 #[cfg(windows)]
 mod windows_proxy;
+#[cfg(windows)]
+mod windows_target;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {

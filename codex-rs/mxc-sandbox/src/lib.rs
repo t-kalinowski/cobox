@@ -99,34 +99,21 @@ pub fn is_available() -> bool {
     }
 }
 
-/// Whether the native backend supports this profile, including deny-path enforcement.
-pub fn is_available_for(permissions: &PermissionProfile) -> bool {
-    if !is_available() {
-        return false;
-    }
-    if !permissions
-        .file_system_sandbox_policy()
-        .has_denied_read_restrictions()
-    {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        learning_mode_windows::SecurityEnvironmentApi::load()
-            .and_then(|api| api.supports_deny_paths())
-            .unwrap_or(/*default*/ false)
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
 /// Entry point dispatched before ordinary Codex CLI parsing.
 pub fn run_main() -> ! {
+    run_main_inner(/*environment*/ None)
+}
+
+/// Keep native setup in the executor environment while supplying explicit child variables.
+/// Temporary-directory policy paths resolve from the supplied variables.
+pub fn run_main_with_environment(environment: HashMap<String, String>) -> ! {
+    run_main_inner(Some(environment))
+}
+
+fn run_main_inner(environment: Option<HashMap<String, String>>) -> ! {
     #[cfg(windows)]
     {
-        match windows::run() {
+        match windows::run(environment) {
             Ok(exit_code) => std::process::exit(exit_code),
             Err(error) => {
                 eprintln!("MXC launcher: {error:#}");
@@ -136,6 +123,7 @@ pub fn run_main() -> ! {
     }
     #[cfg(not(windows))]
     {
+        let _ = environment;
         eprintln!("MXC sandbox execution requires Windows");
         std::process::exit(1);
     }

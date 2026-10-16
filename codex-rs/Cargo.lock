@@ -10237,7 +10237,6 @@ name = "mcp-console-sandbox"
 version = "0.162.1"
 dependencies = [
  "anyhow",
- "clap",
  "codex-linux-sandbox",
  "codex-network-proxy",
  "codex-protocol",
@@ -10254,17 +10253,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mcp-console-sandbox-windows"
-version = "0.162.1"
-dependencies = [
- "anyhow",
- "codex-utils-process",
- "codex-utils-pty",
- "codex-windows-sandbox",
  "windows-sys 0.61.2",
 ]
 

@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -14,8 +15,8 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-#[path = "../src/windows_backend.rs"]
-mod windows_backend;
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
 #[path = "../src/windows_proxy.rs"]
 mod windows_proxy;
 
@@ -153,8 +154,7 @@ async fn proxy_removes_mixed_case_managed_ca_variables() -> Result<()> {
 
 #[tokio::test]
 async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
-    if !windows_mxc_available() {
-        eprintln!("skipping native MXC integration: this Windows worker has no usable MXC runtime");
+    if !mxc_support::available()? {
         return Ok(());
     }
     let root = tempfile::tempdir()?;
@@ -189,7 +189,6 @@ async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
         assert_ne!(projected[0].1, "http://127.0.0.1:1");
         let permissions = PermissionProfile::read_only();
         let executable = cargo_bin("mcp-console-sandbox")?;
-        // Only this known test command bypasses Console's legacy-account admission gate.
         let prepared = SandboxManager::default().transform(SandboxTransformRequest {
             command: SandboxCommand {
                 program: "curl.exe".into(),
@@ -221,22 +220,16 @@ async fn native_mxc_uses_job_owned_proxy_allow_and_deny() -> Result<()> {
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })?;
-        let mut spawned = spawn_process_with_windows_context(
-            SpawnRequest {
-                command: &prepared.command,
-                cwd: cwd.as_path(),
-                env: &prepared.env,
-                arg0: &prepared.arg0,
-                sandbox: prepared.sandbox,
-                windows_sandbox: None,
-                tty: false,
-                stdin_open: true,
-                inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
-            },
-            WindowsSandboxLaunchContext {
-                state_dir: root.path(),
-                job: Some(job),
-            },
+        let (program, args) = prepared
+            .command
+            .split_first()
+            .context("missing MXC command")?;
+        let mut spawned = codex_utils_pty::pipe::spawn_process_in_job(
+            program,
+            args,
+            cwd.as_path(),
+            &prepared.env,
+            job,
         )
         .await?;
         let receipt =
