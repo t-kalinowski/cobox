@@ -11,10 +11,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::process::Command;
 
 #[test]
-fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<()> {
-    if !mxc_support::available()? {
-        return Ok(());
-    }
+fn unsupported_policy_fails_preflight_without_mxc() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     for (overrides, diagnostic) in [
         (
@@ -38,17 +35,13 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
             "cleanup_timeout_ms is not configurable",
         ),
         (
-            json!({"lifecycle":{"private_tmp":{"parent":root.path(),"environment":["console_policy"]}}}),
-            "transport variable cannot be exported",
-        ),
-        (
             json!({"environment":{"CASE_VALUE":"one","case_value":"two"}}),
             "duplicate Windows environment variable",
         ),
     ] {
         let mut config = json!({
             "extends":":read-only", "network":"enabled",
-
+            "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["TMPDIR"]}},
         });
         if let (Some(config), Some(overrides)) = (config.as_object_mut(), overrides.as_object()) {
             config.extend(overrides.clone());
@@ -70,6 +63,30 @@ fn unsupported_policy_fails_before_launch_or_state_creation() -> anyhow::Result<
         assert!(stderr.contains(diagnostic), "{overrides}: {stderr}");
         assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     }
+    Ok(())
+}
+
+#[test]
+fn private_storage_rejects_configuration_transport_alias() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let config = json!({
+        "extends":":read-only", "network":"enabled",
+        "lifecycle":{"private_tmp":{"parent":root.path(),"environment":["console_policy"]}},
+    });
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .env("CONSOLE_POLICY", config.to_string())
+        .args(["--config-env", "CONSOLE_POLICY", "--", "cmd.exe"])
+        .output()?;
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let diagnostic = String::from_utf8(output.stderr)?;
+    assert!(
+        diagnostic.contains("transport variable cannot be exported"),
+        "{diagnostic}"
+    );
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
     Ok(())
 }
 

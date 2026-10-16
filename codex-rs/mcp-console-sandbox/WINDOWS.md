@@ -42,6 +42,22 @@ Private storage uses `lifecycle.private_tmp` and is independent of filesystem bu
 
 ## Validation limits
 
-Public tests cover native filesystem/network policy, managed proxy allow/deny decisions, environment transport, binary stdin, status codes, descendant retirement, owner death, and storage cleanup. Each runtime-dependent test probes native MXC and reports `SKIP` when it is unavailable; those hosts retain green CI checks. The workflow includes skip diagnostics for debug and release tests. Hosts that gain MXC support automatically execute the native contracts. Configuration and unsupported-host rejection remain checked without MXC; a green check with skips does not establish native enforcement coverage.
+Public tests cover native filesystem/network policy, managed proxy allow/deny decisions, environment transport, binary stdin, status codes, descendant retirement, owner death, and storage cleanup. By default, each runtime-dependent test probes native MXC and reports `SKIP` when it is unavailable; those hosts retain green CI checks. The workflow includes skip diagnostics for debug and release tests. Hosts that gain MXC support automatically execute the native contracts. Configuration errors, Linux-only options, Seatbelt extensions, explicit cleanup timeouts, duplicate environment names, and unsupported proxy settings remain checked without MXC. A green check with skips does not establish native enforcement coverage.
+
+### Required native validation
+
+Before advancing a consumer source pin, require a successful [Sandbox CI](../../.github/workflows/mcp-console-sandbox.yml) run for that exact revision on a fresh MXC-capable Windows host. Dispatch the workflow at the candidate branch or tag and set `windows_mxc_runner` to the JSON array of labels selecting that runner. For example, `["self-hosted", "Windows", "X64", "mxc"]` selects a registered runner with those labels; the workflow does not provision one. An empty input keeps the ordinary optional-host checks on `windows-2025`.
+
+Selecting a runner enables `MCP_CONSOLE_SANDBOX_REQUIRE_MXC=1` for debug, release, and Bazel contracts. In this mode, unavailable native MXC fails the tests instead of skipping them. The workflow summary records the revision, runner, and required-mode setting. Check that the completed run's `headSha` matches the proposed consumer pin and retain its URL with the pin update. An optional-host run does not satisfy this prerequisite.
+
+For the same required Cargo validation locally, from `codex-rs`:
+
+```powershell
+$env:MCP_CONSOLE_SANDBOX_REQUIRE_MXC = '1'
+just test --locked -p mcp-console-sandbox --retries 0 --success-output final
+just test --locked --release -p mcp-console-sandbox --retries 0 --success-output final
+```
+
+The Windows Bazel targets inherit this variable too. Remove it to restore optional-host development checks.
 
 The fixture executable uses native Windows process APIs. For upstream tests invoking Python by name, put an actual interpreter on PATH rather than a Windows app execution alias.

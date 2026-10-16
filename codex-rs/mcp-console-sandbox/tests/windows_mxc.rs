@@ -83,6 +83,32 @@ fn mxc_launch_uses_the_default_policy() -> Result<()> {
 }
 
 #[test]
+fn required_validation_fails_when_native_mxc_is_unavailable() -> Result<()> {
+    if codex_sandboxing::windows_mxc_available() {
+        return Ok(());
+    }
+    let output = Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "mxc_launch_uses_the_default_policy",
+            "--nocapture",
+        ])
+        .env("MCP_CONSOLE_SANDBOX_REQUIRE_MXC", "1")
+        .output()?;
+    assert!(!output.status.success(), "{output:?}");
+    let diagnostic = format!(
+        "{}{}",
+        String::from_utf8(output.stdout)?,
+        String::from_utf8(output.stderr)?
+    );
+    assert!(
+        diagnostic.contains("required native MXC validation is unavailable"),
+        "{diagnostic}"
+    );
+    Ok(())
+}
+
+#[test]
 fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result<()> {
     use std::io::Read;
     use std::io::Write;

@@ -17,6 +17,7 @@ def windows_contract_test(name, src, extra_srcs = []):
             "CARGO_BIN_EXE_mcp-console-sandbox": "$(rlocationpath :mcp-console-sandbox)",
             "CARGO_BIN_EXE_mcp-console-sandbox-fixture": "$(rlocationpath :mcp-console-sandbox-fixture)",
         },
+        env_inherit = ["MCP_CONSOLE_SANDBOX_REQUIRE_MXC"],
         tags = ["no-sandbox"],
         target_compatible_with = ["@platforms//os:windows"],
         deps = all_crate_deps(
