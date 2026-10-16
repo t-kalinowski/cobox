@@ -61,6 +61,15 @@ pub fn macos_main() -> Result<()> {
     let (setup, channel) = accept(unsafe { OwnedFd::from_raw_fd(fd) })?;
     drop(channel);
     let profile = setup.seatbelt.context("native Seatbelt profile")?;
+    // Temporary diagnostic build: capture the exact enforced policy and ports.
+    eprintln!(
+        "proxy diagnostic pid={} HTTP_PROXY={:?} ALL_PROXY={:?} parameters={:?}\n{}",
+        std::process::id(),
+        setup.environment.get("HTTP_PROXY"),
+        setup.environment.get("ALL_PROXY"),
+        profile.parameters,
+        profile.policy
+    );
     apply_seatbelt(profile)?;
     let mut command = Command::new(&setup.command[0]);
     command
