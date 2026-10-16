@@ -24,7 +24,7 @@ jobs:
           components: rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
-          tool: nextest@0.9.103
+          tool: nextest@0.9.103,just@1.51.0
       - name: Record the host and port range
         run: |
           sw_vers
