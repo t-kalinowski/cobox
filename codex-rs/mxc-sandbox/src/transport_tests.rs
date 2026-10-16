@@ -19,6 +19,7 @@ fn command(args: Vec<String>) -> MxcCommand {
         sandbox_policy_cwd: PathBuf::from("workspace"),
         managed_network: None,
         command: args,
+        environment: HashMap::new(),
     }
 }
 

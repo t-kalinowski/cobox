@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use windows_sys::Win32::Foundation::RPC_E_CHANGED_MODE;
@@ -26,12 +27,8 @@ impl Drop for ComUninitializeGuard {
 }
 
 pub(super) fn run() -> Result<i32> {
-    ensure!(
-        crate::is_available(),
-        "native MXC is unavailable on this Windows build"
-    );
-    // Read the already-filtered wrapper environment, rejecting lossy values
-    // instead of inheriting a different environment inside the sandbox.
+    // The host helper retains trusted setup variables. The workload's exact
+    // environment travels in the bounded request instead of configuring it.
     let mut env = std::env::vars_os()
         .map(|(key, value)| {
             let key = key
@@ -46,8 +43,31 @@ pub(super) fn run() -> Result<i32> {
     // Serde errors can quote arbitrary payload values; do not print them to stderr.
     let command = crate::transport::decode(&mut env)
         .map_err(|_| anyhow::anyhow!("invalid MXC launcher request"))?;
-    // The transport itself proves this is an explicit child environment; it
-    // may intentionally contain no variables once launcher state is removed.
+    if std::env::args_os()
+        .nth(2)
+        .is_some_and(|arg| arg == "--target")
+    {
+        // This relay is already inside MXC and the retained Jobs. Ordinary
+        // descendants inherit enforcement without Windows rewriting their
+        // environment as it does during initial native process creation.
+        use std::os::windows::process::CommandExt;
+        let (program, args) = command
+            .command
+            .split_first()
+            .context("missing MXC command")?;
+        let status = std::process::Command::new(program)
+            .args(args)
+            .env_clear()
+            .envs(command.environment)
+            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+            .status()
+            .context("launching the MXC command")?;
+        return Ok(status.code().unwrap_or(/*default*/ 1));
+    }
+    ensure!(
+        crate::is_available(),
+        "native MXC is unavailable on this Windows build"
+    );
     let mask = unsafe { GetLogicalDrives() };
     ensure!(
         mask != 0,
@@ -65,14 +85,36 @@ pub(super) fn run() -> Result<i32> {
             volumes.push(root.to_path_buf());
         }
     }
-    let request = crate::policy::build_request(
+    let mut request = crate::policy::build_request(
         &command,
         &command_cwd,
-        env.into_iter()
+        command
+            .environment
+            .iter()
             .map(|(key, value)| format!("{key}={value}"))
             .collect(),
         &volumes,
         &platform_read_roots()?,
+    )?;
+    // Native creation requires LOCALAPPDATA, then replaces it along with TEMP
+    // and TMP. Give only this inert setup value and the target request to the
+    // in-environment relay; no executor environment is copied into MXC.
+    let mut target_environment = HashMap::from([("LOCALAPPDATA".to_owned(), String::new())]);
+    crate::transport::encode(&command, &mut target_environment)?;
+    request.env = target_environment
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    request.script_code = wxc_common::cmdline::cmdline_from_argv_for_context(
+        &[
+            std::env::current_exe()?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("MXC requires a Unicode launcher path"))?,
+            crate::CODEX_WINDOWS_MXC_ARG1.to_owned(),
+            "--target".to_owned(),
+        ],
+        wxc_common::cmdline::CommandLineContext::WindowsCreateProcess,
     )?;
     crate::native::launch(&request)
 }

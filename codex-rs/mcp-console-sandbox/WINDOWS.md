@@ -20,7 +20,9 @@ Distribute `mcp-console-sandbox.exe`. For debug builds omit `--release`. The [Ba
 
 ## Console transport
 
-The complete JSON reference is [PROTOCOL.md](PROTOCOL.md). Windows accepts `--config-env NAME -- command [args...]`; the descriptor transport is Unix-only. Environment-variable matching is case-insensitive. Hidden per-drive current-directory entries such as `=C:` are omitted from inherited target variables; explicit names containing `=` are invalid. The selected configuration variable never reaches the target. Native Windows process creation requires the target's `LOCALAPPDATA` variable to be defined, even if empty; omitting it produces Windows error 203.
+The complete JSON reference is [PROTOCOL.md](PROTOCOL.md). Windows accepts `--config-env NAME -- command [args...]`; the descriptor transport is Unix-only. Environment-variable matching is case-insensitive. Hidden per-drive current-directory entries such as `=C:` are omitted from inherited target variables; explicit names containing `=` are invalid. The selected configuration variable never reaches the target.
+
+Native setup uses the trusted executor environment. The exact target environment travels in the bounded launcher transport and is applied by a relay already inside MXC, after Windows has assigned its native package variables. This preserves configured `TEMP`, `TMP`, and `LOCALAPPDATA`, including an empty target environment, without letting target overrides configure platform-directory discovery or the native loader. The relay creates no Job or storage owner; the existing native owner still confirms retirement of the complete process tree.
 
 Every launch requires MXC support for its requested filesystem policy. Capability detection creates and closes a native process security environment; exported API names alone are insufficient. Unsupported hosts and policies fail before target execution, with no backend retry. External filesystem enforcement is unsupported on Windows.
 

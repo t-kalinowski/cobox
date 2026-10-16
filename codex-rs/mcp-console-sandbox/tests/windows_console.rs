@@ -151,6 +151,62 @@ fn console_configuration_runs_with_private_storage() -> anyhow::Result<()> {
 }
 
 #[test]
+fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let temporary = root.path().join("caller-temp");
+    std::fs::create_dir(&temporary)?;
+    let configured = json!({
+        "TMPDIR": temporary,
+        "Temp": temporary,
+        "tMp": temporary,
+        "LOCALAPPDATA": "target-local-data",
+        "SystemDrive": "target-system-drive",
+        "CONSOLE_UNICODE": "日本語🧊".repeat(5000),
+    });
+    for (inherit, expected) in [
+        (false, json!({})),
+        (false, configured.clone()),
+        (true, configured),
+    ] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(root.path())
+            .env("CONSOLE_HOST_ONLY", "must not reach a cleared workload")
+            .env(
+                "CONSOLE_POLICY",
+                json!({
+                    "extends": ":read-only", "network": "enabled",
+                    "inherit_environment": inherit, "environment": expected,
+                })
+                .to_string(),
+            )
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("context")
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stderr),
+            (Some(0), vec![]),
+            "inherit_environment={inherit}"
+        );
+        let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let environment = context["environment"].as_object().unwrap();
+        for (name, value) in expected.as_object().unwrap() {
+            assert_eq!(environment.get(name), Some(value), "{name}");
+        }
+        assert!(environment.keys().all(|name| {
+            name != "CONSOLE_POLICY" && !name.starts_with("CODEX_SANDBOX_LAUNCH_")
+        }));
+        if !inherit {
+            assert_eq!(environment, expected.as_object().unwrap());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn environment_transport_preserves_target_arguments() -> anyhow::Result<()> {
     if !mxc_support::available()? {
         return Ok(());
