@@ -4,13 +4,9 @@ use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 
-fn pidfd(pid: i32) -> io::Result<OwnedFd> {
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
-}
+// Linux 6.5 added this ancillary type; the pinned libc exposes SO_PASSPIDFD
+// but does not yet expose its matching message constant.
+const SCM_PIDFD: libc::c_int = 0x04;
 
 fn signal(fd: &OwnedFd, signal: i32) -> io::Result<()> {
     if unsafe {
@@ -99,6 +95,26 @@ pub fn configure_channel(stream: &UnixStream) -> io::Result<()> {
     {
         return Err(io::Error::last_os_error());
     }
+    if unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PASSPIDFD,
+            (&enabled as *const libc::c_int).cast(),
+            std::mem::size_of_val(&enabled) as libc::socklen_t,
+        )
+    } < 0
+    {
+        let error = io::Error::last_os_error();
+        if !matches!(
+            error.raw_os_error(),
+            Some(libc::ENOPROTOOPT | libc::EPERM | libc::EACCES)
+        ) {
+            return Err(error);
+        }
+        // Older kernels or host policy can disable this optional handle. The
+        // private channel still retires init; never look up a queued numeric PID.
+    }
     Ok(())
 }
 pub fn receive_ready(stream: &mut UnixStream, _: i32) -> io::Result<Option<Target>> {
@@ -114,7 +130,13 @@ pub fn receive_ready(stream: &mut UnixStream, _: i32) -> io::Result<Option<Targe
     message.msg_control = control.as_mut_ptr().cast();
     // musl uses socklen_t here; glibc uses size_t. The fixed buffer fits both.
     message.msg_controllen = std::mem::size_of_val(&control) as _;
-    let count = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut message, libc::MSG_DONTWAIT) };
+    let count = unsafe {
+        libc::recvmsg(
+            stream.as_raw_fd(),
+            &mut message,
+            libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC,
+        )
+    };
     if count < 0 {
         let error = io::Error::last_os_error();
         if error.kind() == io::ErrorKind::WouldBlock {
@@ -122,43 +144,65 @@ pub fn receive_ready(stream: &mut UnixStream, _: i32) -> io::Result<Option<Targe
         }
         return Err(error);
     }
+    let mut credentials = None;
+    let mut pidfd = None;
+    let mut invalid = false;
+    let mut descriptor_error = None;
+    let mut header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+    while !header.is_null() {
+        // Adopt every delivered descriptor before rejecting the message, so
+        // truncation, invalid credentials, or a later error cannot leak it.
+        let length = unsafe { (*header).cmsg_len as usize };
+        let level = unsafe { (*header).cmsg_level };
+        let kind = unsafe { (*header).cmsg_type };
+        let data = unsafe { libc::CMSG_DATA(header) };
+        if level == libc::SOL_SOCKET && matches!(kind, SCM_PIDFD | libc::SCM_RIGHTS) {
+            let payload = length - unsafe { libc::CMSG_LEN(0) as usize };
+            for offset in (0..payload / std::mem::size_of::<i32>())
+                .map(|index| index * std::mem::size_of::<i32>())
+            {
+                let descriptor = unsafe { data.add(offset).cast::<i32>().read_unaligned() };
+                if descriptor < 0 {
+                    // SCM_PIDFD carries a negative errno if allocation fails.
+                    descriptor_error = Some(io::Error::from_raw_os_error(-descriptor));
+                } else {
+                    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+                    if kind == SCM_PIDFD && payload == std::mem::size_of::<i32>() && pidfd.is_none()
+                    {
+                        pidfd = Some(descriptor);
+                    } else {
+                        invalid = true;
+                    }
+                }
+            }
+            invalid |= kind != SCM_PIDFD || payload != std::mem::size_of::<i32>();
+        } else if level == libc::SOL_SOCKET
+            && kind == libc::SCM_CREDENTIALS
+            && length
+                == unsafe { libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as usize }
+            && credentials.is_none()
+        {
+            credentials = Some(unsafe { data.cast::<libc::ucred>().read_unaligned() });
+        } else {
+            invalid = true;
+        }
+        header = unsafe { libc::CMSG_NXTHDR(&message, header) };
+    }
     if count == 0 {
         return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
     }
-    if count != 1 || byte != 1 || message.msg_flags & libc::MSG_CTRUNC != 0 {
+    if count != 1 || byte != 1 || message.msg_flags & libc::MSG_CTRUNC != 0 || invalid {
         return Err(io::Error::other("invalid native readiness"));
     }
-    let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
-    if header.is_null()
-        || unsafe {
-            (*header).cmsg_level != libc::SOL_SOCKET
-                || (*header).cmsg_type != libc::SCM_CREDENTIALS
-                || (*header).cmsg_len as usize
-                    != libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as usize
-        }
-    {
-        return Err(io::Error::other("native readiness lacks credentials"));
+    if let Some(error) = descriptor_error {
+        return Err(error);
     }
-    let credentials = unsafe {
-        libc::CMSG_DATA(header)
-            .cast::<libc::ucred>()
-            .read_unaligned()
+    let Some(credentials) = credentials else {
+        return Err(io::Error::other("native readiness lacks credentials"));
     };
     if credentials.uid != unsafe { libc::geteuid() } || credentials.pid <= 1 {
         return Err(io::Error::other("invalid native readiness identity"));
     }
-    let pidfd = match pidfd(credentials.pid) {
-        Ok(fd) => Some(fd),
-        Err(error)
-            if matches!(
-                error.raw_os_error(),
-                Some(libc::ENOSYS | libc::EPERM | libc::EACCES)
-            ) =>
-        {
-            None
-        }
-        Err(error) => return Err(error),
-    };
     Ok(Some(Target {
         channel: stream.try_clone()?,
         pidfd,

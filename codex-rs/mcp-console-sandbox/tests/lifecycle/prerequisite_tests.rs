@@ -59,33 +59,59 @@ fn explicit_backend_selection_does_not_fall_back_when_namespaces_are_denied() {
     }
 }
 
-fn constrained_runner(directory: &Path, unavailable: i64) -> Command {
+#[derive(Clone, Copy)]
+enum Unavailable {
+    ReadinessPidfd,
+    PidfdSignal,
+    NumericPidfd,
+}
+
+fn constrained_runner(directory: &Path, unavailable: Unavailable) -> Command {
     let mut command = runner(directory);
     // Restrict the actual process and all of its native helpers, not a mocked
     // capability probe. Namespace lifetime must still retire detached children.
+    let statement = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let equal = |k, jt, jf| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf,
+        k,
+    };
+    let mut filters = match unavailable {
+        Unavailable::ReadinessPidfd => vec![
+            statement(0x20, 0),
+            equal(libc::SYS_setsockopt as u32, 0, 3),
+            statement(0x20, 32),
+            equal(libc::SO_PASSPIDFD as u32, 0, 1),
+            statement(0x06, 0x00050000 | libc::ENOPROTOOPT as u32),
+        ],
+        Unavailable::PidfdSignal | Unavailable::NumericPidfd => {
+            let (number, error) = match unavailable {
+                Unavailable::PidfdSignal => (libc::SYS_pidfd_send_signal, libc::ENOSYS),
+                _ => (libc::SYS_pidfd_open, libc::EIO),
+            };
+            vec![
+                statement(0x20, 0),
+                equal(number as u32, 0, 1),
+                statement(0x06, 0x00050000 | error as u32),
+            ]
+        }
+    };
+    filters.extend([
+        statement(0x20, 0),
+        equal(libc::SYS_prctl as u32, 0, 3),
+        statement(0x20, 16),
+        equal(libc::PR_SET_CHILD_SUBREAPER as u32, 0, 1),
+        statement(0x06, 0x00050000 | libc::ENOSYS as u32),
+        statement(0x06, 0x7fff0000),
+    ]);
     unsafe {
         command.pre_exec(move || {
-            let statement = |code, k| libc::sock_filter {
-                code,
-                jt: 0,
-                jf: 0,
-                k,
-            };
-            let equal = |k, jt, jf| libc::sock_filter {
-                code: 0x15,
-                jt,
-                jf,
-                k,
-            };
-            let mut filters = [
-                statement(0x20, 0),
-                equal(unavailable as u32, 3, 0),
-                equal(libc::SYS_prctl as u32, 0, 3),
-                statement(0x20, 16),
-                equal(libc::PR_SET_CHILD_SUBREAPER as u32, 0, 1),
-                statement(0x06, 0x00050000 | libc::ENOSYS as u32),
-                statement(0x06, 0x7fff0000),
-            ];
             let program = libc::sock_fprog {
                 len: filters.len() as u16,
                 filter: filters.as_mut_ptr(),
@@ -104,7 +130,7 @@ fn constrained_runner(directory: &Path, unavailable: i64) -> Command {
 #[test]
 fn namespace_lifetime_does_not_require_pidfds_or_a_host_subreaper() {
     let directory = tempfile::tempdir().unwrap();
-    let command = constrained_runner(directory.path(), libc::SYS_pidfd_open);
+    let command = constrained_runner(directory.path(), Unavailable::ReadinessPidfd);
     let mut request = fixture("lifecycle", &["nonzero"]);
     request["lifecycle"] =
         json!({"parent_pid": std::process::id(), "private_tmp": {"environment": ["TMPDIR"]}});
@@ -116,14 +142,142 @@ fn namespace_lifetime_does_not_require_pidfds_or_a_host_subreaper() {
 }
 
 #[test]
+fn readiness_never_opens_a_handle_from_a_numeric_pid() {
+    let directory = tempfile::tempdir().unwrap();
+    let command = constrained_runner(directory.path(), Unavailable::NumericPidfd);
+    let output = run_command(command, frame(&request(&["/bin/echo", "launched"])), &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"launched\n");
+    assert_eq!(output.stderr, b"");
+}
+
+fn readiness_pidfds_available() -> bool {
+    use std::os::unix::net::UnixStream;
+
+    // The replacement-identity check needs kernel-attached handles. Older
+    // kernels exercise channel-only retirement in the constrained-host tests.
+    let (probe, _) = UnixStream::pair().unwrap();
+    let enabled: libc::c_int = 1;
+    if unsafe {
+        libc::setsockopt(
+            probe.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PASSPIDFD,
+            (&enabled as *const libc::c_int).cast(),
+            std::mem::size_of_val(&enabled) as libc::socklen_t,
+        )
+    } < 0
+    {
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOPROTOOPT)
+        );
+        eprintln!("kernel-attached pidfds are unavailable");
+        return false;
+    }
+    true
+}
+
+#[test]
+fn invalid_readiness_closes_received_handles_before_retirement() {
+    if !readiness_pidfds_available() {
+        return;
+    }
+    for (failure, expected) in [
+        ("truncated", "invalid native readiness"),
+        ("identity", "invalid native readiness identity"),
+        ("allocation", "Too many open files"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let library = startup::interposer(directory.path());
+        let mut command = runner(directory.path());
+        startup::preload(&mut command, &library);
+        command.env("SANDBOX_TEST_INVALID_READINESS", failure);
+        let mut request = request(&["/bin/echo", "must not run"]);
+        request["lifecycle"] = json!({"cleanup_timeout_ms": 100});
+        let output = run_command(command, frame(&request), &[]);
+        assert_eq!(output.status.code(), Some(1), "{failure}: {output:?}");
+        assert_eq!(output.stdout, b"");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{failure}: {output:?}"
+        );
+    }
+}
+
+#[test]
+fn retirement_uses_the_readiness_handle_instead_of_a_numeric_pid() {
+    if !readiness_pidfds_available() {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let library = startup::interposer(directory.path());
+    let mut replacement = Command::new("/bin/sleep")
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut command = runner(directory.path());
+    startup::preload(&mut command, &library);
+    let (mut events, event_writer) = std::io::pipe().unwrap();
+    let (release, mut release_writer) = std::io::pipe().unwrap();
+    command
+        .env("SANDBOX_TEST_SETUP_STAGE", "blocked")
+        .env("SANDBOX_TEST_READINESS_PID", replacement.id().to_string())
+        .env(
+            "SANDBOX_TEST_EVENT_FD",
+            event_writer.as_raw_fd().to_string(),
+        )
+        .env("SANDBOX_TEST_RELEASE_FD", release.as_raw_fd().to_string());
+    startup::inherit(
+        &mut command,
+        &[event_writer.as_raw_fd(), release.as_raw_fd()],
+    );
+    let mut request = request(&["/bin/echo", "must not run"]);
+    request["lifecycle"] = json!({"sigterm": "retire", "cleanup_timeout_ms": 100, "private_tmp": {"parent": directory.path(), "environment": ["TMPDIR"]}});
+    let (child, mut bootstrap) = spawn(&mut command);
+    drop(command);
+    drop(event_writer);
+    drop(release);
+    bootstrap.write_all(&frame(&request)).unwrap();
+    // Init is stopped and the runner is gated in its first setup write. This
+    // orders cancellation before the next setup/retirement iteration.
+    events.read_exact(&mut [0; 4]).unwrap();
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+    release_writer.write_all(b"x").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let replacement_status = replacement.try_wait().unwrap();
+    if replacement_status.is_none() {
+        replacement.kill().unwrap();
+        replacement.wait().unwrap();
+    }
+    assert!(
+        replacement_status.is_none(),
+        "retirement killed the unrelated replacement process: {output:?}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"");
+    assert!(!std::fs::read_dir(directory.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("sandbox-")
+    }));
+}
+
+#[test]
 fn constrained_host_retires_detached_children_and_forwards_interrupts() {
     use std::io::BufRead;
     use std::io::BufReader;
     for (operation, unavailable) in [
-        ("normal-tree", libc::SYS_pidfd_open),
-        ("interrupted", libc::SYS_pidfd_open),
-        ("detached", libc::SYS_pidfd_open),
-        ("detached", libc::SYS_pidfd_send_signal),
+        ("normal-tree", Unavailable::ReadinessPidfd),
+        ("interrupted", Unavailable::ReadinessPidfd),
+        ("detached", Unavailable::ReadinessPidfd),
+        ("detached", Unavailable::PidfdSignal),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let mut command = constrained_runner(directory.path(), unavailable);
@@ -163,7 +317,7 @@ fn constrained_host_retires_detached_children_and_forwards_interrupts() {
 fn a_stopped_init_without_pidfds_reports_incomplete_cleanup() {
     let directory = tempfile::tempdir().unwrap();
     let library = startup::interposer(directory.path());
-    let mut command = constrained_runner(directory.path(), libc::SYS_pidfd_open);
+    let mut command = constrained_runner(directory.path(), Unavailable::ReadinessPidfd);
     startup::preload(&mut command, &library);
     let (mut events, event_writer) = std::io::pipe().unwrap();
     let (release, mut release_writer) = std::io::pipe().unwrap();

@@ -107,6 +107,8 @@ static ssize_t observed_recv(int fd, void *buffer, size_t size, int flags) {
     return count;
 }
 #else
+static int readiness_descriptor = -1;
+
 ssize_t recvmsg(int fd, struct msghdr *message, int flags) {
     ssize_t (*real)(int, struct msghdr *, int) = NEXT(recvmsg);
     ssize_t count = real(fd, message, flags);
@@ -114,7 +116,29 @@ ssize_t recvmsg(int fd, struct msghdr *message, int flags) {
         for (struct cmsghdr *c = CMSG_FIRSTHDR(message); c; c = CMSG_NXTHDR(message, c)) {
             if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS)
                 ready(fd, ((struct ucred *)CMSG_DATA(c))->pid);
+            // Model a queued credential whose numeric PID now names another
+            // process. The kernel-attached pidfd must retain the real sender.
+            const char *replacement = getenv("SANDBOX_TEST_READINESS_PID");
+            if (replacement && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS)
+                ((struct ucred *)CMSG_DATA(c))->pid = atoi(replacement);
+            const char *failure = getenv("SANDBOX_TEST_INVALID_READINESS");
+            if (!failure) continue;
+            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS && strcmp(failure, "identity") == 0)
+                ((struct ucred *)CMSG_DATA(c))->uid = geteuid() + 1;
+            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == 0x04) { // SCM_PIDFD
+                int *descriptor = (int *)CMSG_DATA(c);
+                if (*descriptor < 0) _exit(125);
+                if (strcmp(failure, "allocation") == 0) {
+                    close(*descriptor);
+                    *descriptor = -EMFILE;
+                } else {
+                    if (!(fcntl(*descriptor, F_GETFD) & FD_CLOEXEC)) _exit(125);
+                    readiness_descriptor = *descriptor;
+                }
+            }
         }
+        const char *failure = getenv("SANDBOX_TEST_INVALID_READINESS");
+        if (failure && strcmp(failure, "truncated") == 0) message->msg_flags |= MSG_CTRUNC;
     }
     return count;
 }
@@ -199,6 +223,11 @@ int execvp(const char *file, char *const argv[]) {
 }
 int waitid(idtype_t type, id_t pid, siginfo_t *info, int options) {
     int (*real)(idtype_t, id_t, siginfo_t *, int) = NEXT(waitid);
+    if (readiness_descriptor >= 0) {
+        // Rejection must close an installed pidfd before retirement begins.
+        if (fcntl(readiness_descriptor, F_GETFD) >= 0 || errno != EBADF) _exit(125);
+        readiness_descriptor = -1;
+    }
     if (getenv("SANDBOX_TEST_FAIL_WAIT")) { errno = EIO; return -1; }
     return real(type, pid, info, options);
 }
