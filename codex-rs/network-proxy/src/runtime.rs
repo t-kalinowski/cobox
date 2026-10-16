@@ -266,6 +266,8 @@ impl LocalBindingPolicy {
 
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
+    #[cfg(windows)]
+    pub(crate) windows_client_job: Option<Arc<std::os::windows::io::OwnedHandle>>,
     /// Belongs to this proxy; config retains omission for launches on other executors.
     pub(crate) local_binding_policy: LocalBindingPolicy,
     pub(crate) proxy_private_ips_via_upstream: bool,
@@ -306,6 +308,8 @@ impl Clone for NetworkProxyState {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            #[cfg(windows)]
+            windows_client_job: self.windows_client_job.clone(),
             local_binding_policy: self.local_binding_policy,
             proxy_private_ips_via_upstream: self.proxy_private_ips_via_upstream,
             reloader: self.reloader.clone(),
@@ -323,6 +327,14 @@ impl Clone for NetworkProxyState {
 }
 
 impl NetworkProxyState {
+    /// Admits only TCP clients in this host-owned Job, before reading routing metadata.
+    /// Dedicated listeners use this when the sandbox permits host loopback. The Job
+    /// must contain the workload before it runs and disallow descendant breakaway.
+    #[cfg(windows)]
+    pub fn set_windows_client_job(&mut self, job: std::os::windows::io::OwnedHandle) {
+        self.windows_client_job = Some(Arc::new(job));
+    }
+
     /// Selects routing for permitted private IPs without changing destination policy.
     /// Set by the execution host, independently of reloadable or remote policy.
     pub fn set_proxy_private_ips_via_upstream(&mut self, enabled: bool) {
@@ -410,6 +422,8 @@ impl NetworkProxyState {
         Self {
             credential_broker,
             state: Arc::new(RwLock::new(state)),
+            #[cfg(windows)]
+            windows_client_job: None,
             local_binding_policy,
             proxy_private_ips_via_upstream: false,
             reloader,

@@ -26,6 +26,7 @@ pub use bwrap::system_bwrap_warning;
 pub use codex_mxc_sandbox::CODEX_WINDOWS_MXC_ARG1;
 pub use codex_mxc_sandbox::is_available as windows_mxc_available;
 pub use codex_mxc_sandbox::run_main as run_windows_mxc_main;
+pub use codex_mxc_sandbox::run_main_with_environment as run_windows_mxc_main_with_environment;
 pub use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
 pub use denial::is_likely_executor_managed_sandbox_denied;
 pub use denial::is_likely_sandbox_denied;

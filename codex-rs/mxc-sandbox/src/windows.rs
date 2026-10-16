@@ -25,7 +25,7 @@ impl Drop for ComUninitializeGuard {
     }
 }
 
-pub(super) fn run() -> Result<i32> {
+pub(super) fn run(environment: Option<HashMap<String, String>>) -> Result<i32> {
     ensure!(
         crate::is_available(),
         "native MXC is unavailable on this Windows build"
@@ -46,6 +46,7 @@ pub(super) fn run() -> Result<i32> {
     // Serde errors can quote arbitrary payload values; do not print them to stderr.
     let command = crate::transport::decode(&mut env)
         .map_err(|_| anyhow::anyhow!("invalid MXC launcher request"))?;
+    let env = environment.unwrap_or(env);
     // The transport itself proves this is an explicit child environment; it
     // may intentionally contain no variables once launcher state is removed.
     let command_cwd = std::env::current_dir()?;

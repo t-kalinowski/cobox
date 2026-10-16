@@ -136,6 +136,14 @@ pub struct LinuxSandboxCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Original stdin inherited through bubblewrap without its monitor retaining a reader.
+    #[arg(long = "stdin-fd", hide = true)]
+    pub stdin_fd: Option<libc::c_int>,
+
+    /// Native execution gate used only by run_main_with_target_setup callers.
+    #[arg(long = "target-setup-fd", hide = true)]
+    pub target_setup_fd: Option<libc::c_int>,
+
     /// Inherited fallback mounts that must be authenticated before sandboxed code runs.
     #[arg(long = "verify-fd-mount", hide = true)]
     pub verify_fd_mounts: Vec<String>,
@@ -164,6 +172,12 @@ pub struct LinuxSandboxCommand {
 /// 2. Apply in-process restrictions (no_new_privs + seccomp).
 /// 3. `execvp` into the final command.
 pub fn run_main() -> ! {
+    run_main_with_target_setup(/*setup*/ None)
+}
+
+pub(crate) fn run_main_with_target_setup(
+    setup: Option<fn(Vec<String>, std::os::fd::OwnedFd) -> !>,
+) -> ! {
     let LinuxSandboxCommand {
         sandbox_policy_cwd,
         command_cwd,
@@ -173,14 +187,35 @@ pub fn run_main() -> ! {
         managed_network,
         proxy_route_spec,
         verify_fd_mounts,
+        stdin_fd,
+        target_setup_fd,
         no_proc,
         inherit_pid_namespace,
         command,
     } = LinuxSandboxCommand::parse();
     let allow_network_for_proxy = managed_network.is_some();
 
+    if let Some(fd) = target_setup_fd {
+        assert!(
+            fd > libc::STDERR_FILENO && setup.is_some() && !use_legacy_landlock,
+            "target setup requires bubblewrap, a native hook and a private descriptor"
+        );
+    }
+
     if command.is_empty() {
         panic!("No command specified to execute.");
+    }
+    if let Some(fd) = stdin_fd {
+        assert!(
+            apply_seccomp_then_exec && fd > libc::STDERR_FILENO,
+            "stdin fd requires the inner sandbox stage"
+        );
+        assert!(
+            unsafe { libc::dup2(fd, libc::STDIN_FILENO) } >= 0,
+            "restore sandbox command stdin: {}",
+            std::io::Error::last_os_error()
+        );
+        close_fd_or_panic(fd, "close transferred sandbox stdin");
     }
     if !apply_seccomp_then_exec && !verify_fd_mounts.is_empty() {
         panic!("--verify-fd-mount is only supported in the inner sandbox stage");
@@ -243,6 +278,11 @@ pub fn run_main() -> ! {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
 
+        if let Some(fd) = target_setup_fd {
+            let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+            setup.unwrap_or_else(|| panic!("missing native hook"))(command, descriptor);
+        }
+
         let signal_mask = ForwardedSignalMask::block();
         let command_pid = unsafe { libc::fork() };
         if command_pid < 0 {
@@ -256,6 +296,9 @@ pub fn run_main() -> ! {
             exec_or_panic(command);
         }
 
+        // Only the command owns its input after fork. Retaining a reader here
+        // would hide command-side stdin closure from the caller's writer.
+        close_fd_or_panic(libc::STDIN_FILENO, "release namespace init stdin");
         let signal_forwarders = install_bwrap_signal_forwarders(command_pid);
         signal_mask.restore();
         loop {
@@ -278,7 +321,10 @@ pub fn run_main() -> ! {
         }
     }
 
-    if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
+    if file_system_sandbox_policy.has_full_disk_write_access()
+        && !allow_network_for_proxy
+        && target_setup_fd.is_none()
+    {
         if let Err(e) = apply_permission_profile_to_current_thread(
             &permission_profile,
             &sandbox_policy_cwd,
@@ -305,6 +351,7 @@ pub fn run_main() -> ! {
         let options = BwrapOptions {
             mount_proc: !no_proc && !inherit_pid_namespace,
             inherit_pid_namespace,
+            require_process_isolation: target_setup_fd.is_some(),
             network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
             mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()
                 && Path::new(WSL_INTEROP_DIR).is_dir(),
@@ -328,7 +375,7 @@ pub fn run_main() -> ! {
             crate::wslg::ensure_supported_path(&executable)
                 .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
         }
-        let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        let mut inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
             permission_profile: &permission_profile,
@@ -336,6 +383,9 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        if let Some(fd) = target_setup_fd {
+            inner.splice(1..1, ["--target-setup-fd".to_string(), fd.to_string()]);
+        }
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
@@ -615,6 +665,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     }
 
     drop(preserved_files);
+    close_fd_or_panic(libc::STDIN_FILENO, "release bubblewrap supervisor stdin");
     close_child_exec_start_read(exec_start_pipe[0]);
     let protected_create_monitor = ProtectedCreateMonitor::start(&protected_create_targets);
     let signal_forwarders = install_bwrap_signal_forwarders(pid);

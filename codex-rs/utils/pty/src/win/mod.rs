@@ -45,11 +45,13 @@ pub(crate) mod conpty;
 mod job;
 mod procthreadattr;
 mod psuedocon;
+mod retirement;
 
 pub use conpty::ConPtySystem;
 pub use job::JobObject;
 pub use psuedocon::PsuedoCon;
 pub use psuedocon::conpty_supported;
+pub use retirement::retire_job;
 
 #[derive(Debug)]
 pub struct WinChild {

@@ -463,6 +463,8 @@ pub use setup_mutex::acquire_sandbox_setup_lock;
 #[cfg(target_os = "windows")]
 pub use stdio_bridge::forward_sandbox_session_stdio;
 #[cfg(target_os = "windows")]
+pub use stdio_bridge::forward_sandbox_session_stdio_with_cancellation;
+#[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use token::LocalSid;
 #[cfg(target_os = "windows")]
