@@ -259,24 +259,50 @@ fn main() -> anyhow::Result<()> {
         "connect" => {
             TcpStream::connect(args.next().context("address")?)?;
         }
-        "proxy-get" => {
+        "proxy-get" | "proxy-get-gated" => {
             let url = args.next().context("URL")?;
             let address = std::env::var("HTTP_PROXY")?;
-            let mut stream = TcpStream::connect(address.trim_start_matches("http://"))
-                .with_context(|| format!("connect to HTTP proxy {address}"))?;
-            let authority = url
-                .strip_prefix("http://")
-                .context("HTTP URL")?
-                .split('/')
-                .next()
-                .context("authority")?;
-            write!(
-                stream,
-                "GET {url} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
-            )
-            .context("send HTTP request through proxy")?;
-            std::io::copy(&mut stream, &mut std::io::stdout())
-                .context("read HTTP response from proxy")?;
+            let gated = operation == "proxy-get-gated";
+            if gated {
+                println!("READY {address} {}", std::env::var("ALL_PROXY")?);
+                std::io::stdout().flush()?;
+                anyhow::ensure!(
+                    std::io::stdin().read_line(&mut String::new())? != 0,
+                    "proxy connection gate closed"
+                );
+            }
+            let result = (|| -> anyhow::Result<()> {
+                let mut stream = TcpStream::connect(address.trim_start_matches("http://"))
+                    .with_context(|| format!("connect to HTTP proxy {address}"))?;
+                let authority = url
+                    .strip_prefix("http://")
+                    .context("HTTP URL")?
+                    .split('/')
+                    .next()
+                    .context("authority")?;
+                write!(
+                    stream,
+                    "GET {url} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+                )
+                .context("send HTTP request through proxy")?;
+                std::io::copy(&mut stream, &mut std::io::stdout())
+                    .context("read HTTP response from proxy")?;
+                Ok(())
+            })();
+            if gated {
+                let code = i32::from(result.is_err());
+                if let Err(error) = result {
+                    eprintln!("Error: {error:#}");
+                }
+                println!("\nRESULT {code}");
+                std::io::stdout().flush()?;
+                anyhow::ensure!(
+                    std::io::stdin().read_line(&mut String::new())? != 0,
+                    "proxy retirement gate closed"
+                );
+                std::process::exit(code);
+            }
+            result?;
         }
         #[cfg(target_os = "macos")]
         "pty" => {
