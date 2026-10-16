@@ -3,6 +3,45 @@ use pretty_assertions::assert_eq;
 use std::io::BufRead;
 use std::io::BufReader;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn root_write_with_local_denial_respects_foreign_host_ownership() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = std::fs::metadata("/").unwrap();
+    if root.uid() == unsafe { libc::geteuid() } || root.mode() & 0o022 != 0 {
+        eprintln!("requires a foreign filesystem root without group or other writes");
+        return;
+    }
+    let workspace = tempfile::tempdir().unwrap();
+    let created = workspace.path().join("created");
+    let secret = workspace.path().join("secret");
+    std::fs::write(&secret, "private").unwrap();
+    let mut request = fixture("write", &[created.to_str().unwrap()]);
+    request["cwd"] = json!("/");
+    request["filesystem"] = json!({"kind": "restricted", "entries": [
+        {"path": {"type": "special", "value": {"kind": "root"}}, "access": "write"},
+        {"path": {"type": "path", "path": secret}, "access": "deny"}
+    ]});
+    request["network"] = json!("enabled");
+    let output = run(frame(&request), &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(std::fs::read(&created).unwrap(), b"created");
+    assert_eq!(std::fs::read(&secret).unwrap(), b"private");
+    request["command"] = json!([
+        "/bin/sh",
+        "-c",
+        "if cat \"$1\" >/dev/null 2>&1; then exit 13; fi",
+        "sh",
+        secret
+    ]);
+    let output = run(frame(&request), &[]);
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), vec![], vec![])
+    );
+}
+
 #[test]
 fn unrestricted_filesystem_preserves_independent_network_policy() {
     let outside = tempfile::tempdir().unwrap();

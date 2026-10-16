@@ -1291,6 +1291,24 @@ fn append_empty_directory_args(bwrap_args: &mut BwrapArgs, path: &Path) {
 
 fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
     if path.file_name().is_some_and(is_protected_metadata_name) {
+        let parent = path
+            .parent()
+            .ok_or_else(|| CodexErr::Fatal("metadata path must have a parent".to_string()))?;
+        if fs::metadata(parent)?.uid() != unsafe { libc::geteuid() } {
+            match rustix::fs::accessat(
+                rustix::fs::CWD,
+                parent,
+                rustix::fs::Access::WRITE_OK,
+                rustix::fs::AtFlags::EACCESS,
+            ) {
+                // A grant cannot override host ownership. The sandbox drops
+                // capabilities and cannot chmod this foreign, unwritable parent
+                // to create metadata, so no synthetic mount target is needed.
+                Err(rustix::io::Errno::ACCESS) => return Ok(()),
+                Ok(()) => {}
+                Err(error) => return Err(io::Error::from(error).into()),
+            }
+        }
         append_empty_directory_args(bwrap_args, path);
         bwrap_args
             .synthetic_mount_targets
