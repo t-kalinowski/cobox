@@ -1,0 +1,309 @@
+#![cfg(windows)]
+
+#[path = "windows_mxc_support/mod.rs"]
+mod mxc_support;
+
+use anyhow::Context;
+use anyhow::Result;
+use codex_utils_cargo_bin::cargo_bin;
+use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
+use std::io::BufRead;
+use std::io::Write;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
+use std::path::Path;
+use std::process::Child;
+use std::process::Command;
+use std::process::Stdio;
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+use windows_sys::Win32::System::Threading::OpenProcess;
+use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
+use windows_sys::Win32::System::Threading::PROCESS_TERMINATE;
+use windows_sys::Win32::System::Threading::TerminateProcess;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+fn configuration(root: &Path) -> Value {
+    json!({
+        "extends": ":read-only", "network": "enabled",
+        "lifecycle": {"private_tmp": {"parent": root, "environment": ["TMPDIR"]}},
+    })
+}
+
+fn runner(root: &Path, operation: &str) -> Result<Command> {
+    let mut command = Command::new(cargo_bin("mcp-console-sandbox")?);
+    command
+        .current_dir(root)
+        .env("CONSOLE_POLICY", configuration(root).to_string())
+        .args(["--config-env", "CONSOLE_POLICY", "--"])
+        .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg(operation)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    Ok(command)
+}
+
+struct Process(OwnedHandle);
+
+impl Process {
+    fn open(pid: u32) -> Result<Self> {
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                /*binherithandle*/ 0,
+                pid,
+            )
+        };
+        anyhow::ensure!(
+            !handle.is_null(),
+            "open fixture {pid}: {}",
+            std::io::Error::last_os_error()
+        );
+        Ok(Self(unsafe { OwnedHandle::from_raw_handle(handle) }))
+    }
+
+    fn wait(&self) {
+        assert_eq!(
+            unsafe {
+                WaitForSingleObject(self.0.as_raw_handle(), /*dwmilliseconds*/ 10_000)
+            },
+            WAIT_OBJECT_0,
+            "fixture process survived retirement"
+        );
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        unsafe {
+            TerminateProcess(self.0.as_raw_handle(), /*uexitcode*/ 1);
+            WaitForSingleObject(self.0.as_raw_handle(), /*dwmilliseconds*/ 5_000);
+        }
+    }
+}
+
+fn ready(child: &mut Child) -> Result<Value> {
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.as_mut().context("fixture stdout")?)
+        .read_line(&mut line)?;
+    serde_json::from_str(&line).context("fixture readiness")
+}
+
+#[test]
+fn binary_stdin_is_preserved_through_eof() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "copy-stdin")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let input: Vec<u8> = (0..256)
+        .cycle()
+        .take(512 * 1024)
+        .map(|byte| byte as u8)
+        .collect();
+    let expected = input.clone();
+    let mut stdin = child.stdin.take().context("runner stdin")?;
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child.wait_with_output()?;
+    writer.join().expect("input writer")?;
+    process.wait();
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), expected, vec![])
+    );
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn read_only_policy_denies_target_writes() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let config = configuration(root.path());
+    let forbidden = root.path().join("forbidden");
+    let output = runner(root.path(), "probe-write")?
+        .env("CONSOLE_POLICY", config.to_string())
+        .arg(&forbidden)
+        .output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"write denied\n".to_vec(), vec![])
+    );
+    assert!(!forbidden.exists());
+    Ok(())
+}
+
+#[test]
+fn root_exit_retires_descendants_before_removing_storage() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let config = configuration(root.path());
+    let mut child = runner(root.path(), "tree")?
+        .env("CONSOLE_POLICY", config.to_string())
+        .spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    assert!(temporary.join("held-by-descendant").exists());
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    process.wait();
+    descendant.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(42), vec![], vec![])
+    );
+    assert!(!temporary.exists());
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn private_storage_waits_for_a_transient_sharing_violation() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(temporary.join("held-by-descendant"))?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    descendant.wait();
+    assert_eq!(
+        unsafe {
+            WaitForSingleObject(process.0.as_raw_handle(), /*dwmilliseconds*/ 1_000)
+        },
+        WAIT_TIMEOUT,
+        "cleanup completed before the sharing violation was released"
+    );
+    drop(held);
+    process.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(42), vec![], vec![])
+    );
+    assert!(!temporary.exists());
+    Ok(())
+}
+
+#[test]
+fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(temporary.join("held-by-descendant"))?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    process.wait();
+    descendant.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let error = String::from_utf8(output.stderr)?;
+    assert!(
+        error.contains("remove retired Windows private storage"),
+        "{error}"
+    );
+    assert!(error.contains("os error 32"), "{error}");
+    assert!(temporary.join("held-by-descendant").is_file());
+    drop(held);
+    Ok(())
+}
+
+#[test]
+fn direct_caller_death_retires_workload_and_storage() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let config = configuration(root.path());
+    let mut owner = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg("owner")
+        .arg(cargo_bin("mcp-console-sandbox")?)
+        .current_dir(root.path())
+        .env("CONSOLE_POLICY", config.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let owner_process = Process::open(owner.id())?;
+    let receipt = ready(&mut owner)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let processes = ["runner", "root", "descendant"]
+        .map(|name| Process::open(receipt[name].as_u64().context("fixture pid")? as u32));
+    let [runner, target, descendant] = processes;
+    let (runner, target, descendant) = (runner?, target?, descendant?);
+    owner.kill()?;
+    owner_process.wait();
+    runner.wait();
+    target.wait();
+    descendant.wait();
+    let output = owner.wait_with_output()?;
+    assert_eq!(output.stderr, Vec::<u8>::new());
+    assert!(!temporary.exists());
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn runner_loss_retires_descendants_and_retains_storage() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree-hold")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let target = Process::open(receipt["root"].as_u64().context("root pid")? as u32)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    child.kill()?;
+    process.wait();
+    target.wait();
+    descendant.wait();
+    child.wait()?;
+    assert!(Path::new(receipt["temporary"].as_str().context("private storage")?).is_dir());
+    Ok(())
+}
