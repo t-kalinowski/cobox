@@ -24,8 +24,7 @@ struct Target {
 }
 
 fn is_key(name: &str) -> bool {
-    name.get(..PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+    environment_transport::environment_key_starts_with(name.as_ref(), PREFIX)
 }
 
 pub(crate) fn encode(
@@ -97,7 +96,7 @@ pub(crate) fn child_environment() -> Result<Option<HashMap<String, String>>> {
 pub(crate) fn run() -> Result<i32> {
     let encoded = transport_environment()?
         .into_iter()
-        .map(|(name, value)| (name[PREFIX.len()..].to_owned(), value));
+        .map(|(name, value)| (name.chars().skip(PREFIX.len()).collect::<String>(), value));
     // Neither decoding nor serde diagnostics may echo workload data.
     let target: Target = environment_transport::decode(encoded)
         .and_then(|payload| serde_json::from_str(&payload).map_err(Into::into))
@@ -124,7 +123,8 @@ pub(crate) fn materialize_tmpdir(
     let paths = environment
         .iter()
         .filter(|(name, value)| {
-            (name.eq_ignore_ascii_case("TEMP") || name.eq_ignore_ascii_case("TMP"))
+            (environment_transport::environment_key_eq(name.as_ref(), "TEMP")
+                || environment_transport::environment_key_eq(name.as_ref(), "TMP"))
                 && Path::new(value).is_absolute()
         })
         .map(|(_, value)| AbsolutePathBuf::from_absolute_path(value))

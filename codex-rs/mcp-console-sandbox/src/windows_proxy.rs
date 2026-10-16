@@ -10,6 +10,7 @@ use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_utils_pty::JobObject;
+use codex_windows_sandbox::environment_transport::environment_key_eq;
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::BorrowedHandle;
@@ -62,14 +63,14 @@ pub(crate) async fn start(
     environment.retain(|name, value| {
         !(codex_network_proxy::PROXY_ENV_KEYS
             .iter()
-            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+            .any(|reserved| environment_key_eq(name.as_ref(), reserved))
             || (codex_network_proxy::CUSTOM_CA_ENV_KEYS
                 .iter()
-                .any(|reserved| name.eq_ignore_ascii_case(reserved))
+                .any(|reserved| environment_key_eq(name.as_ref(), reserved))
                 && codex_network_proxy::is_managed_mitm_ca_trust_bundle_path(value)))
     });
     for (key, value) in prepared.env {
-        environment.retain(|name, _| !name.eq_ignore_ascii_case(&key));
+        environment.retain(|name, _| !environment_key_eq(name.as_ref(), &key));
         environment.insert(key, value);
     }
     let handle = proxy.run().await?;
