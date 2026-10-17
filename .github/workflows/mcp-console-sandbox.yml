@@ -19,34 +19,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
-        with:
-          components: rustfmt
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
-        with:
-          tool: nextest@0.9.103,just@1.51.0
       - name: Record the host and port range
         run: |
           sw_vers
           sysctl net.inet.ip.portrange
-      - name: Reproduce the public proxy contract
-        run: |
-          set -eu
-          for iteration in $(seq 1 100); do
-            printf 'Reproduction iteration %s\n' "$iteration"
-            just test --locked -p mcp-console-sandbox --retries 0 \
-              --test bootstrap_contract \
-              unrestricted_and_external_managed_proxy_preserve_routing_and_allowlist
-          done
-      - name: Compare full policy enforcement paths and recorded ports
-        if: always()
-        run: python3 mcp-console-sandbox/tests/seatbelt_profile_diagnostic.py
-      - name: Isolate native Seatbelt endpoint matching
-        if: always()
-        run: python3 mcp-console-sandbox/tests/seatbelt_proxy_diagnostic.py
-      - name: Compare IP and TCP endpoint filters
-        if: always()
-        run: python3 mcp-console-sandbox/tests/seatbelt_endpoint_forms_diagnostic.py
+      - name: Compare repeated sockets within an immutable sandbox profile
+        run: python3 mcp-console-sandbox/tests/seatbelt_socket_lifetime_diagnostic.py
       - name: Collect matching sandbox denials
         if: failure()
         run: |
