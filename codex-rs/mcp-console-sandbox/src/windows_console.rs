@@ -13,6 +13,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_windows_sandbox::environment_transport::environment_key_eq;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
@@ -48,7 +49,7 @@ pub(crate) fn run() -> Result<i32> {
             || request.excluded_environment.iter().all(|name| {
                 !codex_network_proxy::PROXY_ENV_KEYS
                     .iter()
-                    .any(|key| name.eq_ignore_ascii_case(key))
+                    .any(|key| environment_key_eq(name.as_ref(), key))
             }),
         "configuration transport conflicts with managed proxy environment; use a dedicated --config-env name"
     );
@@ -83,7 +84,7 @@ pub(crate) fn run() -> Result<i32> {
     for name in &request.excluded_environment {
         request
             .environment
-            .retain(|key, _| !key.eq_ignore_ascii_case(name));
+            .retain(|key, _| !environment_key_eq(key.as_ref(), name));
         // This standalone executable is still single-threaded.
         unsafe {
             std::env::remove_var(name);
@@ -107,16 +108,9 @@ pub(crate) fn run() -> Result<i32> {
                 missing_path_behavior: None,
             });
             for name in &config.environment {
-                ensure!(
-                    !request
-                        .excluded_environment
-                        .iter()
-                        .any(|excluded| excluded.eq_ignore_ascii_case(name)),
-                    "configuration transport variable cannot be exported to the target"
-                );
                 request
                     .environment
-                    .retain(|key, _| !key.eq_ignore_ascii_case(name));
+                    .retain(|key, _| !environment_key_eq(key.as_ref(), name));
                 request
                     .environment
                     .insert(name.clone(), path.to_string_lossy().into_owned());
@@ -144,7 +138,7 @@ pub(crate) fn run() -> Result<i32> {
                 !request
                     .excluded_environment
                     .iter()
-                    .any(|excluded| name.eq_ignore_ascii_case(excluded))
+                    .any(|excluded| environment_key_eq(name.as_ref(), excluded))
             });
             let target_environment =
                 crate::windows_target::encode(request.command, request.environment)?;

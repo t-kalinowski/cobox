@@ -141,7 +141,8 @@ fn canonical_key(key: &OsStr) -> Result<String> {
 }
 
 #[cfg(windows)]
-fn environment_key_eq(key: &OsStr, expected: &str) -> bool {
+/// Compare environment names using Windows ordinal case-insensitive semantics.
+pub fn environment_key_eq(key: &OsStr, expected: &str) -> bool {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -168,13 +169,14 @@ fn environment_key_eq(key: &OsStr, expected: &str) -> bool {
 }
 
 #[cfg(not(windows))]
-fn environment_key_eq(key: &OsStr, expected: &str) -> bool {
+pub fn environment_key_eq(key: &OsStr, expected: &str) -> bool {
     key.as_encoded_bytes()
         .eq_ignore_ascii_case(expected.as_bytes())
 }
 
 #[cfg(windows)]
-fn environment_key_starts_with(key: &OsStr, prefix: &str) -> bool {
+/// Match an environment-name prefix using Windows ordinal comparison.
+pub fn environment_key_starts_with(key: &OsStr, prefix: &str) -> bool {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::ffi::OsStringExt;
@@ -186,7 +188,7 @@ fn environment_key_starts_with(key: &OsStr, prefix: &str) -> bool {
 }
 
 #[cfg(not(windows))]
-fn environment_key_starts_with(key: &OsStr, prefix: &str) -> bool {
+pub fn environment_key_starts_with(key: &OsStr, prefix: &str) -> bool {
     key.as_encoded_bytes()
         .get(..prefix.len())
         .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))

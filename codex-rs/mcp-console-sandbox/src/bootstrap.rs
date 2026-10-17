@@ -9,8 +9,12 @@ use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(windows)]
+use codex_windows_sandbox::environment_transport::environment_key_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::ffi::OsStr;
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
@@ -22,6 +26,11 @@ use std::os::fd::FromRawFd;
 
 const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 const RESERVED_CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
+
+#[cfg(unix)]
+fn environment_key_eq(key: &OsStr, expected: &str) -> bool {
+    key == expected
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,7 +128,9 @@ pub fn take_input() -> Result<Input> {
                     // rather than ordinary target environment variables.
                     let drive_directory = cfg!(windows)
                         && matches!(key.as_encoded_bytes(), [b'=', drive, b':'] if drive.is_ascii_alphabetic());
-                    !drive_directory && key != name && key != RESERVED_CONFIGURATION
+                    !drive_directory
+                        && !environment_key_eq(key, name)
+                        && !environment_key_eq(key, RESERVED_CONFIGURATION)
                 })
                 .map(|(key, value)| {
                     Ok((
@@ -138,13 +149,17 @@ pub fn take_input() -> Result<Input> {
         environment.extend(config.environment);
         #[cfg(windows)]
         {
-            let mut names = std::collections::HashSet::new();
-            for (key, value) in config.environment {
+            let names: Vec<_> = config.environment.keys().collect();
+            for (index, key) in names.iter().enumerate() {
                 ensure!(
-                    names.insert(key.to_ascii_uppercase()),
+                    !names[..index]
+                        .iter()
+                        .any(|name| environment_key_eq(name.as_ref(), key)),
                     "duplicate Windows environment variable"
                 );
-                environment.retain(|name, _| !name.eq_ignore_ascii_case(&key));
+            }
+            for (key, value) in config.environment {
+                environment.retain(|name, _| !environment_key_eq(name.as_ref(), &key));
                 environment.insert(key, value);
             }
         }
@@ -258,13 +273,14 @@ fn validate(request: &mut Bootstrap) -> Result<()> {
         .excluded_environment
         .push(RESERVED_CONFIGURATION.to_owned());
     for name in &request.excluded_environment {
-        request.environment.remove(name);
+        request
+            .environment
+            .retain(|key, _| !environment_key_eq(key.as_ref(), name));
         ensure!(
-            request
-                .lifecycle
-                .private_tmp
-                .as_ref()
-                .is_none_or(|tmp| !tmp.environment.contains(name)),
+            request.lifecycle.private_tmp.as_ref().is_none_or(|tmp| tmp
+                .environment
+                .iter()
+                .all(|export| !environment_key_eq(export.as_ref(), name))),
             "configuration transport variable cannot be exported to the target"
         );
     }
