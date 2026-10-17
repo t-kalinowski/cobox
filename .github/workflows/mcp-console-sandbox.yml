@@ -44,8 +44,11 @@ jobs:
       - name: Isolate native Seatbelt endpoint matching
         if: always()
         run: python3 mcp-console-sandbox/tests/seatbelt_proxy_diagnostic.py
+      - name: Compare IP and TCP endpoint filters
+        if: always()
+        run: python3 mcp-console-sandbox/tests/seatbelt_endpoint_forms_diagnostic.py
       - name: Collect matching sandbox denials
         if: failure()
         run: |
           sudo /usr/bin/log show --last 15m --style compact --info --debug \
-            --predicate 'eventMessage CONTAINS "mcp-console-sandbox"'
+            --predicate 'eventMessage CONTAINS "mcp-console-sandbox" OR (eventMessage CONTAINS[c] "python" AND eventMessage CONTAINS "network-outbound")'
