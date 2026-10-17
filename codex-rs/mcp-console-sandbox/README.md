@@ -2,7 +2,7 @@
 
 `mcp-console-sandbox` exposes this release's native sandbox without application sessions, application configuration files, or a Rust API dependency. It runs an opaque command with inherited stdin, stdout, and stderr. Linux uses the native bubblewrap, seccomp, and proxy paths; macOS uses the native process Seatbelt profile. Windows executes workloads through native MXC using `--config-env NAME -- command [args...]`, with Console policy and confirmed Job retirement. See [Windows support](WINDOWS.md) for host requirements and platform limits. Other platforms report unsupported on stderr and exit 1 without launching the target.
 
-The default supervisor owns launch, descendant retirement, optional private storage, and the upstream managed proxy. Caller-death and SIGTERM retirement are explicit options. The [lifecycle contract](LIFECYCLE.md) defines cleanup ordering and platform limits, including runner loss; the [Linux compatibility guide](LINUX_COMPATIBILITY.md) defines host requirements.
+The default supervisor owns launch, descendant retirement, optional private storage, and the upstream managed proxy. Unix caller-death and SIGTERM retirement are explicit options. Windows always observes the direct parent's lifetime and can observe an additional owner. The [lifecycle contract](LIFECYCLE.md) defines cleanup ordering and platform limits, including runner loss; the [Linux compatibility guide](LINUX_COMPATIBILITY.md) defines host requirements.
 
 MCP Console is the single consumer and pins the runner revision; both are updated together. The private protocol has no version field or compatibility negotiation. The [complete JSON configuration reference](PROTOCOL.md#complete-json-reference) covers both transports and every nested field. `filesystem: {"kind":"unrestricted"}` retains the independently selected native network policy. `external-sandbox` delegates enforcement to an outer sandbox unless a managed proxy requires native routing; its Linux supervision covers the original process group.
 
@@ -21,7 +21,7 @@ On Linux and macOS, `--bootstrap-fd N` accepts one framed JSON request through a
 
 Use the release's Rust 1.95.0 toolchain, workspace dependencies, and lockfile. Cargo, Bazel, rustup, and CI actions may download uncached dependencies and tools. Once dependencies are available, Cargo accepts `--locked --offline`.
 
-For an ordinary GNU Linux build, install a C toolchain, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu), then build the pair:
+For an ordinary GNU Linux build, install a C toolchain, `pkg-config`, and libcap and OpenSSL development headers and libraries (`build-essential pkg-config libcap-dev libssl-dev` on Ubuntu), then build the pair:
 
 ```console
 cd codex-rs
@@ -36,7 +36,7 @@ Stage `$sandbox_target_dir/release/mcp-console-sandbox` and `$sandbox_target_dir
 
 Linux selects a suitable host `bwrap` from the trusted launch `PATH` first, then the upstream bundled-helper search. An adjacent `bwrap`, the existing `codex-resources` layout, and install-context locations are supported. No patched bubblewrap option or runner-specific adjacent-helper check is required. Packaging should embed the shipped helper's digest through build-time `CODEX_BWRAP_SHA256`; a selected bundled helper is hashed and executed through the same open descriptor. An unused missing or modified bundle does not block a suitable host helper; a selected modified bundle fails verification without fallback.
 
-Portable Linux pairs use `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`. Follow the release's [target matrix and recipe](../../.github/workflows/rust-release.yml) and [musl tool setup](../../.github/scripts/install-musl-build-tools.sh), passing `TARGET` and a `GITHUB_ENV` output file. Apply that file's environment only to musl builds. The recipe builds pinned musl libcap, uses Zig 0.14.0 for native dependencies and musl GCC for Rust linking, and disables aws-lc jitter entropy. This package enables vendored OpenSSL without relying on `codex-core` feature unification.
+Portable Linux pairs use `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`. Follow the release's [target matrix and recipe](../../.github/workflows/rust-release.yml) and [musl tool setup](../../.github/scripts/install-musl-build-tools.sh), passing `TARGET` and a `GITHUB_ENV` output file. Apply that file's environment only to musl builds. The recipe builds pinned musl libcap, uses Zig 0.14.0 for native dependencies and musl GCC for Rust linking, and disables aws-lc jitter entropy. This package enables vendored OpenSSL only for these musl targets, without relying on workspace feature unification.
 
 Build and strip `bwrap` first, export its SHA-256 as `CODEX_BWRAP_SHA256`, then build the runner with the same target and `--locked --release`. Inspect both with `readelf -W -l -d -V`: portable pairs must have no interpreter, `NEEDED` libraries, or symbol-version requirements. They need no host libcap or OpenSSL runtime libraries. Their target command still needs its own interpreter, libraries, and compatible libc; static runner artifacts do not establish portability of an application's R, Python, or SQL runtime.
 
