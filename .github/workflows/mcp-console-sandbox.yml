@@ -3,6 +3,11 @@ name: Sandbox CI
 on:
   pull_request: {}
   workflow_dispatch:
+    inputs:
+      windows_mxc_runner:
+        description: 'JSON runner labels for required MXC validation on a fresh capable Windows host; empty uses optional hosted checks'
+        type: string
+        default: ''
   push:
     branches:
       - "mcp-console/sandbox-runner/**"
@@ -16,9 +21,11 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows contracts
-    runs-on: windows-2025
+    name: Windows contracts (MXC ${{ inputs.windows_mxc_runner != '' && 'required' || 'optional' }})
+    runs-on: ${{ inputs.windows_mxc_runner != '' && fromJSON(inputs.windows_mxc_runner) || 'windows-2025' }}
     timeout-minutes: 45
+    env:
+      MCP_CONSOLE_SANDBOX_REQUIRE_MXC: ${{ inputs.windows_mxc_runner != '' && '1' || '0' }}
     defaults:
       run:
         working-directory: codex-rs
@@ -27,6 +34,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Record Windows validation mode and revision
+        run: |
+          "- Revision: $env:GITHUB_SHA" >> $env:GITHUB_STEP_SUMMARY
+          "- Windows runner: $env:RUNNER_NAME" >> $env:GITHUB_STEP_SUMMARY
+          "- Required native MXC: $env:MCP_CONSOLE_SANDBOX_REQUIRE_MXC" >> $env:GITHUB_STEP_SUMMARY
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: clippy,rustfmt
@@ -47,6 +59,19 @@ jobs:
         run: cargo build --locked --release -p mcp-console-sandbox --bin mcp-console-sandbox
       - name: Exercise release artifacts
         run: just test --locked --release -p mcp-console-sandbox --retries 0 --success-output final
+      - uses: ./.github/actions/setup-bazel-ci
+        if: inputs.windows_mxc_runner != ''
+        with:
+          target: ${{ runner.os }}
+      - name: Run required Windows Bazel contracts
+        if: inputs.windows_mxc_runner != ''
+        run: |
+          bazel test --test_output=all `
+            //codex-rs/mcp-console-sandbox:windows-cli-test `
+            //codex-rs/mcp-console-sandbox:windows-console-test `
+            //codex-rs/mcp-console-sandbox:windows-lifecycle-test `
+            //codex-rs/mcp-console-sandbox:windows-mxc-test `
+            //codex-rs/mcp-console-sandbox:windows-mxc-native-test
       - name: Lint native executable
         run: cargo clippy --locked -p mcp-console-sandbox --all-targets -- -D warnings
 
