@@ -7,11 +7,18 @@ import os
 import socket
 import subprocess
 import sys
+from itertools import product
 from pathlib import Path
 
+# sys/socket.h; Apple's bundled Python does not export this socket option.
+SO_NOSIGPIPE = 0x1022
 
-def connect(port: int) -> dict:
+
+def connect(port: int, socket_setup: str) -> dict:
     with socket.socket() as stream:
+        if socket_setup == "nosigpipe":
+            # Match the extra socket option used by Rust's TcpStream on macOS.
+            stream.setsockopt(socket.SOL_SOCKET, SO_NOSIGPIPE, 1)
         try:
             stream.connect(("127.0.0.1", port))
         except OSError as error:
@@ -20,7 +27,7 @@ def connect(port: int) -> dict:
 
 
 if len(sys.argv) > 1:
-    mode, *ports = sys.argv[1:]
+    mode, socket_setup, *ports = sys.argv[1:]
     if mode in ("init", "exec"):
         profile = sys.stdin.read().encode()
         sandbox = ctypes.CDLL("/usr/lib/libsandbox.dylib")
@@ -36,13 +43,18 @@ if len(sys.argv) > 1:
         )
         assert result == 0, error.value
         if mode == "exec":
-            os.execv(sys.executable, [sys.executable, __file__, "connect", *ports])
-    print(json.dumps([connect(int(port)) for port in ports]))
+            os.execv(
+                sys.executable,
+                [sys.executable, __file__, "connect", socket_setup, *ports],
+            )
+    print(json.dumps([connect(int(port), socket_setup) for port in ports]))
     sys.exit(0)
 
 template = Path(__file__).with_suffix(".sbpl").read_text()
 failures = 0
-for mode in ("sandbox-exec", "init", "exec"):
+for socket_setup, mode in product(
+    ("default", "nosigpipe"), ("sandbox-exec", "init", "exec")
+):
     for port in (49243, 49438, 49538):
         for iteration in range(20):
             with (
@@ -62,7 +74,7 @@ for mode in ("sandbox-exec", "init", "exec"):
                 profile = template.replace("@HTTP_PORT@", ports[0]).replace(
                     "@SOCKS_PORT@", ports[1]
                 )
-                command = [sys.executable, __file__, mode, *ports]
+                command = [sys.executable, __file__, mode, socket_setup, *ports]
                 if mode == "sandbox-exec":
                     command = [
                         "/usr/bin/sandbox-exec",
@@ -71,6 +83,7 @@ for mode in ("sandbox-exec", "init", "exec"):
                         sys.executable,
                         __file__,
                         "connect",
+                        socket_setup,
                         *ports,
                     ]
                 result = subprocess.run(
@@ -83,6 +96,7 @@ for mode in ("sandbox-exec", "init", "exec"):
                 )
                 assert result.returncode == 0, (
                     mode,
+                    socket_setup,
                     ports,
                     result.stdout,
                     result.stderr,
@@ -93,6 +107,7 @@ for mode in ("sandbox-exec", "init", "exec"):
                         json.dumps(
                             {
                                 "mode": mode,
+                                "socket_setup": socket_setup,
                                 "ports": ports,
                                 "iteration": iteration,
                                 "observed": observed,
@@ -105,7 +120,8 @@ for mode in ("sandbox-exec", "init", "exec"):
                     break
         else:
             print(
-                f"{mode} port={port}: 20 independent full-profile checks passed",
+                f"{mode} setup={socket_setup} port={port}: "
+                "20 independent full-profile checks passed",
                 flush=True,
             )
 sys.exit(bool(failures))
