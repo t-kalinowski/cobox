@@ -15,6 +15,7 @@
 #include <sys/event.h>
 #define NEXT(name) name
 #else
+#include <netinet/in.h>
 #define NEXT(name) dlsym(RTLD_NEXT, #name)
 #endif
 
@@ -107,6 +108,8 @@ static ssize_t observed_recv(int fd, void *buffer, size_t size, int flags) {
     return count;
 }
 #else
+static int readiness_descriptor = -1;
+
 ssize_t recvmsg(int fd, struct msghdr *message, int flags) {
     ssize_t (*real)(int, struct msghdr *, int) = NEXT(recvmsg);
     ssize_t count = real(fd, message, flags);
@@ -114,7 +117,29 @@ ssize_t recvmsg(int fd, struct msghdr *message, int flags) {
         for (struct cmsghdr *c = CMSG_FIRSTHDR(message); c; c = CMSG_NXTHDR(message, c)) {
             if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS)
                 ready(fd, ((struct ucred *)CMSG_DATA(c))->pid);
+            // Model a queued credential whose numeric PID now names another
+            // process. The kernel-attached pidfd must retain the real sender.
+            const char *replacement = getenv("SANDBOX_TEST_READINESS_PID");
+            if (replacement && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS)
+                ((struct ucred *)CMSG_DATA(c))->pid = atoi(replacement);
+            const char *failure = getenv("SANDBOX_TEST_INVALID_READINESS");
+            if (!failure) continue;
+            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS && strcmp(failure, "identity") == 0)
+                ((struct ucred *)CMSG_DATA(c))->uid = geteuid() + 1;
+            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == 0x04) { // SCM_PIDFD
+                int *descriptor = (int *)CMSG_DATA(c);
+                if (*descriptor < 0) _exit(125);
+                if (strcmp(failure, "allocation") == 0) {
+                    close(*descriptor);
+                    *descriptor = -EMFILE;
+                } else {
+                    if (!(fcntl(*descriptor, F_GETFD) & FD_CLOEXEC)) _exit(125);
+                    readiness_descriptor = *descriptor;
+                }
+            }
         }
+        const char *failure = getenv("SANDBOX_TEST_INVALID_READINESS");
+        if (failure && strcmp(failure, "truncated") == 0) message->msg_flags |= MSG_CTRUNC;
     }
     return count;
 }
@@ -189,6 +214,30 @@ INTERPOSE(observed_kill, kill)
 INTERPOSE(observed_unlinkat, unlinkat)
 INTERPOSE(observed_children, proc_listchildpids)
 #else
+int bind(int fd, const struct sockaddr *address, socklen_t length) {
+    int (*real)(int, const struct sockaddr *, socklen_t) = NEXT(bind);
+    const char *port = getenv("SANDBOX_TEST_BRIDGE_PORT");
+    static int forced;
+    if (port && !forced && getpid() == 1 && length == sizeof(struct sockaddr_in)
+        && address->sa_family == AF_INET) {
+        struct sockaddr_in endpoint = *(const struct sockaddr_in *)address;
+        int type;
+        socklen_t size = sizeof(type);
+        if (endpoint.sin_port == 0 && endpoint.sin_addr.s_addr == htonl(INADDR_LOOPBACK)
+            && getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &size) == 0 && type == SOCK_STREAM) {
+            endpoint.sin_port = htons(atoi(port));
+            int result = real(fd, (const struct sockaddr *)&endpoint, sizeof(endpoint));
+            if (result == 0) {
+                forced = 1;
+                const char message[] = "forced bridge port\n";
+                if (write(2, message, sizeof(message) - 1) != sizeof(message) - 1) _exit(125);
+            }
+            return result;
+        }
+    }
+    return real(fd, address, length);
+}
+
 int execvp(const char *file, char *const argv[]) {
     int (*real)(const char *, char *const[]) = NEXT(execvp);
     // Production strips host loader variables before native setup. This test
@@ -199,6 +248,11 @@ int execvp(const char *file, char *const argv[]) {
 }
 int waitid(idtype_t type, id_t pid, siginfo_t *info, int options) {
     int (*real)(idtype_t, id_t, siginfo_t *, int) = NEXT(waitid);
+    if (readiness_descriptor >= 0) {
+        // Rejection must close an installed pidfd before retirement begins.
+        if (fcntl(readiness_descriptor, F_GETFD) >= 0 || errno != EBADF) _exit(125);
+        readiness_descriptor = -1;
+    }
     if (getenv("SANDBOX_TEST_FAIL_WAIT")) { errno = EIO; return -1; }
     return real(type, pid, info, options);
 }

@@ -36,7 +36,8 @@ pub(super) fn accept(descriptor: OwnedFd) -> Result<(TargetSetup, File)> {
     // The upstream restricted filter allows descriptor read/write, but denies
     // the sendto syscall used by UnixStream::write on Linux.
     let mut stream = File::from(descriptor);
-    // Linux SO_PASSCRED supplies the namespace init's host PID to the supervisor.
+    // Linux supplies credentials and, where supported, an identity-bound pidfd
+    // for namespace init to the supervisor with this readiness byte.
     stream.write_all(&[1])?;
     let mut length = [0; 4];
     stream.read_exact(&mut length)?;

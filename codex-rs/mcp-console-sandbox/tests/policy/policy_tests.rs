@@ -39,6 +39,12 @@ fn unrestricted_filesystem_preserves_independent_network_policy() {
 
 #[test]
 fn unrestricted_and_external_managed_proxy_preserve_routing_and_allowlist() {
+    // Linux's bridge binds 127.0.0.1 in its own network namespace. A distinct
+    // host loopback address identifies the origin even when their ports match.
+    #[cfg(target_os = "linux")]
+    let direct_origin = "127.0.0.2";
+    #[cfg(not(target_os = "linux"))]
+    let direct_origin = "127.0.0.1";
     for kind in ["unrestricted", "external-sandbox"] {
         for network in ["restricted", "enabled"] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -70,11 +76,31 @@ fn unrestricted_and_external_managed_proxy_preserve_routing_and_allowlist() {
             let output = run(frame(&request), &[]);
             assert!(output.status.success(), "{output:?}");
             assert!(output.stdout.starts_with(b"HTTP/1.1 403"), "{output:?}");
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let listener = TcpListener::bind((direct_origin, 0)).unwrap();
             request["command"] = fixture("connect", &[&listener.local_addr().unwrap().to_string()])
                 ["command"]
                 .clone();
-            let output = run(frame(&request), &[]);
+            let directory = tempfile::tempdir().unwrap();
+            let command = runner(directory.path());
+            #[cfg(target_os = "linux")]
+            let command = {
+                // Exercise a bridge and host origin with the same port number
+                // in their independent network namespaces.
+                let library = startup::interposer(directory.path());
+                let mut command = command;
+                startup::preload(&mut command, &library);
+                command.env("SANDBOX_TEST_NATIVE_PRELOAD", &library).env(
+                    "SANDBOX_TEST_BRIDGE_PORT",
+                    listener.local_addr().unwrap().port().to_string(),
+                );
+                command
+            };
+            let output = run_command(command, frame(&request), &[]);
+            #[cfg(target_os = "linux")]
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("forced bridge port\n"),
+                "bridge port was not forced: {output:?}"
+            );
             assert!(
                 !output.status.success(),
                 "direct connection bypassed proxy: {output:?}"
