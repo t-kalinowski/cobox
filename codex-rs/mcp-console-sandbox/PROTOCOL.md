@@ -69,7 +69,7 @@ The environment transport executes on Linux, macOS, and Windows; the descriptor 
 
 There are no other top-level fields. In particular, `excluded_environment` is internal and rejected on input. Environment mode takes the command from arguments after `--`, cwd from process creation, and environment from inheritance/overrides. Descriptor mode takes all three from the JSON. Native OS permissions and the executable's own requirements still apply; parsing a request does not establish that it can launch.
 
-Windows environment inheritance omits hidden per-drive working-directory entries such as `=C:`. Ordinary variables remain inherited, and explicit environment names containing `=` remain invalid.
+Windows environment inheritance omits hidden entries whose names start with `=`, including per-drive working directories such as `=C:` and Command Prompt's `=ExitCode` metadata. Ordinary variables remain inherited, and explicit environment names containing `=` remain invalid.
 
 ### Native built-in selection
 

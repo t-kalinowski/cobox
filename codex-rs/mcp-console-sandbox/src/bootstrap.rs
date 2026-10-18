@@ -124,11 +124,11 @@ pub fn take_input() -> Result<Input> {
         let mut environment = if config.inherit_environment {
             std::env::vars_os()
                 .filter(|(key, _)| {
-                    // Windows records per-drive cwd metadata as hidden =C: entries,
-                    // rather than ordinary target environment variables.
-                    let drive_directory = cfg!(windows)
-                        && matches!(key.as_encoded_bytes(), [b'=', drive, b':'] if drive.is_ascii_alphabetic());
-                    !drive_directory
+                    // Windows shells carry hidden metadata such as =C: and
+                    // =ExitCode, rather than ordinary target variables.
+                    let windows_metadata =
+                        cfg!(windows) && key.as_encoded_bytes().starts_with(b"=");
+                    !windows_metadata
                         && !environment_key_eq(key, name)
                         && !environment_key_eq(key, RESERVED_CONFIGURATION)
                 })
