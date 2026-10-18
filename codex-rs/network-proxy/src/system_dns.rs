@@ -1,10 +1,7 @@
-//! This macOS-only module implements DNS resolution
-//! using macOS's native system resolver. We have to
-//! do this rather than relying on the default behavior
-//! (which reads /etc/resolv.conf) since default behavior
-//! breaks Codex's ability to interact with network paths
-//! that are provided by applications that modify / hook
-//! into macOS DNS behavior (i.e. proxies, VPNs, etc)
+//! Resolve proxy destinations through the platform's native address resolver.
+//! macOS supplemental/VPN resolvers are not represented in `/etc/resolv.conf`.
+//! On Windows the default DNS transport opens sockets that trigger inbound
+//! firewall authorization; system resolution needs no per-executable rules.
 use rama_dns::DnsResolver;
 use rama_net::address::Domain;
 use std::io;
@@ -13,8 +10,7 @@ use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use tokio::net::lookup_host;
 
-/// Resolve TCP destinations through macOS's native resolver, including supplemental
-/// resolvers and VPN split DNS that are not represented in `/etc/resolv.conf`.
+/// Resolve TCP destinations using the system's address and DNS routing policy.
 #[derive(Clone)]
 pub(crate) struct SystemDnsResolver;
 

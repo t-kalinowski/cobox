@@ -27,7 +27,7 @@ mod runtime;
 mod socket_path;
 mod socks5;
 mod state;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod system_dns;
 mod upstream;
 #[cfg(target_os = "windows")]
