@@ -114,7 +114,53 @@ fn unicode_environment_overrides_and_transport_exclusions_are_applied() -> anyho
 }
 
 #[test]
-fn inherited_drive_directory_metadata_does_not_prevent_launch() -> anyhow::Result<()> {
+fn inherited_shell_metadata_preserves_command_validation() -> anyhow::Result<()> {
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .env("=ExitCode", "00000000")
+        .env("=ExitCodeAscii", "0")
+        .env(
+            "CONSOLE_POLICY",
+            json!({"extends": ":read-only"}).to_string(),
+        )
+        .args(["--config-env", "CONSOLE_POLICY", "--", ""])
+        .output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (
+            Some(1),
+            vec![],
+            b"mcp-console-sandbox: command must contain a program\n".to_vec()
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn explicit_shell_metadata_environment_names_are_rejected() -> anyhow::Result<()> {
+    for name in ["=C:", "=ExitCode", "=ExitCodeAscii"] {
+        let policy = json!({
+            "extends": ":read-only",
+            "environment": {name: "not a target variable"}
+        });
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env("CONSOLE_POLICY", policy.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--", "cmd.exe"])
+            .output()?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (
+                Some(1),
+                vec![],
+                b"mcp-console-sandbox: invalid target environment name\n".to_vec()
+            ),
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn command_prompt_metadata_does_not_prevent_launch() -> anyhow::Result<()> {
     if !mxc_support::available()? {
         return Ok(());
     }
@@ -125,15 +171,27 @@ fn inherited_drive_directory_metadata_does_not_prevent_launch() -> anyhow::Resul
         "extends": ":read-only",
         "network": "enabled",
     });
-    // Windows callers can carry per-drive working directories as hidden entries.
-    let output = Command::new(&sandbox)
+    // CMD records =ExitCode after an external command, in addition to the
+    // inherited per-drive working directories. Exercise that real boundary.
+    let script = root.path().join("launch.cmd");
+    std::fs::write(
+        &script,
+        concat!(
+            "@echo off\r\n",
+            "\"%CONSOLE_FIXTURE%\" arguments >nul\r\n",
+            "if errorlevel 1 exit /b %errorlevel%\r\n",
+            "\"%CONSOLE_RUNNER%\" --config-env CONSOLE_POLICY -- \"%CONSOLE_FIXTURE%\" context\r\n",
+        ),
+    )?;
+    let output = Command::new("cmd.exe")
         .current_dir(root.path())
         .env("=C:", root.path())
+        .env("CONSOLE_FIXTURE", fixture)
+        .env("CONSOLE_RUNNER", sandbox)
         .env("CONSOLE_POLICY", policy.to_string())
         .env("CONSOLE_INHERITED", "retained")
-        .args(["--config-env", "CONSOLE_POLICY", "--"])
-        .arg(&fixture)
-        .arg("context")
+        .args(["/d", "/c"])
+        .arg(script)
         .output()?;
     assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
     let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
@@ -146,16 +204,5 @@ fn inherited_drive_directory_metadata_does_not_prevent_launch() -> anyhow::Resul
             .keys()
             .all(|name| !name.starts_with('='))
     );
-
-    let mut invalid = policy;
-    invalid["environment"] = json!({"=C:": root.path()});
-    let output = Command::new(sandbox)
-        .env("CONSOLE_POLICY", invalid.to_string())
-        .args(["--config-env", "CONSOLE_POLICY", "--"])
-        .arg(fixture)
-        .arg("context")
-        .output()?;
-    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
-    assert!(String::from_utf8(output.stderr)?.contains("invalid target environment name"));
     Ok(())
 }

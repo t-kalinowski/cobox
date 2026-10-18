@@ -24,7 +24,7 @@ Distribute `mcp-console-sandbox.exe`. For debug builds omit `--release`. The [Ba
 
 ## Console transport
 
-The complete JSON reference is [PROTOCOL.md](PROTOCOL.md). Windows accepts `--config-env NAME -- command [args...]`; the descriptor transport is Unix-only. Environment-variable matching is case-insensitive. Hidden per-drive current-directory entries such as `=C:` are omitted from inherited target variables; explicit names containing `=` are invalid. The selected configuration variable never reaches the target.
+The complete JSON reference is [PROTOCOL.md](PROTOCOL.md). Windows accepts `--config-env NAME -- command [args...]`; the descriptor transport is Unix-only. Environment-variable matching is case-insensitive. Hidden shell metadata entries whose names start with `=`, such as `=C:` and `=ExitCode`, are omitted from inherited target variables; explicit names containing `=` are invalid. The selected configuration variable never reaches the target.
 
 Native setup uses the trusted executor environment. The leaf crate carries the exact target environment in a bounded transport and applies it through a relay already inside MXC, after Windows has assigned its native package variables. Only the target payload and an inert native setup entry reach that relay. This preserves configured `TEMP`, `TMP`, and `LOCALAPPDATA`, including an empty target environment, without letting target overrides configure platform-directory discovery or the native loader. Symbolic `tmpdir` permissions resolve from target `TEMP` and `TMP` before wrapping the command; explicit read-only overrides and denials still apply. The relay creates no Job or storage owner; the existing native owner still confirms retirement of the complete process tree.
 
