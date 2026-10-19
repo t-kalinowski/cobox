@@ -1,7 +1,7 @@
 use crate::policy::is_non_public_ip;
 use crate::runtime::HostBlockDecision;
 use crate::state::NetworkProxyState;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use crate::system_dns::SystemDnsResolver;
 use rama_core::Service;
 use rama_core::error::BoxError;
@@ -41,7 +41,7 @@ where
 
     async fn serve(&self, input: Input) -> Result<Self::Output, Self::Error> {
         let connector = TcpConnector::new();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let connector = connector.with_dns(SystemDnsResolver);
 
         if input.extensions().get::<ProxyAddress>().is_some() {

@@ -34,6 +34,8 @@ Filesystem access uses native MXC permissions. Read-deny entries require native 
 
 Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional. Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight. The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
 
+Proxy destination lookups use Windows system DNS. Downloads require no administrator approval, AppContainer profile provisioning, or custom firewall rules; the proxy does not open a separate DNS transport. Destination and resolved-address checks remain in the existing proxy connector.
+
 ## Lifetime and storage
 
 Each workload has a non-breakaway Job. The retained parent process handle and the waiting frontend define its lifetime. Successful retirement requires zero active Job members; private temporary storage is removed only after that native receipt. Every Windows exit-status bit is preserved. Binary stdin and inherited output handles do not delay retirement indefinitely.
