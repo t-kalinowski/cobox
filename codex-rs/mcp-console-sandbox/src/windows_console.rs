@@ -18,8 +18,6 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
@@ -200,27 +198,8 @@ pub(crate) fn run() -> Result<i32> {
                 storage.display()
             );
         } else {
-            // Job retirement precedes cleanup, but Windows can briefly retain
-            // image/file mappings. Retry only that sharing violation; success
-            // still requires removal, and persistent failures retain the error.
-            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 5);
-            loop {
-                match std::fs::remove_dir_all(&storage) {
-                    Ok(()) => break,
-                    Err(error)
-                        if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
-                            && Instant::now() < deadline =>
-                    {
-                        std::thread::sleep(
-                            Duration::from_millis(/*millis*/ 10)
-                                .min(deadline.saturating_duration_since(Instant::now())),
-                        );
-                    }
-                    Err(error) => {
-                        return Err(error).context("remove retired Windows private storage");
-                    }
-                }
-            }
+            crate::windows_storage::remove(&storage)
+                .context("remove retired Windows private storage")?;
         }
     }
     result.map(|receipt| receipt.unwrap_or(/*default*/ 125))

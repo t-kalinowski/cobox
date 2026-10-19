@@ -67,6 +67,10 @@ jobs:
         if: inputs.windows_mxc_runner != ''
         run: |
           bazel test --test_output=all `
+            --config=ci-windows-msvc `
+            --host_platform=//:local_windows_msvc `
+            --platforms=//:windows_x86_64_msvc `
+            --extra_execution_platforms=//:local_windows_msvc `
             //codex-rs/mcp-console-sandbox:windows-cli-test `
             //codex-rs/mcp-console-sandbox:windows-console-test `
             //codex-rs/mcp-console-sandbox:windows-lifecycle-test `

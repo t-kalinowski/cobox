@@ -40,7 +40,7 @@ Proxy destination lookups use Windows system DNS. Downloads require no administr
 
 Each workload has a non-breakaway Job. The retained parent process handle and the waiting frontend define its lifetime. Successful retirement requires zero active Job members; private temporary storage is removed only after that native receipt. Every Windows exit-status bit is preserved. Binary stdin and inherited output handles do not delay retirement indefinitely.
 
-Private storage uses `lifecycle.private_tmp` and is independent of filesystem built-in selection. Storage removal retries sharing violations for up to five seconds. Other errors and persistent sharing violations withhold success. Runner loss closes kill-on-close Jobs but does not guarantee storage deletion.
+Private storage uses `lifecycle.private_tmp` and is independent of filesystem built-in selection. Storage removal retries sharing violations and retained image mappings for up to five seconds. Native image-mapping failures are distinguished from permission denials, which fail immediately. Cleanup does not follow reparse points or change the attributes of surviving hard links. Other errors and persistent mapping or sharing failures withhold success. Runner loss closes kill-on-close Jobs but does not guarantee storage deletion.
 
 ## Validation limits
 

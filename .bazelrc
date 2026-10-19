@@ -17,7 +17,9 @@ common --experimental_platform_in_output_dir
 build --features=static_link_msvcrt
 build --host_features=static_link_msvcrt
 
-build --workspace_status_command=./scripts/workspace-status.sh
+# Status helpers run on the build host and require its native launcher.
+build:linux --workspace_status_command=./scripts/workspace-status.sh
+build:macos --workspace_status_command=./scripts/workspace-status.sh
 build:windows --workspace_status_command=./scripts/workspace-status.cmd
 
 # Runfiles strategy rationale: codex-rs/utils/cargo-bin/README.md
