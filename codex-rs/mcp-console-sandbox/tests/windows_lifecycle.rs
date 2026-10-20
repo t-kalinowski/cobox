@@ -11,6 +11,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::io::BufRead;
 use std::io::Write;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
@@ -94,6 +95,79 @@ fn ready(child: &mut Child) -> Result<Value> {
     std::io::BufReader::new(child.stdout.as_mut().context("fixture stdout")?)
         .read_line(&mut line)?;
     serde_json::from_str(&line).context("fixture readiness")
+}
+
+struct ImageMapping(windows_sys::Win32::Foundation::HMODULE);
+
+impl ImageMapping {
+    fn load(temporary: &Path) -> Result<Self> {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn LoadLibraryExW(
+                filename: *const u16,
+                file: windows_sys::Win32::Foundation::HANDLE,
+                flags: u32,
+            ) -> windows_sys::Win32::Foundation::HMODULE;
+        }
+        let source = Path::new(&std::env::var_os("SystemRoot").context("SystemRoot")?)
+            .join("System32")
+            .join("version.dll");
+        let target = temporary.join("held-image.dll");
+        std::fs::copy(source, &target)?;
+        let name: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        // Map an image without running its initialization code. The observer
+        // is outside the retired Job, like a host scanner retaining an image.
+        let module = unsafe {
+            LoadLibraryExW(
+                name.as_ptr(),
+                /*file*/ std::ptr::null_mut(),
+                /*flags*/ 1,
+            )
+        };
+        anyhow::ensure!(
+            !module.is_null(),
+            "map private image: {}",
+            std::io::Error::last_os_error()
+        );
+        Ok(Self(module))
+    }
+}
+
+impl Drop for ImageMapping {
+    fn drop(&mut self) {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn FreeLibrary(module: windows_sys::Win32::Foundation::HMODULE) -> i32;
+        }
+        unsafe {
+            FreeLibrary(self.0);
+        }
+    }
+}
+
+struct DeniedListing<'a>(&'a Path);
+
+impl<'a> DeniedListing<'a> {
+    fn install(path: &'a Path) -> Result<Self> {
+        let output = Command::new("icacls.exe")
+            .arg(path)
+            .args(["/deny", "*S-1-1-0:(RD)"])
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "deny directory listing: {output:?}"
+        );
+        Ok(Self(path))
+    }
+}
+
+impl Drop for DeniedListing<'_> {
+    fn drop(&mut self) {
+        let _ = Command::new("icacls.exe")
+            .arg(self.0)
+            .args(["/remove:d", "*S-1-1-0"])
+            .output();
+    }
 }
 
 #[test]
@@ -249,6 +323,167 @@ fn persistent_storage_sharing_violation_withholds_success() -> Result<()> {
     assert!(error.contains("os error 32"), "{error}");
     assert!(temporary.join("held-by-descendant").is_file());
     drop(held);
+    Ok(())
+}
+
+#[test]
+fn private_storage_waits_for_a_transient_image_mapping() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let mapping = ImageMapping::load(temporary)?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    descendant.wait();
+    assert_eq!(
+        unsafe {
+            WaitForSingleObject(process.0.as_raw_handle(), /*dwmilliseconds*/ 1_000)
+        },
+        WAIT_TIMEOUT,
+        "cleanup completed before the image mapping was released"
+    );
+    drop(mapping);
+    process.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(42), vec![], vec![])
+    );
+    assert!(!temporary.exists());
+    Ok(())
+}
+
+#[test]
+fn persistent_storage_image_mapping_withholds_success() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let mapping = ImageMapping::load(temporary)?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    descendant.wait();
+    assert_eq!(
+        unsafe {
+            WaitForSingleObject(process.0.as_raw_handle(), /*dwmilliseconds*/ 1_000)
+        },
+        WAIT_TIMEOUT,
+        "image mapping was treated as a permanent permission failure"
+    );
+    process.wait();
+    let output = child.wait_with_output()?;
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let error = String::from_utf8(output.stderr)?;
+    assert!(
+        error.contains("remove retired Windows private storage"),
+        "{error}"
+    );
+    assert!(error.contains("os error 5"), "{error}");
+    assert!(temporary.join("held-image.dll").is_file());
+    drop(mapping);
+    Ok(())
+}
+
+#[test]
+fn private_storage_permission_failure_is_not_retried() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let descendant =
+        Process::open(receipt["descendant"].as_u64().context("descendant pid")? as u32)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    let denial = DeniedListing::install(temporary)?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    descendant.wait();
+    assert_eq!(
+        unsafe {
+            WaitForSingleObject(process.0.as_raw_handle(), /*dwmilliseconds*/ 1_000)
+        },
+        WAIT_OBJECT_0,
+        "a real permission failure entered the transient-mapping retry loop"
+    );
+    let output = child.wait_with_output()?;
+    drop(denial);
+    assert_eq!((output.status.code(), output.stdout), (Some(1), vec![]));
+    let error = String::from_utf8(output.stderr)?;
+    assert!(
+        error.contains("remove retired Windows private storage"),
+        "{error}"
+    );
+    assert!(error.contains("os error 5"), "{error}");
+    assert!(temporary.is_dir());
+    Ok(())
+}
+
+#[test]
+fn private_storage_unlinks_readonly_hardlinks_and_junctions() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let outside = tempfile::tempdir()?;
+    let protected = outside.path().join("protected");
+    std::fs::write(&protected, b"outside storage")?;
+    let mut child = runner(root.path(), "tree")?.spawn()?;
+    let process = Process::open(child.id())?;
+    let receipt = ready(&mut child)?;
+    let temporary = Path::new(receipt["temporary"].as_str().context("private storage")?);
+    std::fs::hard_link(&protected, temporary.join("readonly-link"))?;
+    let junction = Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(temporary.join("junction"))
+        .arg(outside.path())
+        .output()?;
+    anyhow::ensure!(junction.status.success(), "create junction: {junction:?}");
+    let original = std::fs::metadata(&protected)?.permissions();
+    let mut readonly = original.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(&protected, readonly)?;
+    child
+        .stdin
+        .as_mut()
+        .context("runner stdin")?
+        .write_all(b"x")?;
+    process.wait();
+    let output = child.wait_with_output()?;
+    let unchanged = (
+        std::fs::read(&protected)?,
+        std::fs::metadata(&protected)?.permissions().readonly(),
+    );
+    std::fs::set_permissions(&protected, original)?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(42), vec![], vec![])
+    );
+    assert_eq!(unchanged, (b"outside storage".to_vec(), true));
+    assert!(!temporary.exists());
     Ok(())
 }
 
