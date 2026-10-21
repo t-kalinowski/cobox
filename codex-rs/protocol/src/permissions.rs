@@ -1053,11 +1053,9 @@ impl FileSystemSandboxPolicy {
         path: &PathUri,
         context: &FileSystemSandboxPolicyContext<'_>,
     ) -> bool {
-        if !self.resolve_access(path, context).can_write() {
-            return false;
-        }
-        self.has_full_disk_write_access_with_context(context)
-            || self.metadata_write_denial(path, context).is_none()
+        // A write entry grants its complete subtree. Workspace metadata
+        // restrictions belong to explicit entries supplied by the profile.
+        self.resolve_access(path, context).can_write()
     }
 
     fn metadata_write_denial(
@@ -1586,7 +1584,8 @@ impl FileSystemSandboxPolicy {
         {
             return Vec::new();
         }
-        // Include resolved gitdirs in the entries used to carve out broader grants.
+        // An explicit read-only Git pointer also protects its referenced gitdir.
+        // A writable root alone must not introduce metadata restrictions.
         // Seatbelt grants are independent, and later bubblewrap binds cover earlier mounts.
         let include_resolved_gitdirs = match path_resolution {
             WritableRootPathResolution::Effective => cfg!(target_os = "linux"),
@@ -1595,11 +1594,9 @@ impl FileSystemSandboxPolicy {
         let resolved_gitdir_entries: Vec<ResolvedFileSystemEntry> = if include_resolved_gitdirs {
             effective_entries
                 .iter()
-                .filter(|entry| entry.access.can_write())
+                .filter(|entry| entry.access == FileSystemAccessMode::Read)
                 .filter_map(|entry| {
-                    let dot_git = path_resolution
-                        .resolve(entry.path.clone())
-                        .join(PROTECTED_METADATA_GIT_PATH_NAME);
+                    let dot_git = path_resolution.resolve(entry.path.clone());
                     is_git_pointer_file(&dot_git)
                         .then(|| resolve_gitdir_from_file(&dot_git))
                         .flatten()
@@ -1652,10 +1649,6 @@ impl FileSystemSandboxPolicy {
             })
             .collect();
 
-        let effective_cwd = AbsolutePathBuf::from_absolute_path(cwd)
-            .ok()
-            .map(|cwd| path_resolution.resolve(cwd));
-
         dedup_absolute_paths(
             writable_entries
                 .iter()
@@ -1680,12 +1673,6 @@ impl FileSystemSandboxPolicy {
                 .collect();
             let protected_metadata_names =
                 protected_metadata_names_for_writable_root(&matching, &root, &raw_writable_roots);
-            let protect_missing_dot_codex = effective_cwd.as_ref() == Some(&root);
-            let mut read_only_subpaths: Vec<AbsolutePathBuf> =
-                default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
-                    .into_iter()
-                    .filter(|path| !has_explicit_resolved_path_entry(&resolved_entries, path))
-                    .collect();
             // Narrower explicit non-write entries carve out broader writable roots.
             // More specific write entries still remain writable because they appear
             // as separate WritableRoot values and are checked independently.
@@ -1693,57 +1680,53 @@ impl FileSystemSandboxPolicy {
             // so downstream sandboxes can still mask the symlink inode itself.
             // Example: if `<root>/.codex -> <root>/decoy`, bwrap must still see
             // `<root>/.codex`, not only the resolved `<root>/decoy`.
-            read_only_subpaths.extend(
-                prepared_entries
-                    .iter()
-                    .filter(|entry| !entry.entry.access.can_write())
-                    .filter_map(|prepared| {
-                        let entry = prepared.entry;
-                        let effective_path = &prepared.effective_path;
-                        // Preserve the literal in-root path whenever the
-                        // carveout itself lives under this writable root, even
-                        // if following symlinks would resolve back to the root
-                        // or escape outside it. Downstream sandboxes need that
-                        // raw path so they can mask the symlink inode itself.
-                        // Examples:
-                        // - `<root>/linked-private -> <root>/decoy-private`
-                        // - `<root>/linked-private -> /tmp/outside-private`
-                        // - `<root>/alias-root -> <root>`
-                        let raw_carveout_path = if preserve_raw_carveout_paths {
-                            if entry.path == root {
-                                None
-                            } else if entry.path.as_path().starts_with(root.as_path()) {
-                                Some(entry.path.clone())
-                            } else {
-                                raw_writable_roots.iter().find_map(|raw_root| {
-                                    let suffix = entry
-                                        .path
-                                        .as_path()
-                                        .strip_prefix(raw_root.as_path())
-                                        .ok()?;
-                                    if suffix.as_os_str().is_empty() {
-                                        return None;
-                                    }
-                                    Some(root.join(suffix))
-                                })
-                            }
-                        } else {
+            let read_only_subpaths = prepared_entries
+                .iter()
+                .filter(|entry| !entry.entry.access.can_write())
+                .filter_map(|prepared| {
+                    let entry = prepared.entry;
+                    let effective_path = &prepared.effective_path;
+                    // Preserve the literal in-root path whenever the
+                    // carveout itself lives under this writable root, even
+                    // if following symlinks would resolve back to the root
+                    // or escape outside it. Downstream sandboxes need that
+                    // raw path so they can mask the symlink inode itself.
+                    // Examples:
+                    // - `<root>/linked-private -> <root>/decoy-private`
+                    // - `<root>/linked-private -> /tmp/outside-private`
+                    // - `<root>/alias-root -> <root>`
+                    let raw_carveout_path = if preserve_raw_carveout_paths {
+                        if entry.path == root {
                             None
-                        };
-
-                        if let Some(raw_carveout_path) = raw_carveout_path {
-                            return Some(raw_carveout_path);
+                        } else if entry.path.as_path().starts_with(root.as_path()) {
+                            Some(entry.path.clone())
+                        } else {
+                            raw_writable_roots.iter().find_map(|raw_root| {
+                                let suffix =
+                                    entry.path.as_path().strip_prefix(raw_root.as_path()).ok()?;
+                                if suffix.as_os_str().is_empty() {
+                                    return None;
+                                }
+                                Some(root.join(suffix))
+                            })
                         }
+                    } else {
+                        None
+                    };
 
-                        if effective_path == &root
-                            || !effective_path.as_path().starts_with(root.as_path())
-                        {
-                            return None;
-                        }
+                    if let Some(raw_carveout_path) = raw_carveout_path {
+                        return Some(raw_carveout_path);
+                    }
 
-                        Some(effective_path.clone())
-                    }),
-            );
+                    if effective_path == &root
+                        || !effective_path.as_path().starts_with(root.as_path())
+                    {
+                        return None;
+                    }
+
+                    Some(effective_path.clone())
+                })
+                .collect();
             WritableRoot {
                 protected_metadata_names,
                 root,
@@ -2678,7 +2661,7 @@ mod tests {
             format!("gitdir: {}\n", alias.join("gitdir").display()),
         )
         .expect("write Git pointer");
-        let policy = FileSystemSandboxPolicy::restricted(
+        let mut policy = FileSystemSandboxPolicy::restricted(
             [&workspace, &writable]
                 .into_iter()
                 .map(|path| {
@@ -2691,6 +2674,12 @@ mod tests {
                 })
                 .collect(),
         );
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(workspace.join(".git"))
+                .unwrap()
+                .into(),
+            FileSystemAccessMode::Read,
+        ));
         let roots = if cfg!(target_os = "macos") {
             policy.get_writable_roots_with_cwd_preserving_mutable_paths(&workspace)
         } else {
@@ -2879,7 +2868,7 @@ mod tests {
                 "resolving {candidate}"
             );
         }
-        assert!(!policy.can_write_path(&path("file:///c:/WORKSPACE/.git/config"), &context,));
+        assert!(policy.can_write_path(&path("file:///c:/WORKSPACE/.git/config"), &context,));
 
         let scoped = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
             FileSystemPath::Special {
@@ -3223,13 +3212,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn writable_roots_proactively_protect_missing_dot_codex() {
+    fn writable_roots_do_not_protect_missing_metadata_implicitly() {
         let cwd = TempDir::new().expect("tempdir");
         let expected_root = AbsolutePathBuf::from_absolute_path(
             cwd.path().canonicalize().expect("canonicalize cwd"),
         )
         .expect("absolute canonical root");
-        let expected_dot_codex = expected_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -3242,11 +3230,7 @@ mod tests {
         let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
         assert_eq!(writable_roots.len(), 1);
         assert_eq!(writable_roots[0].root, expected_root);
-        assert!(
-            writable_roots[0]
-                .read_only_subpaths
-                .contains(&expected_dot_codex)
-        );
+        assert!(writable_roots[0].read_only_subpaths.is_empty());
     }
 
     #[cfg(target_os = "macos")]
@@ -3470,13 +3454,14 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_policy_blocks_protected_metadata_path_writes_by_default() {
-        let cwd = TempDir::new().expect("tempdir");
-        let dot_git_config = cwd.path().join(".git").join("config");
-        let dot_agents_config = cwd.path().join(".agents").join("config");
-        let dot_codex_config = cwd.path().join(".codex").join("config.toml");
-        let dot_aws_config = cwd.path().join(".aws").join("config");
-        let root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
+    fn filesystem_policy_grants_metadata_writes_without_explicit_exclusions() {
+        let directory = TempDir::new().expect("tempdir");
+        let cwd = directory.path().canonicalize().expect("canonical cwd");
+        let dot_git_config = cwd.as_path().join(".git").join("config");
+        let dot_agents_config = cwd.as_path().join(".agents").join("config");
+        let dot_codex_config = cwd.as_path().join(".codex").join("config.toml");
+        let dot_aws_config = cwd.as_path().join(".aws").join("config");
+        let root = AbsolutePathBuf::from_absolute_path(cwd.as_path()).expect("absolute cwd");
         let file_system_policy =
             FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
                 path: root.into(),
@@ -3484,26 +3469,23 @@ mod tests {
                 missing_path_behavior: None,
             }]);
 
-        assert!(!file_system_policy.can_write_local_path_with_cwd(&dot_git_config, cwd.path()));
-        assert!(!file_system_policy.can_write_local_path_with_cwd(&dot_agents_config, cwd.path()));
-        assert!(!file_system_policy.can_write_local_path_with_cwd(&dot_codex_config, cwd.path()));
-        assert!(!file_system_policy.can_write_local_path_with_cwd(&dot_aws_config, cwd.path()));
+        assert!(file_system_policy.can_write_local_path_with_cwd(&dot_git_config, cwd.as_path()));
+        assert!(
+            file_system_policy.can_write_local_path_with_cwd(&dot_agents_config, cwd.as_path())
+        );
+        assert!(file_system_policy.can_write_local_path_with_cwd(&dot_codex_config, cwd.as_path()));
+        assert!(file_system_policy.can_write_local_path_with_cwd(&dot_aws_config, cwd.as_path()));
 
-        let writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd.path());
+        let writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd.as_path());
         assert_eq!(writable_roots.len(), 1);
         assert_eq!(
             writable_roots[0].protected_metadata_names,
-            vec![
-                ".git".to_string(),
-                ".agents".to_string(),
-                ".codex".to_string(),
-                ".aws".to_string(),
-            ]
+            Vec::<String>::new()
         );
-        assert!(!writable_roots[0].is_path_writable(&dot_git_config));
-        assert!(!writable_roots[0].is_path_writable(&dot_agents_config));
-        assert!(!writable_roots[0].is_path_writable(&dot_codex_config));
-        assert!(!writable_roots[0].is_path_writable(&dot_aws_config));
+        assert!(writable_roots[0].is_path_writable(&dot_git_config));
+        assert!(writable_roots[0].is_path_writable(&dot_agents_config));
+        assert!(writable_roots[0].is_path_writable(&dot_codex_config));
+        assert!(writable_roots[0].is_path_writable(&dot_aws_config));
     }
 
     #[test]
@@ -3607,6 +3589,7 @@ mod tests {
         let expected_codex = link_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(expected_codex.clone().into(), FileSystemAccessMode::Read),
             FileSystemSandboxEntry {
                 path: link_root.into(),
                 access: FileSystemAccessMode::Write,
@@ -3663,6 +3646,8 @@ mod tests {
         let expected_codex = expected_root.join(".codex");
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(expected_agents.clone().into(), FileSystemAccessMode::Read),
+            FileSystemSandboxEntry::new(expected_codex.clone().into(), FileSystemAccessMode::Read),
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::Minimal,
@@ -3686,7 +3671,11 @@ mod tests {
 
         assert_eq!(
             policy.get_readable_roots_with_cwd(&link_root),
-            vec![expected_root.clone()]
+            vec![
+                expected_agents.clone(),
+                expected_codex.clone(),
+                expected_root.clone()
+            ]
         );
         assert_eq!(
             policy.get_unreadable_roots_with_cwd(&link_root),
@@ -3735,11 +3724,17 @@ mod tests {
             AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
                 .expect("absolute canonical decoy");
 
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: root.into(),
-            access: FileSystemAccessMode::Write,
-            missing_path_behavior: None,
-        }]);
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                expected_dot_codex.clone().into(),
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry {
+                path: root.into(),
+                access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
+            },
+        ]);
 
         let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
         assert_eq!(writable_roots.len(), 1);
@@ -3929,6 +3924,7 @@ mod tests {
         }
 
         let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(expected_codex.clone().into(), FileSystemAccessMode::Read),
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::Tmpdir,
@@ -4020,8 +4016,9 @@ mod tests {
 
     #[test]
     fn split_only_nested_carveouts_need_direct_runtime_enforcement() {
-        let cwd = TempDir::new().expect("tempdir");
-        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
+        let directory = TempDir::new().expect("tempdir");
+        let cwd = directory.path().canonicalize().expect("canonical cwd");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.as_path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4038,17 +4035,18 @@ mod tests {
         ]);
 
         assert!(
-            policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+            policy
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path(),)
         );
 
         let legacy_workspace_write = legacy_runtime_file_system_policy_for_cwd(
             &SandboxPolicy::new_workspace_write_policy(),
-            cwd.path(),
+            cwd.as_path(),
         );
         assert!(
-            legacy_workspace_write
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),),
-            "metadata-name protections must stay in the direct enforcement path even when legacy concrete read-only paths match"
+            !legacy_workspace_write
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path(),),
+            "a legacy runtime projection has only the concrete exclusions already supported by the legacy policy"
         );
     }
 
@@ -4081,7 +4079,8 @@ mod tests {
 
     #[test]
     fn missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement() {
-        let cwd = TempDir::new().expect("tempdir");
+        let directory = TempDir::new().expect("tempdir");
+        let cwd = directory.path().canonicalize().expect("canonical cwd");
         let legacy_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -4089,20 +4088,22 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let profile_projection =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd.path());
+        let profile_projection = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+            &legacy_policy,
+            cwd.as_path(),
+        );
         assert!(
             profile_projection
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path()),
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path()),
             "symbolic .git/.agents carveouts protect missing paths that legacy sandboxes cannot represent"
         );
 
         let legacy_runtime_projection =
-            legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd.path());
+            legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd.as_path());
         assert!(
-            legacy_runtime_projection
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path()),
-            "metadata-name protections are outside the legacy SandboxPolicy writable-root contract"
+            !legacy_runtime_projection
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path()),
+            "the legacy runtime projection adds no implicit metadata-name restrictions"
         );
     }
 

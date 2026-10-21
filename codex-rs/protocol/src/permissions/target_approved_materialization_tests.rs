@@ -119,13 +119,13 @@ fn approved_command_grants_root_metadata_unless_explicitly_denied() {
             metadata_paths
                 .each_ref()
                 .map(|path| ordinary.can_write_path(path, &context)),
-            [false, false, false],
+            [false, true, true],
         );
         assert_eq!(
             metadata_paths
                 .each_ref()
                 .map(|path| approved.can_write_path(path, &context)),
-            [false, false, true],
+            [false, true, true],
         );
         assert!(approved.can_write_path(&root_path(".codex/public"), &context));
         assert!(!approved.can_write_path(&root_path(".codex/private/file"), &context));
@@ -160,13 +160,7 @@ fn linux_root_metadata_writes_inherit_the_root_without_reopening_other_paths() {
         ),
     ]);
     let roots = policy.get_writable_roots_with_cwd_inheriting_root_metadata(&cwd);
-    assert_eq!(
-        roots[0].protected_metadata_names,
-        PROTECTED_METADATA_PATH_NAMES
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>(),
-    );
+    assert_eq!(roots[0].protected_metadata_names, Vec::<String>::new(),);
 
     let metadata = PROTECTED_METADATA_PATH_NAMES
         .iter()

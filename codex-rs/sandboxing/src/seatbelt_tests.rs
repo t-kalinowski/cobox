@@ -503,10 +503,10 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         "expected write carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains(&seatbelt_protected_metadata_name_requirements(Path::new(
+        !policy.contains(&seatbelt_protected_metadata_name_requirements(Path::new(
             "/"
         ))),
-        "expected metadata protection regex deny requirements in policy:\n{policy}"
+        "unexpected implicit metadata protection regex deny requirements in policy:\n{policy}"
     );
     assert!(
         args.iter().any(
@@ -523,8 +523,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         writable_definitions,
         vec![
             "-DWRITABLE_ROOT_0=/".to_string(),
-            "-DWRITABLE_ROOT_0_EXCLUDED_0=/.codex".to_string(),
-            format!("-DWRITABLE_ROOT_0_EXCLUDED_1={}", unreadable_root.display()),
+            format!("-DWRITABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display()),
         ],
         "unexpected write carveout parameters in args: {args:#?}"
     );
@@ -1935,17 +1934,18 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         )),
         "expected cwd metadata protection regex requirements in policy:\n{policy_text}",
     );
+    for name in [".git", ".codex"] {
+        let root = regex_lite::escape(&vulnerable_root_canonical.to_string_lossy());
+        let name = regex_lite::escape(name);
+        assert!(policy_text.contains(&format!(
+            r#"(require-not (regex #"^{root}/{name}(/.*)?$"))"#
+        )));
+    }
     assert!(
-        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
-            &vulnerable_root_canonical
-        )),
-        "expected populated root metadata protection regex requirements in policy:\n{policy_text}",
-    );
-    assert!(
-        policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+        !policy_text.contains(&seatbelt_protected_metadata_name_requirements(
             &empty_root_canonical
         )),
-        "expected empty root metadata protection regex requirements in policy:\n{policy_text}",
+        "unexpected implicit empty root metadata protection regex requirements in policy:\n{policy_text}",
     );
 
     let expected_definitions = [
@@ -1959,21 +1959,21 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
             cwd.canonicalize()
                 .expect("canonicalize cwd")
-                .join(".codex")
+                .join(".git")
                 .display()
         ),
         format!(
             "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
             cwd.canonicalize()
                 .expect("canonicalize cwd")
-                .join(".git")
+                .join(".agents")
                 .display()
         ),
         format!(
             "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
             cwd.canonicalize()
                 .expect("canonicalize cwd")
-                .join(".agents")
+                .join(".codex")
                 .display()
         ),
         format!(
@@ -2547,7 +2547,7 @@ fn seatbelt_protects_writable_root_created_as_directory() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn seatbelt_protects_aws_in_extra_writable_home() {
+fn seatbelt_enforces_explicit_aws_protection_in_writable_home() {
     for existing in [true, false] {
         let tmp = TempDir::new().expect("tempdir");
         let home = tmp.path().join("home");
@@ -2563,12 +2563,11 @@ fn seatbelt_protects_aws_in_extra_writable_home() {
             fs::create_dir(&aws).expect("create .aws");
             fs::write(&config, "original").expect("write AWS config");
         }
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![home.as_path().try_into().expect("absolute home")],
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
+        let mut policy = restricted_write_policy(&[home.as_path()]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(&aws).unwrap().into(),
+            FileSystemAccessMode::Read,
+        ));
         let attempts: &[&str] = if existing {
             &[
                 r#"printf changed > "$HOME/.aws/config""#,
@@ -2585,17 +2584,21 @@ fn seatbelt_protects_aws_in_extra_writable_home() {
             ]
         };
         for attempt in attempts {
-            let args = create_seatbelt_command_args_for_legacy_policy(
-                vec![
+            let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+                command: vec![
                     "/bin/sh".to_string(),
                     "-c".to_string(),
                     format!(r#"printf ran > "$HOME/probe" && {attempt}"#),
                 ],
-                &policy,
-                &workspace,
-                /*enforce_managed_network*/ false,
-                /*network*/ None,
-            )
+                file_system_sandbox_policy: &policy,
+                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+                sandbox_policy_cwd: &workspace,
+                enforce_managed_network: false,
+                managed_network: None,
+                environment_id: None,
+                network: None,
+                extra_allow_unix_sockets: &[],
+            })
             .expect("build seatbelt command");
             let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
                 .args(args)
@@ -2643,7 +2646,13 @@ fn seatbelt_protects_resolved_target_of_symlinked_metadata_directory() {
         fs::create_dir_all(&actual_config).expect("create actual config directory");
         fs::write(&config, "original").expect("write config");
         symlink(&actual_config, &metadata_dir).expect("create metadata symlink");
-        let policy = restricted_write_policy(&[writable_root.as_path()]);
+        let mut policy = restricted_write_policy(&[writable_root.as_path()]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(&metadata_dir)
+                .unwrap()
+                .into(),
+            FileSystemAccessMode::Read,
+        ));
         let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
             command: vec![
                 "/bin/sh".to_string(),
@@ -2956,8 +2965,8 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         "expected cwd metadata protection regex requirements in policy:\n{policy_text}",
     );
     assert!(
-        policy_text.contains(&seatbelt_protected_metadata_name_requirements(&slash_tmp)),
-        "expected /tmp metadata protection regex requirements in policy:\n{policy_text}",
+        !policy_text.contains(&seatbelt_protected_metadata_name_requirements(&slash_tmp)),
+        "unexpected implicit /tmp metadata protection regex requirements in policy:\n{policy_text}",
     );
     if let Some(tmpdir_env_var) = std::env::var("TMPDIR")
         .ok()
@@ -2965,10 +2974,10 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .and_then(|p| p.canonicalize().ok())
     {
         assert!(
-            policy_text.contains(&seatbelt_protected_metadata_name_requirements(
+            !policy_text.contains(&seatbelt_protected_metadata_name_requirements(
                 &tmpdir_env_var
             )),
-            "expected TMPDIR metadata protection regex requirements in policy:\n{policy_text}",
+            "unexpected implicit TMPDIR metadata protection regex requirements in policy:\n{policy_text}",
         );
     }
 
@@ -2989,7 +2998,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         "missing {expected_dot_git}: {args:#?}"
     );
     let expected_dot_codex = format!(
-        "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
+        "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
         dot_codex_canonical.to_string_lossy()
     );
     assert!(
@@ -2997,7 +3006,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         "missing {expected_dot_codex}: {args:#?}"
     );
     let expected_dot_agents = format!(
-        "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
+        "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
         dot_agents_canonical.to_string_lossy()
     );
     assert!(
