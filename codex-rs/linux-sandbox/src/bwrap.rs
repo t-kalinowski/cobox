@@ -2155,6 +2155,14 @@ mod tests {
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
+        // Match the ordinary read-all baseline so this case exercises the
+        // metadata mask without an independent readable-file bind.
+        policy.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ));
         policy.entries.push(FileSystemSandboxEntry::new(
             AbsolutePathBuf::from_absolute_path(&dot_git)
                 .expect("absolute protected path")
