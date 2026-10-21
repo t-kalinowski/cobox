@@ -1323,7 +1323,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
 }
 
 #[tokio::test]
-async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
+async fn sandbox_starts_with_denied_tmp_and_protects_registry() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
@@ -1342,6 +1342,8 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
         let secret = NamedTempFile::new_in(&tmp_root).expect("denied file");
         std::fs::write(secret.path(), "private").expect("write denied file");
         for read_root in [FileSystemSpecialPath::Root, FileSystemSpecialPath::Minimal] {
+            let registry_visible = tmp_root != std::path::Path::new("/tmp")
+                && matches!(read_root, FileSystemSpecialPath::Root);
             let denied_path = if tmp_root == std::path::Path::new("/tmp") {
                 FileSystemPath::Special {
                     value: FileSystemSpecialPath::SlashTmp,
@@ -1362,6 +1364,7 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
             ]);
             let mut env = create_env_from_core_vars();
             env.insert("TMPDIR".to_string(), tmp_root.display().to_string());
+            env.insert("REGISTRY_VISIBLE".to_string(), registry_visible.to_string());
             env.insert(
                 "DENIED_SECRET".to_string(),
                 secret.path().display().to_string(),
@@ -1375,7 +1378,8 @@ cat AGENTS.md
 test ! -r "$DENIED_SECRET"
 if printf modified > "$DENIED_SECRET" 2>/dev/null; then exit 1; fi
 registry="/tmp/codex-bwrap-synthetic-mount-targets-$(id -u)"
-test ! -e "$registry"
+if [ "$REGISTRY_VISIBLE" = true ]; then test -d "$registry"; else test ! -e "$registry"; fi
+if (printf forged > "$registry/forged-marker") 2>/dev/null; then exit 1; fi
 "#,
                 ],
                 cwd.clone(),
