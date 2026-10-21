@@ -1408,7 +1408,10 @@ pub(crate) fn synthetic_mount_registry_root() -> PathBuf {
     REGISTRY_ROOT
         .get_or_init(|| {
             let effective_uid = unsafe { libc::geteuid() };
-            let temp_dir = std::env::temp_dir();
+            // Mount targets can be shared by launches with different TMPDIRs.
+            // Their owners must use one host registry or one retirement can
+            // unlink another launch's live metadata mount target.
+            let temp_dir = Path::new("/tmp");
             let temp_dir = temp_dir.canonicalize().unwrap_or_else(|err| {
                 panic!(
                     "failed to resolve synthetic mount registry temp directory {}: {err}",

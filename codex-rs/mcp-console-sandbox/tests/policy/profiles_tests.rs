@@ -1,5 +1,60 @@
 use super::*;
 use pretty_assertions::assert_eq;
+#[cfg(target_os = "linux")]
+use std::io::BufRead;
+#[cfg(target_os = "linux")]
+use std::io::BufReader;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn overlapping_sandboxes_keep_metadata_protected_across_temporary_directories() {
+    let workspace = tempfile::tempdir().unwrap();
+    let first_temp = tempfile::tempdir().unwrap();
+    let second_temp = tempfile::tempdir().unwrap();
+    let first_staging = tempfile::tempdir().unwrap();
+    let second_staging = tempfile::tempdir().unwrap();
+    let mut children = Vec::new();
+    for (temporary, staging, script) in [
+        (
+            first_temp.path(),
+            first_staging.path(),
+            "printf 'ready\\n'; read -r release",
+        ),
+        (
+            second_temp.path(),
+            second_staging.path(),
+            "printf 'ready\\n'; read -r release; for name in .git .agents .codex; do if mkdir -p \"$name/new\" 2>/dev/null; then echo \"metadata write escaped: $name\"; exit 13; fi; done; printf 'protected\\n'",
+        ),
+    ] {
+        let mut value = selected(workspace.path(), ":workspace", &["/bin/sh", "-c", script]);
+        value["workspace_options"] =
+            json!({"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true});
+        let mut command = runner(staging);
+        command.env("TMPDIR", temporary).stdin(Stdio::piped());
+        let (mut child, mut bootstrap) = spawn(&mut command);
+        bootstrap.write_all(&frame(&value)).unwrap();
+        drop(bootstrap);
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        stdout.read_line(&mut ready).unwrap();
+        assert_eq!(ready, "ready\n");
+        children.push((child, stdout));
+    }
+    // The first retirement must not remove the second launch's live masks.
+    for (index, (mut child, mut stdout)) in children.into_iter().enumerate() {
+        child.stdin.take().unwrap().write_all(b"release\n").unwrap();
+        let output = child.wait_with_output().unwrap();
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).unwrap();
+        assert_eq!(
+            (output.status.code(), text.as_str(), output.stderr),
+            (Some(0), if index == 0 { "" } else { "protected\n" }, vec![])
+        );
+    }
+    for name in [".git", ".agents", ".codex"] {
+        assert!(!workspace.path().join(name).exists());
+    }
+}
 
 fn selected(workspace: &Path, name: &str, command: &[&str]) -> Value {
     let mut value = request(command);

@@ -1042,7 +1042,7 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
 }
 
 #[tokio::test]
-async fn sandbox_rejects_symlinked_synthetic_mount_registry() {
+async fn sandbox_does_not_redirect_its_registry_through_tmpdir() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
@@ -1067,32 +1067,30 @@ async fn sandbox_rejects_symlinked_synthetic_mount_registry() {
     );
     let mut env = create_env_from_core_vars();
     env.insert("TMPDIR".to_string(), temp.path().display().to_string());
-    let output = expect_denied(
-        run_cmd_result_with_permission_profile_for_cwd(
-            &["sh", "-c", "touch registry/forged-marker"],
-            cwd,
-            permission_profile,
-            env,
-            LONG_TIMEOUT_MS,
-            /*use_legacy_landlock*/ false,
-        )
-        .await,
-        "a symlinked registry must not expose writable bookkeeping",
-    );
-    assert!(
-        output
-            .stderr
-            .text
-            .contains("synthetic mount registry must not be a symlink"),
-        "stderr: {}",
-        output.stderr.text
+    let output = run_cmd_result_with_permission_profile_for_cwd(
+        &["sh", "-c", "printf 'registry-independent\\n'"],
+        cwd,
+        permission_profile,
+        env,
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+    )
+    .await
+    .expect("an unused TMPDIR registry alias must not affect launch");
+    assert_eq!(
+        (
+            output.exit_code,
+            output.stdout.text.as_str(),
+            output.stderr.text.as_str()
+        ),
+        (0, "registry-independent\n", "")
     );
     assert_eq!(
         std::fs::read_dir(registry_target)
             .expect("read registry target")
             .count(),
         0,
-        "the registry symlink must be rejected before registration or command execution"
+        "bookkeeping must not follow an alternate TMPDIR registry alias"
     );
 }
 
@@ -1143,7 +1141,7 @@ async fn sandbox_keeps_parent_repo_discovery_while_blocking_child_metadata() {
         r#"set -e
 test "$(git rev-parse --show-toplevel)" = '{repo}'
 touch "$TMPDIR/writable-sibling"
-registry="${{TMPDIR:-/tmp}}/codex-bwrap-synthetic-mount-targets-$(id -u)"
+registry="/tmp/codex-bwrap-synthetic-mount-targets-$(id -u)"
 if touch "$registry/forged-marker" 2>/dev/null; then
   exit 22
 fi
@@ -1376,7 +1374,7 @@ async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
 cat AGENTS.md
 test ! -r "$DENIED_SECRET"
 if printf modified > "$DENIED_SECRET" 2>/dev/null; then exit 1; fi
-registry="$TMPDIR/codex-bwrap-synthetic-mount-targets-$(id -u)"
+registry="/tmp/codex-bwrap-synthetic-mount-targets-$(id -u)"
 test ! -e "$registry"
 "#,
                 ],
