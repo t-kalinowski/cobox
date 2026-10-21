@@ -1988,11 +1988,17 @@ mod tests {
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
         let agents_link_str = path_to_string(&agents_link);
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: root.into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(&agents_link)
+                .expect("absolute protected path")
+                .into(),
+            FileSystemAccessMode::Read,
+        ));
 
         let err = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
             .expect_err("protected symlinked subpath should fail closed");
@@ -2122,21 +2128,11 @@ mod tests {
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
         assert_empty_file_bound_without_perms(&args.args, &second_blocked);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".git"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(args.preserved_files.len(), 2);
         assert_bind_data_uses_distinct_preserved_fds(&args);
         assert_eq!(
             synthetic_mount_target_paths(&args),
-            vec![
-                blocked.clone(),
-                second_blocked.clone(),
-                workspace.join(".git"),
-                workspace.join(".agents"),
-                workspace.join(".codex"),
-                workspace.join(".aws"),
-            ]
+            vec![blocked.clone(), second_blocked.clone(),]
         );
         assert!(
             !blocked.exists() && !second_blocked.exists(),
@@ -2154,28 +2150,24 @@ mod tests {
 
         let workspace_root =
             AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: workspace_root.into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(&dot_git)
+                .expect("absolute protected path")
+                .into(),
+            FileSystemAccessMode::Read,
+        ));
 
         let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
             .expect("filesystem args");
         let dot_git_str = path_to_string(&dot_git);
 
         assert_empty_file_bound_without_perms(&args.args, &dot_git);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                dot_git.clone(),
-                workspace.join(".agents"),
-                workspace.join(".codex"),
-                workspace.join(".aws"),
-            ]
-        );
+        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git.clone(),]);
         assert!(
             !args
                 .args
@@ -2202,26 +2194,22 @@ mod tests {
 
         let workspace_root =
             AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: workspace_root.into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(&dot_git)
+                .expect("absolute protected path")
+                .into(),
+            FileSystemAccessMode::Read,
+        ));
 
         let args = create_filesystem_args(&policy, &workspace, BwrapOptions::default())
             .expect("filesystem args");
         assert_empty_directory_mounted_read_only(&args.args, &dot_git);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                workspace.join(".codex"),
-                dot_git,
-                workspace.join(".agents"),
-                workspace.join(".aws"),
-            ],
-        );
+        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git,],);
         assert!(
             protected_create_target_paths(&args).is_empty(),
             "missing child .git should be mount protected before command execution",
@@ -2244,26 +2232,22 @@ mod tests {
 
         let link_workspace_root = AbsolutePathBuf::from_absolute_path(&link_workspace)
             .expect("absolute symlinked workspace");
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: link_workspace_root.into(),
             access: FileSystemAccessMode::Write,
             missing_path_behavior: None,
         }]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(&link_workspace.join(".git"))
+                .expect("absolute protected path")
+                .into(),
+            FileSystemAccessMode::Read,
+        ));
 
         let args = create_filesystem_args(&policy, &link_workspace, BwrapOptions::default())
             .expect("filesystem args");
         assert_empty_directory_mounted_read_only(&args.args, &dot_git);
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
-        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(
-            synthetic_mount_target_paths(&args),
-            vec![
-                workspace.join(".codex"),
-                dot_git,
-                workspace.join(".agents"),
-                workspace.join(".aws"),
-            ],
-        );
+        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git,],);
         assert!(
             protected_create_target_paths(&args).is_empty(),
             "symlinked missing child .git should be mount protected before command execution",
@@ -2437,10 +2421,6 @@ mod tests {
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
-                PathBuf::from("/dev/.git"),
-                PathBuf::from("/dev/.agents"),
-                PathBuf::from("/dev/.codex"),
-                PathBuf::from("/dev/.aws"),
                 temp_dir.path().join(".aws"),
                 temp_dir.path().join(".git"),
                 temp_dir.path().join(".agents"),

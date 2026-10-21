@@ -4016,8 +4016,9 @@ mod tests {
 
     #[test]
     fn split_only_nested_carveouts_need_direct_runtime_enforcement() {
-        let cwd = TempDir::new().expect("tempdir");
-        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
+        let directory = TempDir::new().expect("tempdir");
+        let cwd = directory.path().canonicalize().expect("canonical cwd");
+        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.as_path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4034,17 +4035,18 @@ mod tests {
         ]);
 
         assert!(
-            policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+            policy
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path(),)
         );
 
         let legacy_workspace_write = legacy_runtime_file_system_policy_for_cwd(
             &SandboxPolicy::new_workspace_write_policy(),
-            cwd.path(),
+            cwd.as_path(),
         );
         assert!(
-            legacy_workspace_write
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),),
-            "metadata-name protections must stay in the direct enforcement path even when legacy concrete read-only paths match"
+            !legacy_workspace_write
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path(),),
+            "a legacy runtime projection has only the concrete exclusions already supported by the legacy policy"
         );
     }
 
@@ -4077,7 +4079,8 @@ mod tests {
 
     #[test]
     fn missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement() {
-        let cwd = TempDir::new().expect("tempdir");
+        let directory = TempDir::new().expect("tempdir");
+        let cwd = directory.path().canonicalize().expect("canonical cwd");
         let legacy_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -4085,20 +4088,22 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let profile_projection =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&legacy_policy, cwd.path());
+        let profile_projection = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+            &legacy_policy,
+            cwd.as_path(),
+        );
         assert!(
             profile_projection
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path()),
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path()),
             "symbolic .git/.agents carveouts protect missing paths that legacy sandboxes cannot represent"
         );
 
         let legacy_runtime_projection =
-            legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd.path());
+            legacy_runtime_file_system_policy_for_cwd(&legacy_policy, cwd.as_path());
         assert!(
-            legacy_runtime_projection
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path()),
-            "metadata-name protections are outside the legacy SandboxPolicy writable-root contract"
+            !legacy_runtime_projection
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.as_path()),
+            "the legacy runtime projection adds no implicit metadata-name restrictions"
         );
     }
 
