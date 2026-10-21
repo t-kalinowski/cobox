@@ -3,6 +3,78 @@ use pretty_assertions::assert_eq;
 use std::io::BufRead;
 use std::io::BufReader;
 
+#[test]
+fn writable_roots_cover_subtrees_without_implicit_metadata_exclusions() {
+    for descriptor in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let writable = root.join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        std::fs::write(writable.join("read-only"), "unchanged").unwrap();
+        std::fs::write(writable.join("secret"), "private").unwrap();
+        let script = r#"
+set -eu
+denied() { if "$@" 2>/dev/null; then echo "unexpected success: $*"; exit 1; fi; }
+for name in .git .agents .codex .aws; do
+    if test "$LAUNCH" = 1; then test ! -e "writable/$name"; fi
+    mkdir -p "writable/$name"
+    for nested in ordinary .git .agents .codex .aws; do
+        mkdir -p "writable/$name/$nested"
+        printf '%s' "$LAUNCH" > "writable/$name/$nested/value"
+        test "$(cat "writable/$name/$nested/value")" = "$LAUNCH"
+        printf disposable > "writable/$name/$nested/remove"
+        rm "writable/$name/$nested/remove"
+    done
+done
+test "$(cat writable/read-only)" = unchanged
+denied /bin/sh -c 'echo changed > writable/read-only'
+denied cat writable/secret
+denied /bin/sh -c 'echo escaped > outside'
+printf 'complete subtree writable; explicit exclusions retained\n'
+"#;
+        for launch in [1, 2] {
+            let mut value = request(&["/bin/sh", "-c", script]);
+            value["cwd"] = json!(root);
+            value["environment"] = json!({"PATH":"/usr/bin:/bin", "LAUNCH":launch.to_string()});
+            value["filesystem"] = json!({"kind":"restricted","entries":[
+                {"path":{"type":"special","value":{"kind":"root"}},"access":"read"},
+                {"path":{"type":"path","path":writable},"access":"write"},
+                {"path":{"type":"path","path":writable.join("read-only")},"access":"read"},
+                {"path":{"type":"path","path":writable.join("secret")},"access":"deny"}
+            ]});
+            let output = if descriptor {
+                run(frame(&value), &[])
+            } else {
+                for field in ["command", "cwd"] {
+                    value.as_object_mut().unwrap().remove(field);
+                }
+                let staging = tempfile::tempdir().unwrap();
+                runner(staging.path())
+                    .current_dir(&root)
+                    .args(["--config-env", "POLICY", "--", "/bin/sh", "-c", script])
+                    .env("POLICY", value.to_string())
+                    .output()
+                    .unwrap()
+            };
+            assert_eq!(
+                (output.status.code(), output.stdout, output.stderr),
+                (
+                    Some(0),
+                    b"complete subtree writable; explicit exclusions retained\n".to_vec(),
+                    vec![]
+                ),
+                "descriptor={descriptor}, launch={launch}"
+            );
+            assert_eq!(
+                std::fs::read(writable.join("read-only")).unwrap(),
+                b"unchanged"
+            );
+            assert_eq!(std::fs::read(writable.join("secret")).unwrap(), b"private");
+            assert!(!root.join("outside").exists());
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn replaceable_foreign_parent_cannot_remove_metadata_protection() {

@@ -36,7 +36,7 @@ fn local_aliases_keep_read_only_and_deny_overrides() -> anyhow::Result<()> {
                             ),
                             matching.can_write_path(&spelling.join(".codex/config.toml")?)?,
                         ),
-                        (true, false, access, false),
+                        (true, false, access, true),
                     );
                 }
             }

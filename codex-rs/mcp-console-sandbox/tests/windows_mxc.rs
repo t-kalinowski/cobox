@@ -31,6 +31,84 @@ fn console(policy: Value) -> Result<Command> {
 }
 
 #[test]
+fn writable_roots_cover_complete_subtrees_across_launches() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let directory = tempfile::tempdir()?;
+    let writable = directory.path().join("writable");
+    std::fs::create_dir(&writable)?;
+    std::fs::write(writable.join("read-only"), "unchanged")?;
+    std::fs::write(writable.join("secret"), "private")?;
+    let policy = json!({"filesystem":{"kind":"restricted","entries":[
+        {"path":{"type":"special","value":{"kind":"root"}},"access":"read"},
+        {"path":{"type":"path","path":writable},"access":"write"},
+        {"path":{"type":"path","path":writable.join("read-only")},"access":"read"},
+        {"path":{"type":"path","path":writable.join("secret")},"access":"deny"}
+    ]},"network":"restricted"});
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$root = Join-Path (Get-Location) 'writable'
+foreach ($name in '.git', '.agents', '.codex', '.aws') {
+    if ($env:TEST_LAUNCH -eq '1' -and [IO.Directory]::Exists((Join-Path $root $name))) { throw 'unexpected metadata directory' }
+    foreach ($nested in 'ordinary', '.git', '.agents', '.codex', '.aws') {
+        $path = Join-Path (Join-Path $root $name) $nested
+        [IO.Directory]::CreateDirectory($path) | Out-Null
+        $value = Join-Path $path 'value'
+        if ($env:TEST_LAUNCH -eq '2' -and [IO.File]::ReadAllText($value) -ne '1') { throw 'previous write lost' }
+        [IO.File]::WriteAllText($value, $env:TEST_LAUNCH)
+        if ([IO.File]::ReadAllText($value) -ne $env:TEST_LAUNCH) { throw 'write failed' }
+        $remove = Join-Path $path 'remove'
+        [IO.File]::WriteAllText($remove, 'disposable')
+        [IO.File]::Delete($remove)
+    }
+}
+foreach ($path in (Join-Path $root 'read-only'), (Join-Path $root 'secret'), (Join-Path (Get-Location) 'outside')) {
+    $denied = $false
+    try { [IO.File]::WriteAllText($path, 'escaped') } catch [UnauthorizedAccessException] { $denied = $true }
+    if (-not $denied) { throw "unexpected write: $path" }
+}
+$denied = $false
+try { [IO.File]::ReadAllText((Join-Path $root 'secret')) | Out-Null } catch [UnauthorizedAccessException] { $denied = $true }
+if (-not $denied) { throw 'unexpected secret read' }
+Write-Output 'complete subtree writable; explicit exclusions retained'
+"#;
+    for launch in [1, 2] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(directory.path())
+            .env("CONSOLE_POLICY", policy.to_string())
+            .env("TEST_LAUNCH", launch.to_string())
+            .args([
+                "--config-env",
+                "CONSOLE_POLICY",
+                "--",
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ])
+            .output()?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8(output.stdout)?,
+                String::from_utf8(output.stderr)?
+            ),
+            (
+                Some(0),
+                "complete subtree writable; explicit exclusions retained\r\n".to_owned(),
+                String::new()
+            )
+        );
+        assert_eq!(std::fs::read(writable.join("read-only"))?, b"unchanged");
+        assert_eq!(std::fs::read(writable.join("secret"))?, b"private");
+        assert!(!directory.path().join("outside").exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn mxc_launch_uses_the_default_policy() -> Result<()> {
     let available = mxc_support::available()?;
     if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {

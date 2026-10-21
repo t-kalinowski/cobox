@@ -5243,6 +5243,8 @@ mod tests {
         let expected_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
         let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(expected_agents.clone().into(), FileSystemAccessMode::Read),
+            FileSystemSandboxEntry::new(expected_codex.clone().into(), FileSystemAccessMode::Read),
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::Minimal,
@@ -5269,7 +5271,11 @@ mod tests {
         assert!(policy.include_platform_defaults());
         assert_eq!(
             policy.get_readable_roots_with_cwd(cwd.path()),
-            vec![cwd_absolute.clone()]
+            vec![
+                expected_agents.clone(),
+                expected_codex.clone(),
+                cwd_absolute.clone()
+            ]
         );
         assert_eq!(
             policy.get_unreadable_roots_with_cwd(cwd.path()),
@@ -5311,8 +5317,6 @@ mod tests {
         let expected_docs_public =
             AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs/public"))
                 .expect("canonical docs/public");
-        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
-            .expect("canonical .codex");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -5337,13 +5341,7 @@ mod tests {
         assert_eq!(
             sorted_writable_roots(policy.get_writable_roots_with_cwd(cwd.path())),
             vec![
-                (
-                    canonical_cwd,
-                    vec![
-                        expected_dot_codex.to_path_buf(),
-                        expected_docs.to_path_buf()
-                    ],
-                ),
+                (canonical_cwd, vec![expected_docs.to_path_buf()],),
                 (expected_docs_public.to_path_buf(), Vec::new()),
             ]
         );
