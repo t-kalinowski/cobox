@@ -5,10 +5,7 @@ use std::path::PathBuf;
 
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -106,7 +103,10 @@ pub fn resolve_windows_restricted_token_filesystem_overrides(
         ));
     }
 
-    prepare_windows_acl_policy(&mut file_system_sandbox_policy);
+    // Windows protects existing metadata paths through the legacy writable root
+    // projection. Do not turn skip-missing entries into newly-created
+    // deny-write sentinels.
+    file_system_sandbox_policy.remove_skip_missing_path_entries();
 
     // The restricted-token backend can still enforce split write restrictions,
     // but its WRITE_RESTRICTED token does not make capability SID deny-read ACEs
@@ -234,7 +234,10 @@ pub fn resolve_windows_elevated_filesystem_overrides(
         ));
     }
 
-    prepare_windows_acl_policy(&mut file_system_sandbox_policy);
+    // Windows protects existing metadata paths through the legacy writable root
+    // projection. Do not turn skip-missing entries into newly-created
+    // deny-write sentinels.
+    file_system_sandbox_policy.remove_skip_missing_path_entries();
 
     #[cfg(target_os = "windows")]
     codex_windows_sandbox::resolve_workload_temp_paths(
@@ -367,25 +370,6 @@ pub fn resolve_windows_elevated_filesystem_overrides(
     }))
 }
 
-// The legacy projection does not protect .claude. Keep its read rule as an
-// explicit ACL target, including when absent. Other skip-missing defaults
-// retain the legacy projection's existing-path behavior.
-fn prepare_windows_acl_policy(policy: &mut FileSystemSandboxPolicy) {
-    for entry in &mut policy.entries {
-        let claude_metadata = match &entry.path {
-            FileSystemPath::Path { path } => path.basename().as_deref() == Some(".claude"),
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::ProjectRoots { subpath },
-            } => subpath.as_deref() == Some(".claude"),
-            FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => false,
-        };
-        if claude_metadata && entry.access == FileSystemAccessMode::Read {
-            entry.missing_path_behavior = None;
-        }
-    }
-    policy.remove_skip_missing_path_entries();
-}
-
 fn normalize_windows_override_path(path: &Path) -> std::result::Result<PathBuf, String> {
     AbsolutePathBuf::from_absolute_path(dunce::simplified(path))
         .map(AbsolutePathBuf::into_path_buf)
@@ -427,6 +411,6 @@ fn has_reopened_writable_descendant(writable_roots: &[WritableRoot]) -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 #[path = "windows_tests.rs"]
 mod tests;

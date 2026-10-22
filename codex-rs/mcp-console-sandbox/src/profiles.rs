@@ -6,8 +6,12 @@ use anyhow::Result;
 use anyhow::bail;
 use anyhow::ensure;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use serde::Deserialize;
 
@@ -65,6 +69,16 @@ pub fn resolve(request: &Bootstrap) -> Result<(FileSystemSandboxPolicy, NetworkS
         .network
         .unwrap_or_else(|| baseline.network_sandbox_policy());
     let mut filesystem = baseline.file_system_sandbox_policy();
+    if name == ":workspace" {
+        // Runner defaults apply to its native backends, including MXC on
+        // Windows. Keep shared constructors and legacy ACL policy unchanged.
+        filesystem.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(Some(".claude".into())),
+            },
+            FileSystemAccessMode::Read,
+        ));
+    }
     if let Some(explicit) = explicit {
         match explicit.kind {
             FileSystemSandboxKind::Restricted => {

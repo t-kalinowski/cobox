@@ -39,8 +39,8 @@ fn main() -> anyhow::Result<()> {
             Ok(()) => println!("write allowed"),
             Err(error)
                 if matches!(
-                    error.raw_os_error(),
-                    Some(libc::EACCES | libc::EPERM | libc::EROFS)
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
                 ) =>
             {
                 println!("write denied")

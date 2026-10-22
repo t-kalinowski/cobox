@@ -87,19 +87,32 @@ printf 'absent metadata protected\n'
     assert!(!metadata.exists());
 
     std::fs::create_dir(&metadata).unwrap();
-    value["filesystem"] = json!({"kind":"restricted","entries":[{
-        "path":{"type":"path","path":metadata.canonicalize().unwrap()},"access":"write"
-    }]});
-    value["command"] = json!(["/bin/sh", "-c", "printf explicit > .claude/settings.json"]);
-    let output = run(frame(&value), &[]);
-    assert_eq!(
-        (output.status.code(), output.stdout, output.stderr),
-        (Some(0), vec![], vec![])
-    );
-    assert_eq!(
-        std::fs::read(metadata.join("settings.json")).unwrap(),
-        b"explicit"
-    );
+    let settings = metadata.join("settings.json");
+    std::fs::write(&settings, "readable").unwrap();
+    for grant in [&settings, &metadata] {
+        value["filesystem"] = json!({"kind":"restricted","entries":[{
+            "path":{"type":"path","path":grant.canonicalize().unwrap()},"access":"write"
+        }]});
+        value["command"] = json!([
+            "/bin/sh",
+            "-c",
+            "set -eu; printf explicit > .claude/settings.json; if touch .claude/other 2>/dev/null; then echo other; fi"
+        ]);
+        let output = run(frame(&value), &[]);
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (
+                Some(0),
+                if grant == &metadata {
+                    b"other\n".to_vec()
+                } else {
+                    vec![]
+                },
+                vec![]
+            )
+        );
+        assert_eq!(std::fs::read(&settings).unwrap(), b"explicit");
+    }
 }
 
 #[test]
@@ -279,7 +292,7 @@ fn materialized_workspace_stays_fixed_and_protects_missing_metadata() {
 set -eu
 printf created > "$WORKSPACE/ordinary"
 if touch elsewhere 2>/dev/null; then exit 1; fi
-for name in .git .agents .codex; do
+for name in .git .agents .codex .aws .claude; do
     if mkdir "$WORKSPACE/$name" 2>/dev/null; then exit 1; fi
 done
 "#,
@@ -290,7 +303,7 @@ done
     value["workspace_options"] = json!({"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true});
     let output = run(frame(&value), &[]);
     assert!(output.status.success(), "{output:?}");
-    for name in [".git", ".agents", ".codex"] {
+    for name in [".git", ".agents", ".codex", ".aws", ".claude"] {
         assert!(!root.join(name).exists(), "native setup retained {name}");
     }
 }

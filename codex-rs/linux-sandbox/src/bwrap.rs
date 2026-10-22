@@ -2413,7 +2413,7 @@ mod tests {
         );
         // Root metadata ownership is unrelated to device mount ordering.
         // Keep metadata assertions under the owned temporary workspace.
-        for name in [".git", ".agents", ".codex", ".aws", ".claude"] {
+        for name in [".git", ".agents", ".codex", ".aws"] {
             sandbox_policy.entries.push(FileSystemSandboxEntry::new(
                 AbsolutePathBuf::from_absolute_path(Path::new("/").join(name))
                     .expect("metadata path")
@@ -2430,7 +2430,6 @@ mod tests {
             synthetic_mount_target_paths(&args),
             vec![
                 temp_dir.path().join(".aws"),
-                temp_dir.path().join(".claude"),
                 temp_dir.path().join(".git"),
                 temp_dir.path().join(".agents"),
                 temp_dir.path().join(".codex"),
