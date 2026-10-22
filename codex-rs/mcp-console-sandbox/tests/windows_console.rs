@@ -265,6 +265,114 @@ fn cleared_target_environment_ignores_non_unicode_host_variables() -> anyhow::Re
 }
 
 #[test]
+fn workspace_profile_protects_metadata_without_creating_directories() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    for (name, existing) in [".git", ".agents", ".codex", ".aws", ".claude"]
+        .into_iter()
+        .flat_map(|name| {
+            [false, true]
+                .into_iter()
+                .map(move |existing| (name, existing))
+        })
+    {
+        let root = tempfile::tempdir()?;
+        let metadata = root.path().join(name);
+        let target = if existing {
+            std::fs::create_dir_all(&metadata)?;
+            let target = metadata.join("settings.json");
+            std::fs::write(&target, "readable")?;
+            target
+        } else {
+            metadata.clone()
+        };
+        let config = json!({
+            "extends": ":workspace", "workspace": root.path(),
+            "workspace_options": {"exclude_tmpdir_env_var": true, "exclude_slash_tmp": true},
+        });
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(root.path())
+            .env("CONSOLE_POLICY", config.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("probe-write")
+            .arg(&target)
+            .output()?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8(output.stdout)?,
+                output.stderr
+            ),
+            (Some(0), "write denied\n".to_owned(), vec![])
+        );
+        if existing {
+            assert_eq!(std::fs::read_to_string(target)?, "readable");
+        } else {
+            assert!(!metadata.exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn workspace_profile_allows_directory_and_descendant_write_overrides() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    for grant in [".claude/settings.json", ".claude"] {
+        let root = tempfile::tempdir()?;
+        let metadata = root.path().join(".claude");
+        std::fs::create_dir(&metadata)?;
+        let settings = metadata.join("settings.json");
+        let other = metadata.join("other.json");
+        std::fs::write(&settings, "readable")?;
+        std::fs::write(&other, "readable")?;
+        let config = json!({
+            "extends": ":workspace", "workspace": root.path(),
+            "workspace_options": {"exclude_tmpdir_env_var": true, "exclude_slash_tmp": true},
+            "filesystem": {"kind":"restricted","entries":[{
+                "path":{"type":"path","path":root.path().join(grant)},"access":"write"
+            }]}
+        });
+        for target in [&settings, &other] {
+            let allowed = target == &settings || grant == ".claude";
+            let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+                .current_dir(root.path())
+                .env("CONSOLE_POLICY", config.to_string())
+                .args(["--config-env", "CONSOLE_POLICY", "--"])
+                .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+                .arg("probe-write")
+                .arg(target)
+                .output()?;
+            assert_eq!(
+                (
+                    output.status.code(),
+                    String::from_utf8(output.stdout)?,
+                    output.stderr
+                ),
+                (
+                    Some(0),
+                    if allowed {
+                        "write allowed\n"
+                    } else {
+                        "write denied\n"
+                    }
+                    .to_owned(),
+                    vec![]
+                )
+            );
+            assert_eq!(
+                std::fs::read_to_string(target)?,
+                if allowed { "escaped" } else { "readable" }
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn tmpdir_grants_use_target_variables_and_preserve_read_only_overrides() -> anyhow::Result<()> {
     if !mxc_support::available()? {
         return Ok(());

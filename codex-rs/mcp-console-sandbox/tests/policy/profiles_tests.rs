@@ -16,7 +16,7 @@ fn selected(workspace: &Path, name: &str, command: &[&str]) -> Value {
 fn native_workspace_selector_enforces_metadata_through_both_transports() {
     for descriptor in [false, true] {
         let workspace = tempfile::tempdir().unwrap();
-        for name in [".git", ".agents", ".codex"] {
+        for name in [".git", ".agents", ".codex", ".aws", ".claude"] {
             std::fs::create_dir(workspace.path().join(name)).unwrap();
             std::fs::write(workspace.path().join(name).join("keep"), "readable").unwrap();
         }
@@ -27,7 +27,7 @@ printf old > ordinary
 printf new >> ordinary
 test "$(cat ordinary)" = oldnew
 rm ordinary
-for name in .git .agents .codex; do
+for name in .git .agents .codex .aws .claude; do
     test "$(cat "$name/keep")" = readable
     denied /bin/sh -c 'echo changed > "$1/keep"' sh "$name"
     denied /bin/sh -c 'echo created > "$1/new"' sh "$name"
@@ -65,6 +65,53 @@ printf 'native workspace\n'
             (output.status.code(), output.stdout, output.stderr),
             (Some(0), b"native workspace\n".to_vec(), vec![])
         );
+    }
+}
+
+#[test]
+fn workspace_protects_absent_claude_metadata_and_allows_explicit_writes() {
+    let workspace = tempfile::tempdir().unwrap();
+    let metadata = workspace.path().join(".claude");
+    let script = r#"
+set -eu
+if mkdir .claude 2>/dev/null; then echo 'unexpected creation'; exit 1; fi
+printf 'absent metadata protected\n'
+"#;
+    let mut value = selected(workspace.path(), ":workspace", &["/bin/sh", "-c", script]);
+    value["workspace_options"] = json!({"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true});
+    let output = run(frame(&value), &[]);
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"absent metadata protected\n".to_vec(), vec![])
+    );
+    assert!(!metadata.exists());
+
+    std::fs::create_dir(&metadata).unwrap();
+    let settings = metadata.join("settings.json");
+    std::fs::write(&settings, "readable").unwrap();
+    for grant in [&settings, &metadata] {
+        value["filesystem"] = json!({"kind":"restricted","entries":[{
+            "path":{"type":"path","path":grant.canonicalize().unwrap()},"access":"write"
+        }]});
+        value["command"] = json!([
+            "/bin/sh",
+            "-c",
+            "set -eu; printf explicit > .claude/settings.json; if touch .claude/other 2>/dev/null; then echo other; fi"
+        ]);
+        let output = run(frame(&value), &[]);
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (
+                Some(0),
+                if grant == &metadata {
+                    b"other\n".to_vec()
+                } else {
+                    vec![]
+                },
+                vec![]
+            )
+        );
+        assert_eq!(std::fs::read(&settings).unwrap(), b"explicit");
     }
 }
 
@@ -245,7 +292,7 @@ fn materialized_workspace_stays_fixed_and_protects_missing_metadata() {
 set -eu
 printf created > "$WORKSPACE/ordinary"
 if touch elsewhere 2>/dev/null; then exit 1; fi
-for name in .git .agents .codex; do
+for name in .git .agents .codex .aws .claude; do
     if mkdir "$WORKSPACE/$name" 2>/dev/null; then exit 1; fi
 done
 "#,
@@ -256,7 +303,7 @@ done
     value["workspace_options"] = json!({"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true});
     let output = run(frame(&value), &[]);
     assert!(output.status.success(), "{output:?}");
-    for name in [".git", ".agents", ".codex"] {
+    for name in [".git", ".agents", ".codex", ".aws", ".claude"] {
         assert!(!root.join(name).exists(), "native setup retained {name}");
     }
 }

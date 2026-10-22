@@ -15,10 +15,10 @@ fn writable_roots_cover_subtrees_without_implicit_metadata_exclusions() {
         let script = r#"
 set -eu
 denied() { if "$@" 2>/dev/null; then echo "unexpected success: $*"; exit 1; fi; }
-for name in .git .agents .codex .aws; do
+for name in .git .agents .codex .aws .claude; do
     if test "$LAUNCH" = 1; then test ! -e "writable/$name"; fi
     mkdir -p "writable/$name"
-    for nested in ordinary .git .agents .codex .aws; do
+    for nested in ordinary .git .agents .codex .aws .claude; do
         mkdir -p "writable/$name/$nested"
         printf '%s' "$LAUNCH" > "writable/$name/$nested/value"
         test "$(cat "writable/$name/$nested/value")" = "$LAUNCH"
