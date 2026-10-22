@@ -306,7 +306,7 @@ dependencies = [
 [[package]]
 name = "appcontainer_common"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "flatbuffers",
  "getrandom 0.2.17",
@@ -6490,7 +6490,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6847,7 +6847,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7499,7 +7499,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9140,7 +9140,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -9611,7 +9611,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9677,7 +9677,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9908,7 +9908,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "learning_mode_core"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "same-file",
  "serde",
@@ -9921,7 +9921,7 @@ dependencies = [
 [[package]]
 name = "learning_mode_windows"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "learning_mode_core",
  "sha2 0.10.9",
@@ -10434,7 +10434,7 @@ dependencies = [
 [[package]]
 name = "mxc_config_contract"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "serde",
  "serde_json",
@@ -10444,7 +10444,7 @@ dependencies = [
 [[package]]
 name = "mxc_telemetry"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "tracelogging",
  "uuid",
@@ -10619,7 +10619,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11336,7 +11336,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11951,7 +11951,7 @@ dependencies = [
 [[package]]
 name = "process_security_environment_spec"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "flatbuffers",
 ]
@@ -12270,7 +12270,7 @@ dependencies = [
  "libc",
  "log",
  "socket2 0.6.3",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13582,7 +13582,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13641,7 +13641,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13717,7 +13717,7 @@ dependencies = [
 [[package]]
 name = "sandbox_spec"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "flatbuffers",
 ]
@@ -15295,7 +15295,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -17102,7 +17102,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -17730,7 +17730,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 [[package]]
 name = "wxc_common"
 version = "0.8.0"
-source = "git+https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f05d3447e67109cfb75e042803b843ca4"
+source = "git+https://github.com/t-kalinowski/mxc?rev=eaf6cb12f25814a63250b13d1c46c948b3793b20#eaf6cb12f25814a63250b13d1c46c948b3793b20"
 dependencies = [
  "base64 0.22.1",
  "cidr",

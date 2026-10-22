@@ -400,3 +400,24 @@ fn invalid_configuration_fails_before_creating_state() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn native_targets_initialize_on_the_default_desktop() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+        .env(
+            "CONSOLE_POLICY",
+            json!({"extends": ":read-only"}).to_string(),
+        )
+        .args(["--config-env", "CONSOLE_POLICY", "--"])
+        .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg("desktop")
+        .output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"Default\n".to_vec(), vec![])
+    );
+    Ok(())
+}
