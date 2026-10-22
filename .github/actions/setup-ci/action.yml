@@ -1,5 +1,10 @@
 name: setup-ci
 description: Prepare common tools and environment shared by CI jobs.
+inputs:
+  windows-build-root:
+    description: Explicit Windows build directory; empty provisions the hosted Dev Drive.
+    required: false
+    default: ''
 outputs:
   bazel-output-base:
     description: Filesystem path used for Bazel's output base.
@@ -14,8 +19,18 @@ runs:
     # setup-ci expects either this step or the Unix fallback below to define
     # CI_BUILD_ROOT. Windows uses a Dev Drive because Cargo and Bazel
     # spend significant time reading and writing build/cache trees.
+    - name: Configure explicit Windows build root
+      if: runner.os == 'Windows' && inputs.windows-build-root != ''
+      shell: pwsh
+      env:
+        WINDOWS_CI_BUILD_ROOT: ${{ inputs.windows-build-root }}
+      run: |
+        $root = [System.IO.Path]::GetFullPath($env:WINDOWS_CI_BUILD_ROOT)
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        "CI_BUILD_ROOT=$root" >> $env:GITHUB_ENV
+
     - name: Configure Dev Drive (Windows)
-      if: runner.os == 'Windows'
+      if: runner.os == 'Windows' && inputs.windows-build-root == ''
       shell: pwsh
       run: ./.github/scripts/setup-dev-drive.ps1
 
