@@ -265,6 +265,63 @@ fn cleared_target_environment_ignores_non_unicode_host_variables() -> anyhow::Re
 }
 
 #[test]
+fn workspace_profile_protects_claude_metadata() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let metadata = root.path().join(".claude");
+    for (existing, explicit) in [(false, false), (true, false), (true, true)] {
+        let target = if existing {
+            std::fs::create_dir_all(&metadata)?;
+            let target = metadata.join("settings.json");
+            std::fs::write(&target, "readable")?;
+            target
+        } else {
+            metadata.clone()
+        };
+        let mut config = json!({
+            "extends": ":workspace", "workspace": root.path(),
+            "workspace_options": {"exclude_tmpdir_env_var": true, "exclude_slash_tmp": true},
+        });
+        if explicit {
+            config["filesystem"] = json!({"kind":"restricted","entries":[{
+                "path":{"type":"path","path":metadata},"access":"write"
+            }]});
+        }
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(root.path())
+            .env("CONSOLE_POLICY", config.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg(if explicit { "write" } else { "probe-write" })
+            .arg(&target)
+            .output()?;
+        assert_eq!(
+            (
+                output.status.code(),
+                String::from_utf8(output.stdout)?,
+                output.stderr
+            ),
+            (
+                Some(0),
+                if explicit { "" } else { "write denied\n" }.to_owned(),
+                vec![]
+            )
+        );
+        if existing {
+            assert_eq!(
+                std::fs::read_to_string(target)?,
+                if explicit { "written" } else { "readable" }
+            );
+        } else {
+            assert!(!metadata.exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn tmpdir_grants_use_target_variables_and_preserve_read_only_overrides() -> anyhow::Result<()> {
     if !mxc_support::available()? {
         return Ok(());

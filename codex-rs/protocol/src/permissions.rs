@@ -41,13 +41,15 @@ const PROTECTED_METADATA_GIT_PATH_NAME: &str = ".git";
 const PROTECTED_METADATA_AGENTS_PATH_NAME: &str = ".agents";
 const PROTECTED_METADATA_CODEX_PATH_NAME: &str = ".codex";
 const PROTECTED_METADATA_AWS_PATH_NAME: &str = ".aws";
+const PROTECTED_METADATA_CLAUDE_PATH_NAME: &str = ".claude";
 
-/// Top-level workspace metadata paths that stay protected under writable roots.
+/// Metadata names used by workspace profiles and explicit protection rules.
 pub const PROTECTED_METADATA_PATH_NAMES: &[&str] = &[
     PROTECTED_METADATA_GIT_PATH_NAME,
     PROTECTED_METADATA_AGENTS_PATH_NAME,
     PROTECTED_METADATA_CODEX_PATH_NAME,
     PROTECTED_METADATA_AWS_PATH_NAME,
+    PROTECTED_METADATA_CLAUDE_PATH_NAME,
 ];
 
 /// Returns true when a path basename is one of the protected workspace metadata names.
@@ -857,10 +859,9 @@ impl FileSystemSandboxPolicy {
                 .map(|path| FileSystemSandboxEntry::new(path.into(), FileSystemAccessMode::Write)),
         );
 
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".git");
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".agents");
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".codex");
-        append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, ".aws");
+        for name in PROTECTED_METADATA_PATH_NAMES {
+            append_default_read_only_project_root_subpath_if_no_explicit_rule(&mut entries, *name);
+        }
         for writable_root in writable_roots {
             for protected_path in default_read_only_subpaths_for_writable_root(
                 writable_root,
@@ -3372,6 +3373,12 @@ mod tests {
                 FileSystemSandboxEntry::skip_missing_path(
                     FileSystemPath::Special {
                         value: FileSystemSpecialPath::project_roots(Some(".aws".into())),
+                    },
+                    FileSystemAccessMode::Read,
+                ),
+                FileSystemSandboxEntry::skip_missing_path(
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(Some(".claude".into())),
                     },
                     FileSystemAccessMode::Read,
                 ),

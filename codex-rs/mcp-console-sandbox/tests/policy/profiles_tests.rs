@@ -16,7 +16,7 @@ fn selected(workspace: &Path, name: &str, command: &[&str]) -> Value {
 fn native_workspace_selector_enforces_metadata_through_both_transports() {
     for descriptor in [false, true] {
         let workspace = tempfile::tempdir().unwrap();
-        for name in [".git", ".agents", ".codex"] {
+        for name in [".git", ".agents", ".codex", ".aws", ".claude"] {
             std::fs::create_dir(workspace.path().join(name)).unwrap();
             std::fs::write(workspace.path().join(name).join("keep"), "readable").unwrap();
         }
@@ -27,7 +27,7 @@ printf old > ordinary
 printf new >> ordinary
 test "$(cat ordinary)" = oldnew
 rm ordinary
-for name in .git .agents .codex; do
+for name in .git .agents .codex .aws .claude; do
     test "$(cat "$name/keep")" = readable
     denied /bin/sh -c 'echo changed > "$1/keep"' sh "$name"
     denied /bin/sh -c 'echo created > "$1/new"' sh "$name"
@@ -66,6 +66,40 @@ printf 'native workspace\n'
             (Some(0), b"native workspace\n".to_vec(), vec![])
         );
     }
+}
+
+#[test]
+fn workspace_protects_absent_claude_metadata_and_allows_explicit_writes() {
+    let workspace = tempfile::tempdir().unwrap();
+    let metadata = workspace.path().join(".claude");
+    let script = r#"
+set -eu
+if mkdir .claude 2>/dev/null; then echo 'unexpected creation'; exit 1; fi
+printf 'absent metadata protected\n'
+"#;
+    let mut value = selected(workspace.path(), ":workspace", &["/bin/sh", "-c", script]);
+    value["workspace_options"] = json!({"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true});
+    let output = run(frame(&value), &[]);
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"absent metadata protected\n".to_vec(), vec![])
+    );
+    assert!(!metadata.exists());
+
+    std::fs::create_dir(&metadata).unwrap();
+    value["filesystem"] = json!({"kind":"restricted","entries":[{
+        "path":{"type":"path","path":metadata.canonicalize().unwrap()},"access":"write"
+    }]});
+    value["command"] = json!(["/bin/sh", "-c", "printf explicit > .claude/settings.json"]);
+    let output = run(frame(&value), &[]);
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), vec![], vec![])
+    );
+    assert_eq!(
+        std::fs::read(metadata.join("settings.json")).unwrap(),
+        b"explicit"
+    );
 }
 
 #[test]

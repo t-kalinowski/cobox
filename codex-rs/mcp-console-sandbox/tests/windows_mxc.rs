@@ -49,9 +49,9 @@ fn writable_roots_cover_complete_subtrees_across_launches() -> Result<()> {
     let script = r#"
 $ErrorActionPreference = 'Stop'
 $root = Join-Path (Get-Location) 'writable'
-foreach ($name in '.git', '.agents', '.codex', '.aws') {
+foreach ($name in '.git', '.agents', '.codex', '.aws', '.claude') {
     if ($env:TEST_LAUNCH -eq '1' -and [IO.Directory]::Exists((Join-Path $root $name))) { throw 'unexpected metadata directory' }
-    foreach ($nested in 'ordinary', '.git', '.agents', '.codex', '.aws') {
+    foreach ($nested in 'ordinary', '.git', '.agents', '.codex', '.aws', '.claude') {
         $path = Join-Path (Join-Path $root $name) $nested
         [IO.Directory]::CreateDirectory($path) | Out-Null
         $value = Join-Path $path 'value'
