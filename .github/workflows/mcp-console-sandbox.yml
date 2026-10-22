@@ -145,7 +145,8 @@ jobs:
 
   contract:
     name: macOS contracts
-    runs-on: macos-14
+    # Hosted ARM jobs have repeatedly expired before acquiring a runner.
+    runs-on: macos-15-intel
     timeout-minutes: 45
     defaults:
       run:
