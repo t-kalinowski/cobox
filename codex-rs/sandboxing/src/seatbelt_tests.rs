@@ -1984,6 +1984,13 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
                 .display()
         ),
         format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_4={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".claude")
+                .display()
+        ),
+        format!(
             "-DWRITABLE_ROOT_1={}",
             vulnerable_root_canonical.to_string_lossy()
         ),
