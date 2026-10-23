@@ -63,6 +63,7 @@ jobs:
         if: inputs.windows_mxc_runner != ''
         with:
           target: ${{ runner.os }}
+          windows-build-root: ${{ format('C:/mxc-{0}', github.run_id) }}
       - name: Run required Windows Bazel contracts
         if: inputs.windows_mxc_runner != ''
         run: |

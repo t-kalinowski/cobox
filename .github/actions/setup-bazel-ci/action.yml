@@ -4,6 +4,10 @@ inputs:
   target:
     description: Target triple used for cache namespacing.
     required: true
+  windows-build-root:
+    description: Explicit Windows build directory; empty provisions the hosted Dev Drive.
+    required: false
+    default: ''
 outputs:
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
@@ -14,6 +18,8 @@ runs:
   steps:
     - id: setup_ci
       uses: ./.github/actions/setup-ci
+      with:
+        windows-build-root: ${{ inputs.windows-build-root }}
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
