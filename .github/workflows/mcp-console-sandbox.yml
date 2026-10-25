@@ -121,7 +121,7 @@ jobs:
       - name: Build and inspect the standalone artifacts
         run: |
           while IFS= read -r setting; do export "${setting?}"; done < '${{ runner.temp }}/sandbox-musl.env'
-          cargo build --locked --release --target '${{ matrix.target }}' -p mcp-console-sandbox --bin mcp-console-sandbox
+          cargo build --locked --release --target '${{ matrix.target }}' -p mcp-console-sandbox --bins
           python3 - <<'PY'
           import subprocess
           from pathlib import Path
@@ -131,6 +131,15 @@ jobs:
               print(report)
               assert 'INTERP' not in report and '(NEEDED)' not in report and 'Name:' not in report
           PY
+      - name: Check distribution userspaces with portable artifacts
+        run: |
+          images=(almalinux:10 ubuntu:24.04 ubuntu:26.04)
+          if [[ '${{ matrix.target }}' == x86_64-unknown-linux-musl ]]; then
+            images+=(almalinux:8 almalinux:9 registry.suse.com/bci/bci-base:15.6
+              registry.suse.com/bci/bci-base:15.7 opensuse/leap:15.6 ubuntu:22.04 debian:13)
+          fi
+          bash ../.github/scripts/test-sandbox-linux-distros.sh \
+            "target/${{ matrix.target }}/release" "${images[@]}"
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103,just@1.51.0
