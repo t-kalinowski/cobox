@@ -11,6 +11,12 @@ mod lifecycle;
 #[path = "policy/missing_paths_tests.rs"]
 mod missing_paths;
 #[cfg(target_os = "linux")]
+#[path = "policy/missing_paths_security_tests.rs"]
+mod missing_paths_security;
+#[cfg(target_os = "linux")]
+#[path = "policy/missing_paths_sockets_tests.rs"]
+mod missing_paths_sockets;
+#[cfg(target_os = "linux")]
 #[path = "lifecycle/native_entry_tests.rs"]
 mod native_entry;
 #[path = "lifecycle/ownership_tests.rs"]

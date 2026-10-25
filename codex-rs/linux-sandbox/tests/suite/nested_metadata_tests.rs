@@ -87,7 +87,10 @@ if (touch "$workspace/.codex/forbidden.txt") 2>/dev/null; then
     exit 11
 fi
 for name in .git .agents .codex .aws; do
-    test -d "$visualization/$name"
+    test ! -e "$visualization/$name"
+    if (mkdir "$visualization/$name") 2>/dev/null; then
+        exit 12
+    fi
     if (touch "$visualization/$name/forbidden.txt") 2>/dev/null; then
         exit 12
     fi
@@ -128,7 +131,7 @@ printf nested-metadata-protected
     for name in [".git", ".agents", ".codex", ".aws"] {
         assert!(
             !visualization.join(name).exists(),
-            "temporary {name} mountpoint should be cleaned up"
+            "missing metadata {name} must remain absent"
         );
     }
 }
