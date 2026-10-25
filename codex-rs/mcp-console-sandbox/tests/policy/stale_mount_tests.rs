@@ -3,6 +3,7 @@ use pretty_assertions::assert_eq;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Child;
 use std::process::ChildStdout;
 
@@ -38,6 +39,10 @@ impl Workspace {
         value["cwd"] = value["workspace"].clone();
         value["workspace_options"] =
             json!({"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true});
+        self.start_request(value)
+    }
+
+    fn start_request(&self, value: Value) -> Gated {
         let staging = tempfile::tempdir().unwrap();
         let mut command = runner(staging.path());
         command.env("TMPDIR", self.runtime.path());
@@ -81,7 +86,7 @@ struct Gated {
 }
 
 impl Gated {
-    fn finish(mut self) {
+    fn output(mut self) -> Output {
         self.child
             .stdin
             .take()
@@ -90,9 +95,15 @@ impl Gated {
             .unwrap();
         let mut stdout = Vec::new();
         self.stdout.read_to_end(&mut stdout).unwrap();
-        let output = self.child.wait_with_output().unwrap();
+        let mut output = self.child.wait_with_output().unwrap();
+        output.stdout = stdout;
+        output
+    }
+
+    fn finish(self) {
+        let output = self.output();
         assert_eq!(
-            (output.status.code(), stdout, output.stderr),
+            (output.status.code(), output.stdout, output.stderr),
             (Some(0), vec![], vec![])
         );
     }
@@ -143,6 +154,128 @@ fn later_launch_recovers_mount_targets_from_another_workspace() {
     workspace.start_at(other.path()).finish();
 
     assert_eq!(workspace.entries(), Vec::<String>::new());
+}
+
+#[test]
+fn later_launch_recovers_explicit_missing_read_paths() {
+    recover_explicit_missing_paths("read", &["blocked/first", "single"]);
+}
+
+#[test]
+fn later_launch_recovers_explicit_missing_deny_paths() {
+    recover_explicit_missing_paths("deny", &["blocked/first", "single"]);
+}
+
+#[test]
+fn later_launch_recovers_read_paths_with_a_shared_missing_ancestor() {
+    recover_explicit_missing_paths("read", &["blocked/first", "blocked/second", "single"]);
+}
+
+#[test]
+fn later_launch_recovers_deny_paths_with_a_shared_missing_ancestor() {
+    recover_explicit_missing_paths("deny", &["blocked/first", "blocked/second", "single"]);
+}
+
+fn recover_explicit_missing_paths(access: &str, paths: &[&str]) {
+    let workspace = Workspace::new();
+    let value = explicit_missing_request(workspace.path(), access, paths);
+    workspace.start_request(value).kill_tree();
+    assert_eq!(workspace.entries(), ["blocked", "single"]);
+    let other = tempfile::tempdir().unwrap();
+
+    workspace.start_at(other.path()).finish();
+
+    assert_eq!(workspace.entries(), Vec::<String>::new());
+}
+
+fn explicit_missing_request(workspace: &Path, access: &str, paths: &[&str]) -> Value {
+    let mut value = request(&["/bin/sh", "-eu", "-c", "printf 'ready\\n'; read gate"]);
+    value["cwd"] = json!(workspace);
+    let entries = value["filesystem"]["entries"].as_array_mut().unwrap();
+    entries.push(json!({
+        "path":{"type":"path","path":workspace},"access":"write"
+    }));
+    // Shared descendants need one host target even when multiple rules need it.
+    for path in paths {
+        entries.push(json!({
+            "path":{"type":"path","path":workspace.join(path)},"access":access
+        }));
+    }
+    value
+}
+
+#[test]
+fn concurrent_read_paths_reuse_recorded_missing_ancestor() {
+    concurrent_missing_ancestor("read");
+}
+
+#[test]
+fn concurrent_deny_paths_reuse_recorded_missing_ancestor() {
+    concurrent_missing_ancestor("deny");
+}
+
+fn concurrent_missing_ancestor(access: &str) {
+    let workspace = Workspace::new();
+    let value = explicit_missing_request(workspace.path(), access, &["blocked/child"]);
+    let first = workspace.start_request(value.clone());
+    assert_eq!(workspace.entries(), ["blocked"]);
+    let original = identity(&workspace.path().join("blocked"));
+
+    workspace.start_request(value).finish();
+
+    assert_eq!(workspace.entries(), ["blocked"]);
+    assert_eq!(identity(&workspace.path().join("blocked")), original);
+    first.finish();
+    assert_eq!(workspace.entries(), Vec::<String>::new());
+}
+
+#[test]
+fn recovery_preserves_host_symlink_and_write_then_truncate() {
+    let workspace = Workspace::new();
+    workspace.start().kill_tree();
+    let file = workspace.path().join(".claude");
+    let original = std::fs::symlink_metadata(&file).unwrap();
+    // The host owns this read-only file. Restore its mode after the temporary
+    // write so the final empty path differs only in modification timestamps.
+    std::fs::set_permissions(
+        &file,
+        std::fs::Permissions::from_mode(original.permissions().mode() | 0o200),
+    )
+    .unwrap();
+    std::fs::write(&file, b"host-created contents").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    std::fs::set_permissions(&file, original.permissions()).unwrap();
+    let edited = std::fs::symlink_metadata(&file).unwrap();
+    assert_eq!(
+        (edited.dev(), edited.ino()),
+        (original.dev(), original.ino())
+    );
+    assert_ne!(
+        (edited.ctime(), edited.ctime_nsec()),
+        (original.ctime(), original.ctime_nsec())
+    );
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep"), b"user directory").unwrap();
+    let link = workspace.path().join(".aws");
+    std::fs::remove_dir(&link).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+    let other = tempfile::tempdir().unwrap();
+
+    workspace.start_at(other.path()).finish();
+
+    assert_eq!(workspace.entries(), [".aws", ".claude"]);
+    assert_eq!(identity(&file), (original.dev(), original.ino()));
+    assert_eq!(std::fs::read(&file).unwrap(), Vec::<u8>::new());
+    assert_eq!(std::fs::read_link(link).unwrap(), outside.path());
+    assert_eq!(
+        std::fs::read(outside.path().join("keep")).unwrap(),
+        b"user directory"
+    );
 }
 
 #[test]
@@ -238,4 +371,37 @@ fn normal_exit_preserves_replaced_empty_mount_targets() {
         [".claude", ".git", "retired-claude", "retired-git"]
     );
     assert_eq!((identity(&directory), identity(&file)), replacement);
+}
+
+#[test]
+fn cleanup_failure_is_reported_without_blocking_later_workspaces() {
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("requires a non-root host to exercise directory write permissions");
+        return;
+    }
+    let workspace = Workspace::new();
+    let running = workspace.start();
+    let original = std::fs::metadata(workspace.path()).unwrap().permissions();
+    std::fs::set_permissions(workspace.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let failed_cleanup = running.output();
+    let other = tempfile::tempdir().unwrap();
+
+    let later = workspace.start_at(other.path()).output();
+
+    // Restore access before assertions so the temporary workspace can retire.
+    std::fs::set_permissions(workspace.path(), original).unwrap();
+    assert!(!failed_cleanup.status.success(), "{failed_cleanup:?}");
+    assert_eq!(failed_cleanup.stdout, b"");
+    let stderr = String::from_utf8(failed_cleanup.stderr).unwrap();
+    assert!(stderr.contains("failed to remove synthetic"), "{stderr}");
+    assert!(
+        stderr.contains(workspace.path().to_str().unwrap()),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Permission denied"), "{stderr}");
+    assert_eq!(
+        (later.status.code(), later.stdout, later.stderr),
+        (Some(0), vec![], vec![])
+    );
+    assert_eq!(workspace.entries(), METADATA);
 }
