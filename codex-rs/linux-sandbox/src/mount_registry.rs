@@ -95,7 +95,7 @@ impl SyntheticMountRegistrations {
         let separator = args
             .iter()
             .position(|arg| arg == "--")
-            .expect("bwrap command");
+            .unwrap_or_else(|| panic!("missing bubblewrap command"));
         if args[..separator].iter().any(|arg| arg == "--unshare-pid") {
             // The launcher uses --as-pid-1 here. Its trusted native inner stage
             // owns the lease until init exits, with CLOEXEC for workload forks.
@@ -104,7 +104,7 @@ impl SyntheticMountRegistrations {
                 .enumerate()
                 .skip(separator + 1)
                 .find_map(|(index, arg)| (arg == "--").then_some(index))
-                .expect("native inner command");
+                .unwrap_or_else(|| panic!("missing native inner command"));
             args.splice(
                 inner_separator..inner_separator,
                 ["--mount-cleanup-lease-fd".to_string(), fd.clone()],

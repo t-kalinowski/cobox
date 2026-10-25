@@ -2145,7 +2145,7 @@ mod tests {
         let dot_git_str = path_to_string(&dot_git);
 
         assert_empty_file_bound_without_perms(&args.args, &dot_git);
-        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git.clone(),]);
+        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git,]);
         assert!(
             !args
                 .args
@@ -2211,7 +2211,7 @@ mod tests {
             missing_path_behavior: None,
         }]);
         policy.entries.push(FileSystemSandboxEntry::new(
-            AbsolutePathBuf::from_absolute_path(&link_workspace.join(".git"))
+            AbsolutePathBuf::from_absolute_path(link_workspace.join(".git"))
                 .expect("absolute protected path")
                 .into(),
             FileSystemAccessMode::Read,
