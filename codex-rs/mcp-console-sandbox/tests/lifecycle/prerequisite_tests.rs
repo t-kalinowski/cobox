@@ -64,6 +64,7 @@ enum Unavailable {
     ReadinessPidfd(i32),
     PidfdSignal,
     NumericPidfd,
+    OlderKernel,
 }
 
 fn constrained_runner(directory: &Path, unavailable: Unavailable) -> Command {
@@ -108,6 +109,25 @@ fn constrain(command: &mut Command, unavailable: Unavailable) {
                 statement(0x06, 0x00050000 | error as u32),
             ]
         }
+        Unavailable::OlderKernel => {
+            let mut filters = vec![statement(0x20, 0)];
+            for number in [
+                libc::SYS_landlock_create_ruleset,
+                libc::SYS_landlock_add_rule,
+                libc::SYS_landlock_restrict_self,
+                libc::SYS_pidfd_open,
+                libc::SYS_pidfd_send_signal,
+                libc::SYS_clone3,
+                libc::SYS_close_range,
+                libc::SYS_faccessat2,
+            ] {
+                filters.extend([
+                    equal(number as u32, 0, 1),
+                    statement(0x06, 0x00050000 | libc::ENOSYS as u32),
+                ]);
+            }
+            filters
+        }
     };
     filters.extend([
         statement(0x20, 0),
@@ -130,6 +150,30 @@ fn constrain(command: &mut Command, unavailable: Unavailable) {
             }
             Ok(())
         });
+    }
+}
+
+#[test]
+fn older_kernel_preserves_enforcement_and_namespace_lifetime() {
+    // Exercise the public executable contracts with these facilities absent
+    // together, including in helpers and the workload. This checks the existing
+    // bubblewrap path without requiring Landlock or recent process syscalls.
+    for test in [
+        "filesystem_policy_denies_and_grants_writes",
+        "network_permission_controls_direct_connections",
+        "lifecycle::private_storage_is_removed_after_success_and_nonzero_exit",
+        "prerequisite::constrained_host_retires_detached_children_and_forwards_interrupts",
+    ] {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", test, "--nocapture"]);
+        constrain(&mut command, Unavailable::OlderKernel);
+        constrain(&mut command, Unavailable::ReadinessPidfd(libc::ENOPROTOOPT));
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{test}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{test}: {output:?}"
+        );
     }
 }
 
