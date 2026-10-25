@@ -25,6 +25,9 @@ mod reference;
 mod retirement;
 #[path = "lifecycle/security_tests.rs"]
 mod security;
+#[cfg(target_os = "linux")]
+#[path = "policy/stale_mount_tests.rs"]
+mod stale_mount;
 #[path = "lifecycle/startup_tests.rs"]
 mod startup;
 #[path = "lifecycle/terminal_tests.rs"]
