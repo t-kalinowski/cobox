@@ -175,8 +175,10 @@ jobs:
         run: just test --locked -p codex-sandboxing --retries 0
       - name: Test Bazel executable and argument comments
         run: |
-          bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test
-          just argument-comment-lint -p mcp-console-sandbox
+          # The packaged linter has no Intel macOS artifact. Share the source
+          # linter's nightly dependency graph with the executable contracts.
+          bazel test --config=argument-comment-lint --output_groups=+default \
+            //codex-rs/mcp-console-sandbox:all
       - name: Build standalone release executable
         run: cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox --release
       - name: Run all contracts against release executable
