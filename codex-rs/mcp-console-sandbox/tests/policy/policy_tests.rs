@@ -116,7 +116,7 @@ printf 'metadata write escaped\n'
     command
         .arg("--bounding-set=-dac_override,-dac_read_search,-chown,-fowner")
         .arg(staged_runner.get_program())
-        // Use the staged bubblewrap so the startup diagnostic is deterministic.
+        // Use the staged bubblewrap and exercise native setup before release.
         .env("PATH", staging.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -126,7 +126,7 @@ printf 'metadata write escaped\n'
     assert_eq!(
         output.stderr,
         format!(
-            "bwrap: Can't mkdir {}: Permission denied\n",
+            "error building bubblewrap command: failed to prepare synthetic bubblewrap mount target {}: Permission denied (os error 13)\n",
             protected.display()
         )
         .as_bytes()

@@ -20,6 +20,8 @@ mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_run_main;
 #[cfg(target_os = "linux")]
+mod mount_registry;
+#[cfg(target_os = "linux")]
 mod proxy_lifecycle;
 #[cfg(target_os = "linux")]
 mod proxy_routing;

@@ -26,6 +26,16 @@ unshare --user --map-root-user --mount --net --pid --fork true
 
 Ubuntu AppArmor can block setup even with `kernel.unprivileged_userns_clone=1` and nonzero `user.max_user_namespaces`. Errors such as `setting up uid map: Permission denied` or `loopback: Failed RTM_NEWADDR: Operation not permitted` can reflect that restriction. Linux CI enables namespaces and removes this restriction on its runner; containers also need permission for native namespace operations.
 
+## Mount target recovery
+
+Missing read-only and denied entries beneath writable roots can require empty host files or directories as native mount targets. They remain visible while a sandbox runs. Normal completion removes the targets created for that session after their last registered owner exits.
+
+Before planning mounts, a later bubblewrap-backed launch also recovers recorded targets left by termination of every cleanup process. This works across workspaces when the launches use the same helper temporary directory and user. The native registry records each created path and its device, inode, type, and change time. Recovery removes only a matching empty target with no live owner. Pre-existing paths, replacement files or directories, symlinks, and populated or otherwise changed targets are preserved. Cleanup never recursively removes a directory.
+
+Ownership uses a file lock shared by the native cleanup supervisor and namespace init. The lock stays held while either owner retains its descriptor. Workload execution closes the inherited descriptor. Native registry protection remains part of the filesystem policy.
+
+Recovery covers recorded mount targets, not private session storage or arbitrary empty metadata names. Older records without target identity cannot authorize deletion. Termination between target creation and publication of its record can still leave an unrecorded target; losing the registry also loses recovery information. Inaccessible stale paths are preserved so they do not prevent an unrelated launch.
+
 ## Procfs review
 
 Inherited procfs retains user, mount, and PID isolation but exposes permitted host PIDs and metadata. Process tools that assume procfs PIDs match namespace PIDs may not work there. Upstream may mask inherited procfs when isolating WSL interop. Procfs remains necessary for descriptor hygiene, storage permission changes, native setup, and verified descriptor execution.
