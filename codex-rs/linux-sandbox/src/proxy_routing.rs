@@ -1,3 +1,4 @@
+use crate::proxy_lifecycle::HostProxyBridges;
 use crate::proxy_lifecycle::close_fd;
 use crate::proxy_lifecycle::harden_bridge_process;
 use crate::proxy_lifecycle::move_fd_above_stdio;
@@ -72,7 +73,15 @@ struct ProxyRoutePlan {
     has_proxy_config: bool,
 }
 
-pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<(String, Vec<File>)> {
+pub(crate) struct HostProxyRoutes {
+    pub(crate) spec: String,
+    pub(crate) controls: Vec<File>,
+    pub(crate) bridges: HostProxyBridges,
+}
+
+pub(crate) fn prepare_host_proxy_route_spec(
+    target_setup_fd: Option<libc::c_int>,
+) -> io::Result<HostProxyRoutes> {
     let (attribution_token, plan) = extract_attribution_token_and_plan(std::env::vars().collect());
     // SAFETY: the sandbox helper is single-threaded here, before it forks bridge workers or
     // executes the user command.
@@ -90,6 +99,7 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<(String, Vec<File>)>
     }
 
     let mut control_by_endpoint = BTreeMap::new();
+    let mut bridges = HostProxyBridges::default();
     for route in &plan.routes {
         if control_by_endpoint.contains_key(&route.endpoint) {
             continue;
@@ -98,6 +108,8 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<(String, Vec<File>)>
             route.endpoint,
             attribution_token.as_deref(),
             &mut control_by_endpoint,
+            &mut bridges,
+            target_setup_fd,
         )?;
         control_by_endpoint.insert(route.endpoint, control);
     }
@@ -117,7 +129,11 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<(String, Vec<File>)>
     }
 
     let spec = serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)?;
-    Ok((spec, control_by_endpoint.into_values().collect()))
+    Ok(HostProxyRoutes {
+        spec,
+        controls: control_by_endpoint.into_values().collect(),
+        bridges,
+    })
 }
 
 fn extract_attribution_token_and_plan(
@@ -318,6 +334,8 @@ fn spawn_host_bridge(
     endpoint: SocketAddr,
     attribution_token: Option<&str>,
     inherited_controls: &mut BTreeMap<SocketAddr, File>,
+    bridges: &mut HostProxyBridges,
+    target_setup_fd: Option<libc::c_int>,
 ) -> io::Result<File> {
     let (host_control, control) = UnixStream::pair()?;
     let host_control = UnixStream::from(move_fd_above_stdio(host_control.into())?);
@@ -334,6 +352,15 @@ fn spawn_host_bridge(
         // A worker must not retain another route's inner bootstrap endpoint.
         // Drop this child's inherited owners; the parent's copies are unaffected by fork.
         inherited_controls.clear();
+        // Only the native execution chain may retain its setup endpoint. A
+        // host bridge must not keep cancellation EOF alive after that chain exits.
+        if let Some(fd) = target_setup_fd
+            && close_fd(fd).is_err()
+        {
+            unsafe {
+                libc::_exit(/*status*/ 1)
+            };
+        }
         let result = run_host_bridge(endpoint, host_control, attribution_token, parent_pid);
         if result.is_err() {
             unsafe { libc::_exit(1) };
@@ -341,6 +368,7 @@ fn spawn_host_bridge(
         unsafe { libc::_exit(0) };
     }
 
+    bridges.own(pid);
     drop(host_control);
     let mut ready = [0_u8; 1];
     control.read_exact(&mut ready)?;

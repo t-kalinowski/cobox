@@ -353,3 +353,229 @@ fn runner_death_before_and_after_native_death_signal_setup() {
         assert!(!marker.exists(), "{stage}: target ran after owner death");
     }
 }
+
+#[cfg(target_os = "linux")]
+pub(super) fn managed_proxy_bridges_retire_before_return() {
+    // STOP models delayed bridge scheduling. A host peer keeps the group from
+    // becoming orphaned, whose HUP/CONT would otherwise release that gate.
+    for target_status in [Some(0), Some(42), None] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = runner(directory.path());
+        let operation = if target_status == Some(42) {
+            "normal-tree"
+        } else {
+            "detached"
+        };
+        let mut value = fixture("lifecycle", &[operation]);
+        value["proxy"] = proxy_config();
+        value["lifecycle"] = json!({
+            "private_tmp": {"parent": directory.path(), "environment": ["TMPDIR"]},
+            "sigterm": "retire"
+        });
+        let (mut child, mut bootstrap) = spawn(command.stdin(Stdio::piped()));
+        drop(command);
+        let root = Process::watch(child.id() as i32);
+        bootstrap.write_all(&frame(&value)).unwrap();
+        drop(bootstrap);
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut temporary = String::new();
+        output.read_line(&mut temporary).unwrap();
+        let ready: Value = serde_json::from_str(&temporary).unwrap();
+        let temporary = Path::new(ready["temporary"].as_str().unwrap());
+        assert!(temporary.is_dir());
+        let processes = watch_tree(child.id() as i32);
+        let mut peer = None;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let host_status = std::fs::read_to_string("/proc/self/status").unwrap();
+            let host_namespace_depth = host_status
+                .lines()
+                .find_map(|line| line.strip_prefix("NSpid:"))
+                .unwrap()
+                .split_whitespace()
+                .count();
+            let identities: Vec<_> = processes
+                .iter()
+                .map(|process| {
+                    let status =
+                        std::fs::read_to_string(format!("/proc/{}/status", process.pid)).unwrap();
+                    let parent: i32 = status
+                        .lines()
+                        .find_map(|line| line.strip_prefix("PPid:"))
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    let namespace_depth = status
+                        .lines()
+                        .find_map(|line| line.strip_prefix("NSpid:"))
+                        .unwrap()
+                        .split_whitespace()
+                        .count();
+                    (process, parent, namespace_depth)
+                })
+                .collect();
+            // Target readiness establishes both managed routes. Their host-side
+            // leaf processes remain outside the target PID namespace; the native
+            // supervisor and bubblewrap monitor each retain a child.
+            let bridges: Vec<_> = identities
+                .iter()
+                .filter(|(process, _, depth)| {
+                    process.pid != root.pid
+                        && *depth == host_namespace_depth
+                        && !identities
+                            .iter()
+                            .any(|(_, parent, _)| *parent == process.pid)
+                })
+                .map(|(process, _, _)| *process)
+                .collect();
+            assert_eq!(bridges.len(), 2, "HTTP and SOCKS host bridges");
+            let group = unsafe { libc::getpgid(bridges[0].pid) };
+            assert!(group > 0 && group != unsafe { libc::getpgrp() });
+            assert!(
+                bridges
+                    .iter()
+                    .all(|process| unsafe { libc::getpgid(process.pid) } == group)
+            );
+            let host_peer = Command::new("/bin/sh")
+                .args(["-c", r"printf 'peer ready\n'; IFS= read -r line"])
+                .process_group(group)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let peer_identity = Process::watch(host_peer.id() as i32);
+            peer = Some((host_peer, peer_identity));
+            let (host_peer, peer_identity) = peer.as_mut().unwrap();
+            let mut peer_ready = String::new();
+            BufReader::new(host_peer.stdout.take().unwrap())
+                .read_line(&mut peer_ready)
+                .unwrap();
+            assert_eq!(peer_ready, "peer ready\n");
+            assert_eq!(unsafe { libc::getsid(peer_identity.pid) }, unsafe {
+                libc::getsid(/*pid*/ 0)
+            });
+            for process in &bridges {
+                assert_eq!(
+                    unsafe {
+                        libc::syscall(
+                            libc::SYS_pidfd_send_signal,
+                            process.exit.as_raw_fd(),
+                            libc::SIGSTOP,
+                            std::ptr::null::<libc::siginfo_t>(),
+                            /*flags*/ 0,
+                        )
+                    },
+                    0
+                );
+            }
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 5);
+            for process in &bridges {
+                loop {
+                    let status =
+                        std::fs::read_to_string(format!("/proc/{}/status", process.pid)).unwrap();
+                    if status.lines().any(|line| line.starts_with("State:\tT")) {
+                        eprintln!(
+                            "status={target_status:?}: stopped host bridge {}",
+                            process.pid
+                        );
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "bridge {} did not stop",
+                        process.pid
+                    );
+                    std::thread::yield_now();
+                }
+            }
+            if target_status.is_some() {
+                child.stdin.take().unwrap().write_all(b"exit\n").unwrap();
+            } else {
+                assert_eq!(
+                    unsafe {
+                        libc::syscall(
+                            libc::SYS_pidfd_send_signal,
+                            root.exit.as_raw_fd(),
+                            libc::SIGTERM,
+                            std::ptr::null::<libc::siginfo_t>(),
+                            /*flags*/ 0,
+                        )
+                    },
+                    0
+                );
+            }
+            let mut exited = libc::pollfd {
+                fd: root.exit.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(
+                unsafe {
+                    libc::poll(&mut exited, /*nfds*/ 1, /*timeout*/ 15_000)
+                },
+                1,
+                "runner did not exit"
+            );
+            // Capture every readiness result before reading any output or doing
+            // cleanup. An eventual exit cannot satisfy this retirement barrier.
+            let bridge_exits: Vec<_> = bridges
+                .iter()
+                .map(|process| {
+                    let mut exit = libc::pollfd {
+                        fd: process.exit.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    (
+                        process.pid,
+                        unsafe {
+                            libc::poll(&mut exit, /*nfds*/ 1, /*timeout*/ 0)
+                        },
+                        exit.revents,
+                    )
+                })
+                .collect();
+            let mut peer_exit = libc::pollfd {
+                fd: peer_identity.exit.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(
+                unsafe {
+                    libc::poll(&mut peer_exit, /*nfds*/ 1, /*timeout*/ 0)
+                },
+                0,
+                "runner retired an unrelated process-group peer"
+            );
+            let status = child.wait().unwrap();
+            let mut tail = String::new();
+            output.read_to_string(&mut tail).unwrap();
+            let error = std::io::read_to_string(child.stderr.take().unwrap()).unwrap();
+            assert_eq!(status.code(), Some(target_status.unwrap_or(0)), "{error}");
+            assert_eq!(tail, "");
+            assert_eq!(error, "");
+            assert!(!temporary.exists());
+            assert!(
+                bridge_exits
+                    .iter()
+                    .all(|(_, count, events)| *count == 1 && events & libc::POLLIN != 0),
+                "runner returned before host bridge retirement: {bridge_exits:?}"
+            );
+        }));
+        // Retain kernel identities through cleanup, including reparented stopped
+        // bridges. Clean them before propagating a failed public assertion.
+        for process in &processes {
+            process.kill();
+        }
+        if let Some((mut host_peer, identity)) = peer {
+            identity.kill();
+            host_peer.wait().unwrap();
+        }
+        await_exit(&processes);
+        child.wait().unwrap();
+        if let Err(error) = outcome {
+            std::panic::resume_unwind(error);
+        }
+    }
+}

@@ -108,3 +108,55 @@ fn default_null_and_explicit_bubblewrap_keep_supervision() {
         assert!(!Path::new(temporary).exists());
     }
 }
+
+#[test]
+fn managed_proxy_entry_reaps_children_with_inherited_sigchld() {
+    for (ignored, blocked) in [(true, false), (false, true), (true, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = runner(directory.path());
+        command
+            .current_dir(directory.path())
+            .arg("--sandbox-policy-cwd")
+            .arg(directory.path())
+            .args(["--no-proc", "--managed-network", "{}"])
+            .arg("--permission-profile")
+            .arg(
+                serde_json::to_string(&codex_protocol::models::PermissionProfile::read_only())
+                    .unwrap(),
+            )
+            .args([
+                "--",
+                "/bin/sh",
+                "-c",
+                r"printf 'native completed\n'; exit 42",
+            ])
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HTTP_PROXY", "http://127.0.0.1:9");
+        // The ordinary native entry has no standalone signal owner. Its helper
+        // must retain waitable children just as execing bubblewrap did before.
+        unsafe {
+            command.pre_exec(move || {
+                if ignored && libc::signal(libc::SIGCHLD, libc::SIG_IGN) == libc::SIG_ERR {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if blocked {
+                    let mut mask = std::mem::zeroed();
+                    libc::sigemptyset(&mut mask);
+                    libc::sigaddset(&mut mask, libc::SIGCHLD);
+                    let error = libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+                    if error != 0 {
+                        return Err(std::io::Error::from_raw_os_error(error));
+                    }
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(42), b"native completed\n".to_vec(), vec![]),
+            "SIGCHLD ignored={ignored}, blocked={blocked}"
+        );
+    }
+}
