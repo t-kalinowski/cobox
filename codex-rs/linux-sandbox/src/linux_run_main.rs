@@ -28,6 +28,7 @@ use crate::bwrap::create_bwrap_command_args;
 use crate::launcher::exec_bwrap;
 use crate::launcher::initialize_bwrap_launcher;
 use crate::launcher::preferred_bwrap_supports_argv0;
+use crate::proxy_lifecycle::HostProxyBridges;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use crate::seccomp::apply_permission_profile_to_current_thread;
@@ -341,14 +342,22 @@ pub(crate) fn run_main_with_target_setup(
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let (proxy_route_spec, proxy_controls) = if allow_network_for_proxy {
-            let (proxy_route_spec, controls) = prepare_host_proxy_route_spec()
-                .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
-            (Some(proxy_route_spec), controls)
-        } else {
-            (None, Vec::new())
-        };
-        let options = BwrapOptions {
+        // Like bubblewrap, the native owner needs waitable children even when
+        // raw native entry inherits SIGCHLD ignored or SA_NOCLDWAIT. Preserve
+        // the caller's signal mask; waitpid does not require SIGCHLD delivery.
+        let mut child_action: libc::sigaction = unsafe { std::mem::zeroed() };
+        child_action.sa_sigaction = libc::SIG_DFL;
+        unsafe {
+            libc::sigemptyset(&mut child_action.sa_mask);
+            if libc::sigaction(libc::SIGCHLD, &child_action, std::ptr::null_mut()) < 0 {
+                panic!(
+                    "failed to make native children waitable: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+        let mut proxy_bridges = HostProxyBridges::default();
+        let mut options = BwrapOptions {
             mount_proc: !no_proc && !inherit_pid_namespace,
             inherit_pid_namespace,
             require_process_isolation: target_setup_fd.is_some(),
@@ -359,8 +368,9 @@ pub(crate) fn run_main_with_target_setup(
                 || !file_system_sandbox_policy
                     .get_unreadable_globs_with_cwd(&sandbox_policy_cwd)
                     .is_empty())
-                && crate::wslg::is_duplicate_root(Path::new(WSLG_DISTRO_ROOT))
-                    .unwrap_or_else(|err| exit_with_bwrap_build_error(err.into())),
+                && crate::wslg::is_duplicate_root(Path::new(WSLG_DISTRO_ROOT)).unwrap_or_else(
+                    |err| exit_with_bwrap_build_error(err.into(), &mut proxy_bridges),
+                ),
             ..Default::default()
         };
         if options.mask_wslg_distro
@@ -373,8 +383,31 @@ pub(crate) fn run_main_with_target_setup(
                 .unwrap_or(&sandbox_policy_cwd)
                 .join(executable);
             crate::wslg::ensure_supported_path(&executable)
-                .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
+                .unwrap_or_else(|err| exit_with_bwrap_build_error(err, &mut proxy_bridges));
         }
+        // Preflight may exit directly when cancelled. Do not create bridge
+        // children until that native setup has finished.
+        // Select before the preflight, whose synthetic policy omits writable roots.
+        initialize_bwrap_launcher(&file_system_sandbox_policy, &sandbox_policy_cwd);
+        if options.mount_proc
+            && !preflight_proc_mount_support(options)
+                .unwrap_or_else(|err| exit_with_bwrap_build_error(err, &mut proxy_bridges))
+        {
+            // Keep the retry silent so sandbox-internal diagnostics do not leak into the
+            // child process stderr stream.
+            options.mount_proc = false;
+        }
+        let (proxy_route_spec, mut proxy_controls) = if allow_network_for_proxy {
+            let routes = prepare_host_proxy_route_spec(target_setup_fd)
+                .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
+            proxy_bridges = routes.bridges;
+            (Some(routes.spec), routes.controls)
+        } else {
+            (None, Vec::new())
+        };
+        // Adopt after bridge forks: their copies were closed before readiness,
+        // and must not retain an inherited File owner for that descriptor.
+        let target_setup = target_setup_fd.map(|fd| unsafe { File::from_raw_fd(fd) });
         let mut inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
@@ -386,13 +419,17 @@ pub(crate) fn run_main_with_target_setup(
         if let Some(fd) = target_setup_fd {
             inner.splice(1..1, ["--target-setup-fd".to_string(), fd.to_string()]);
         }
-        run_bwrap_with_proc_fallback(
+        // The bwrap child inherits the setup channel; an owning native helper
+        // closes its copy with the other transferred descriptors after fork.
+        proxy_controls.extend(target_setup);
+        run_bwrap(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
             options,
             inner,
             proxy_controls,
+            proxy_bridges,
         );
     }
 
@@ -467,27 +504,16 @@ fn ensure_legacy_landlock_mode_supports_policy(
     }
 }
 
-fn run_bwrap_with_proc_fallback(
+fn run_bwrap(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    mut options: BwrapOptions,
+    options: BwrapOptions,
     inner: Vec<String>,
     proxy_controls: Vec<File>,
+    mut proxy_bridges: HostProxyBridges,
 ) -> ! {
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
-
-    // Select before the preflight, whose synthetic policy omits writable roots.
-    initialize_bwrap_launcher(file_system_sandbox_policy, sandbox_policy_cwd);
-
-    if options.mount_proc
-        && !preflight_proc_mount_support(options)
-            .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
-    {
-        // Keep the retry silent so sandbox-internal diagnostics do not leak into the
-        // child process stderr stream.
-        options.mount_proc = false;
-    }
 
     let mut bwrap_args = build_bwrap_argv(
         inner,
@@ -496,10 +522,10 @@ fn run_bwrap_with_proc_fallback(
         command_cwd,
         options,
     )
-    .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
+    .unwrap_or_else(|err| exit_with_bwrap_build_error(err, &mut proxy_bridges));
     bwrap_args.preserved_files.extend(proxy_controls);
     apply_inner_command_argv0(&mut bwrap_args.args);
-    run_or_exec_bwrap(bwrap_args);
+    run_or_exec_bwrap(bwrap_args, proxy_bridges);
 }
 
 fn bwrap_network_mode(
@@ -540,8 +566,14 @@ fn build_bwrap_argv(
     })
 }
 
-fn exit_with_bwrap_build_error(err: codex_protocol::error::CodexErr) -> ! {
+fn exit_with_bwrap_build_error(
+    err: codex_protocol::error::CodexErr,
+    proxy_bridges: &mut HostProxyBridges,
+) -> ! {
     eprintln!("error building bubblewrap command: {err}");
+    if let Err(error) = proxy_bridges.retire() {
+        eprintln!("failed to retire host proxy bridges: {error}");
+    }
     std::process::exit(1);
 }
 
@@ -623,16 +655,20 @@ fn resolve_true_command() -> String {
     "true".to_string()
 }
 
-fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs, proxy_bridges: HostProxyBridges) -> ! {
     if bwrap_args.synthetic_mount_targets.is_empty()
         && bwrap_args.protected_create_targets.is_empty()
+        && proxy_bridges.is_empty()
     {
         exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
     }
-    run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args);
+    run_bwrap_in_child_with_cleanup(bwrap_args, proxy_bridges);
 }
 
-fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+fn run_bwrap_in_child_with_cleanup(
+    bwrap_args: crate::bwrap::BwrapArgs,
+    mut proxy_bridges: HostProxyBridges,
+) -> ! {
     let crate::bwrap::BwrapArgs {
         args,
         preserved_files,
@@ -674,6 +710,9 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let status = wait_for_bwrap_child(pid);
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
+    proxy_bridges
+        .retire()
+        .unwrap_or_else(|error| panic!("failed to retire host proxy bridges: {error}"));
     let protected_create_monitor_violation = protected_create_monitor
         .map(ProtectedCreateMonitor::stop)
         .unwrap_or(false);

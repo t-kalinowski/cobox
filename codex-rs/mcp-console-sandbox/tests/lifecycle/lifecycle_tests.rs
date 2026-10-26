@@ -150,3 +150,9 @@ fn configured_caller_death_retires_the_lifetime() {
     assert!(rest.is_empty(), "{rest}");
     assert!(!Path::new(value["temporary"].as_str().unwrap()).exists());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn managed_proxy_bridges_retire_before_return() {
+    ownership::managed_proxy_bridges_retire_before_return();
+}

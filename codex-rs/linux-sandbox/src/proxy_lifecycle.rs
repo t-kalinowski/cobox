@@ -30,6 +30,88 @@ use std::os::unix::net::UnixStream;
 
 const LISTENER_MESSAGE: u8 = 1;
 
+/// Direct children remain waitable until the native helper retires them.
+/// Forked copies do not own their creator's children.
+/// The helper retains its creation credentials and is their exclusive reaper;
+/// host interference with these invariants is outside native cleanup guarantees.
+pub(crate) struct HostProxyBridges {
+    owner: libc::pid_t,
+    children: Vec<libc::pid_t>,
+}
+
+impl Default for HostProxyBridges {
+    fn default() -> Self {
+        Self {
+            owner: unsafe { libc::getpid() },
+            children: Vec::new(),
+        }
+    }
+}
+
+impl HostProxyBridges {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.children.is_empty()
+    }
+
+    pub(crate) fn own(&mut self, pid: libc::pid_t) {
+        self.children.push(pid);
+    }
+
+    pub(crate) fn retire(&mut self) -> io::Result<()> {
+        assert_eq!(self.owner, unsafe { libc::getpid() });
+        let mut error = None;
+        let mut waiting = Vec::new();
+        // Stop every bridge before waiting for any one of them. These exact
+        // child PIDs cannot be reused until this owner collects their status.
+        for pid in std::mem::take(&mut self.children) {
+            if unsafe { libc::kill(pid, libc::SIGKILL) } < 0 {
+                let failure = io::Error::last_os_error();
+                if failure.raw_os_error() != Some(libc::ESRCH) {
+                    self.children.push(pid);
+                    error.get_or_insert_with(|| {
+                        io::Error::other(format!("terminate host proxy bridge {pid}: {failure}"))
+                    });
+                    continue;
+                }
+            }
+            waiting.push(pid);
+        }
+        for pid in waiting {
+            loop {
+                let mut status = 0;
+                if unsafe {
+                    libc::waitpid(pid, &mut status, /*options*/ 0)
+                } == pid
+                {
+                    break;
+                }
+                let failure = io::Error::last_os_error();
+                if failure.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                // Do not retain a PID after failed wait ownership: ECHILD can
+                // mean its identity is already gone, so it must not be signaled again.
+                error.get_or_insert_with(|| {
+                    io::Error::other(format!("reap host proxy bridge {pid}: {failure}"))
+                });
+                break;
+            }
+        }
+        error.map_or(Ok(()), Err)
+    }
+}
+
+impl Drop for HostProxyBridges {
+    fn drop(&mut self) {
+        if self.owner == unsafe { libc::getpid() }
+            && let Err(error) = self.retire()
+        {
+            // Preserve an earlier setup error while still cleaning partial preparation.
+            eprintln!("failed to retire host proxy bridges: {error}");
+        }
+    }
+}
+
 pub(crate) fn send_listener(channel: &UnixStream, listener: &TcpListener) -> io::Result<()> {
     let descriptors = [listener.as_fd()];
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
