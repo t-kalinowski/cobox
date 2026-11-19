@@ -176,7 +176,7 @@ jobs:
       - name: Test Bazel executable and argument comments
         run: |
           bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test
-          just argument-comment-lint -p mcp-console-sandbox
+          bazel build --config=argument-comment-lint //codex-rs/mcp-console-sandbox:all
       - name: Build standalone release executable
         run: cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox --release
       - name: Run all contracts against release executable
@@ -249,7 +249,7 @@ jobs:
       - name: Test Bazel executable and argument comments
         run: |
           bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test
-          just argument-comment-lint -p mcp-console-sandbox
+          bazel build --config=argument-comment-lint //codex-rs/mcp-console-sandbox:all
       - name: Build standalone release executable and bubblewrap
         run: |
           cargo build --locked --release \
