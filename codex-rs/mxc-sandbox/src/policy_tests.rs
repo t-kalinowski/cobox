@@ -238,18 +238,6 @@ fn native_grants_preserve_denies_and_read_only_carveouts() -> Result<()> {
     let profile =
         PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted);
     let request = build_request(&command(&profile, root), root, Vec::new(), &[], &[])?;
-    let mut expected_read = [
-        root.join(".agents"),
-        root.join(".aws"),
-        root.join(".codex"),
-        root.join(".git"),
-        readonly,
-        writable_child.join(".agents"),
-        writable_child.join(".aws"),
-        writable_child.join(".codex"),
-        writable_child.join(".git"),
-    ];
-    expected_read.sort();
     assert_eq!(
         (
             request.policy.readwrite_paths,
@@ -261,11 +249,11 @@ fn native_grants_preserve_denies_and_read_only_carveouts() -> Result<()> {
                 root.to_str().unwrap().to_owned(),
                 writable_child.to_str().unwrap().to_owned()
             ],
-            expected_read
-                .iter()
-                .map(|path| path.to_str().unwrap().to_owned())
-                .collect::<Vec<_>>(),
-            vec![denied.to_str().unwrap().to_owned()],
+            Vec::<String>::new(),
+            vec![
+                readonly.to_str().unwrap().to_owned(),
+                denied.to_str().unwrap().to_owned()
+            ],
         )
     );
     assert!(!request.policy.fallback.allow_dacl_mutation);
@@ -300,13 +288,7 @@ fn volume_expansion_does_not_turn_read_only_child_writable() -> Result<()> {
     );
     assert_eq!(
         request.policy.readonly_paths,
-        vec![
-            root.join(".agents").to_str().unwrap(),
-            root.join(".aws").to_str().unwrap(),
-            root.join(".codex").to_str().unwrap(),
-            root.join(".git").to_str().unwrap(),
-            readonly.to_str().unwrap()
-        ]
+        vec![readonly.to_str().unwrap()]
     );
     Ok(())
 }
@@ -614,12 +596,7 @@ fn root_deny_keeps_only_narrow_explicit_grants() -> Result<()> {
         let allowed = vec![child.to_str().unwrap().to_owned()];
         let expected = match access {
             FileSystemAccessMode::Read => (Vec::new(), allowed),
-            FileSystemAccessMode::Write => (
-                allowed,
-                [".agents", ".aws", ".codex", ".git"]
-                    .map(|name| child.join(name).to_str().unwrap().to_owned())
-                    .to_vec(),
-            ),
+            FileSystemAccessMode::Write => (allowed, Vec::new()),
             FileSystemAccessMode::Deny => unreachable!(),
         };
         assert_eq!(
@@ -785,19 +762,7 @@ fn symbolic_root_preserves_equal_path_precedence_and_denies() -> Result<()> {
         .into_iter()
         .filter(|path| Path::new(path).starts_with(&base))
         .collect();
-    assert_eq!(
-        reads_in_volumes,
-        volumes[..2]
-            .iter()
-            .flat_map(
-                |volume| [".agents", ".aws", ".codex", ".git"].map(|name| volume
-                    .join(name)
-                    .to_str()
-                    .unwrap()
-                    .to_owned())
-            )
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(reads_in_volumes, Vec::<String>::new());
     assert_eq!(
         request.policy.denied_paths,
         vec![volumes[2].to_str().unwrap()]
