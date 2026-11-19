@@ -135,7 +135,6 @@ pub(super) fn volume_roots(
 }
 
 fn platform_read_roots() -> Result<Vec<PathBuf>> {
-
     let mut buffer = vec![0u16; 32768];
     let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
     ensure!(
