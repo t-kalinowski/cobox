@@ -227,10 +227,34 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
                 && !name.starts_with("MCP_CONSOLE_SANDBOX_TARGET_")
         }));
         if !inherit {
-            assert_eq!(environment, expected.as_object().unwrap());
+            assert_eq!(
+                context["environment"],
+                directly_launched_environment(&expected)?
+            );
         }
     }
     Ok(())
+}
+
+// Compare the complete map with what this Windows installation gives the same
+// executable when passed an explicit environment block through CreateProcess.
+fn directly_launched_environment(
+    configured: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let output = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg("context")
+        .env_clear()
+        .envs(
+            configured
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key, value.as_str().unwrap())),
+        )
+        .output()?;
+    assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+    let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    Ok(context["environment"].clone())
 }
 
 #[test]
@@ -259,7 +283,10 @@ fn cleared_target_environment_ignores_non_unicode_host_variables() -> anyhow::Re
             .output()?;
         assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
         let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        assert_eq!(context["environment"], json!({}));
+        assert_eq!(
+            context["environment"],
+            directly_launched_environment(&json!({}))?
+        );
     }
     Ok(())
 }
@@ -305,7 +332,8 @@ fn workspace_profile_protects_metadata_without_creating_directories() -> anyhow:
                 String::from_utf8(output.stdout)?,
                 output.stderr
             ),
-            (Some(0), "write denied\n".to_owned(), vec![])
+            (Some(0), "write denied\n".to_owned(), vec![]),
+            "{name}, existing={existing}"
         );
         if existing {
             assert_eq!(std::fs::read_to_string(target)?, "readable");
@@ -343,7 +371,7 @@ fn workspace_profile_allows_directory_and_descendant_write_overrides() -> anyhow
                 .env("CONSOLE_POLICY", config.to_string())
                 .args(["--config-env", "CONSOLE_POLICY", "--"])
                 .arg(cargo_bin("mcp-console-sandbox-fixture")?)
-                .arg("probe-write")
+                .arg(if allowed { "write" } else { "probe-write" })
                 .arg(target)
                 .output()?;
             assert_eq!(
@@ -354,18 +382,13 @@ fn workspace_profile_allows_directory_and_descendant_write_overrides() -> anyhow
                 ),
                 (
                     Some(0),
-                    if allowed {
-                        "write allowed\n"
-                    } else {
-                        "write denied\n"
-                    }
-                    .to_owned(),
+                    if allowed { "" } else { "write denied\n" }.to_owned(),
                     vec![]
                 )
             );
             assert_eq!(
                 std::fs::read_to_string(target)?,
-                if allowed { "escaped" } else { "readable" }
+                if allowed { "written" } else { "readable" }
             );
         }
     }
