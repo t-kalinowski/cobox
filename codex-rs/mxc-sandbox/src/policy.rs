@@ -422,7 +422,11 @@ fn expand_volume_roots(
 fn collect_paths(paths: impl IntoIterator<Item = PathBuf>) -> Result<NativePaths, PolicyError> {
     paths
         .into_iter()
-        .map(|path| Ok((PathUri::from_host_native_path(&path)?, path)))
+        .map(|path| {
+            #[cfg(windows)]
+            let path = crate::windows::expand_short_names(path)?;
+            Ok((PathUri::from_host_native_path(&path)?, path))
+        })
         .collect()
 }
 

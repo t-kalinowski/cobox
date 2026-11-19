@@ -1,12 +1,18 @@
 //! Resolve executor-local state and launch the decoded MXC helper request.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io;
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::OsStringExt;
+use std::path::Component;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use anyhow::ensure;
 use windows_sys::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
 use windows_sys::Win32::System::Com::COINIT_MULTITHREADED;
 use windows_sys::Win32::System::Com::CoInitializeEx;
 use windows_sys::Win32::System::Com::CoTaskMemFree;
@@ -16,6 +22,48 @@ use windows_sys::Win32::UI::Shell::FOLDERID_ProgramData;
 use windows_sys::Win32::UI::Shell::FOLDERID_ProgramFiles;
 use windows_sys::Win32::UI::Shell::FOLDERID_ProgramFilesX86;
 use windows_sys::Win32::UI::Shell::SHGetKnownFolderPath;
+
+/// PSEC matches DOS long names. Expand generated 8.3 components without
+/// resolving junctions or symlinks, which must stay bound by the native policy.
+pub(super) fn expand_short_names(path: PathBuf) -> io::Result<PathBuf> {
+    if !path.as_os_str().as_encoded_bytes().contains(&b'~') {
+        return Ok(path);
+    }
+    let mut expanded = PathBuf::new();
+    for component in path.components() {
+        expanded.push(component);
+        if !matches!(component, Component::Normal(name) if name.as_encoded_bytes().contains(&b'~'))
+        {
+            continue;
+        }
+        // Query only through this component: a grant or carveout may have
+        // descendants that do not exist when the policy is constructed.
+        let source = expanded
+            .as_os_str()
+            .encode_wide()
+            .chain([0])
+            .collect::<Vec<_>>();
+        let mut long = vec![0; 32768];
+        let count =
+            unsafe { GetLongPathNameW(source.as_ptr(), long.as_mut_ptr(), long.len() as u32) }
+                as usize;
+        if count == 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::NotFound {
+                // An absent literal name has no assigned DOS alternate name.
+                continue;
+            }
+            return Err(error);
+        }
+        if count >= long.len() {
+            return Err(io::Error::other(
+                "Windows long path exceeds the native length limit",
+            ));
+        }
+        expanded = PathBuf::from(OsString::from_wide(&long[..count]));
+    }
+    Ok(expanded)
+}
 
 struct ComUninitializeGuard;
 
@@ -87,7 +135,6 @@ pub(super) fn volume_roots(
 }
 
 fn platform_read_roots() -> Result<Vec<PathBuf>> {
-    use std::os::windows::ffi::OsStringExt;
 
     let mut buffer = vec![0u16; 32768];
     let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };

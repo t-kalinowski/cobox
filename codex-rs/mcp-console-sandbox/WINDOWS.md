@@ -30,7 +30,7 @@ Native setup uses the trusted executor environment. The leaf crate carries the e
 
 Every launch requires MXC support for its requested filesystem policy. Capability detection creates and closes a native process security environment; exported API names alone are insufficient. Unsupported hosts and policies fail before target execution, with no backend retry. External filesystem enforcement is unsupported on Windows.
 
-Filesystem access uses native MXC permissions. Read-deny entries require native deny-path support. Working directories resolve through directory handles, including Windows 8.3 aliases, without requiring parent enumeration.
+Filesystem access uses native MXC permissions. The policy expands generated DOS short names in filesystem grants so the same directory can be named through its 8.3 or long spelling. Read-deny entries require native deny-path support. Working directories resolve through directory handles, including Windows 8.3 aliases, without requiring parent enumeration.
 
 Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional. Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight. The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
 
