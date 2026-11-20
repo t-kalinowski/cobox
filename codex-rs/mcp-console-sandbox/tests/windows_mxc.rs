@@ -31,6 +31,30 @@ fn console(policy: Value) -> Result<Command> {
 }
 
 #[test]
+fn workspace_profile_reads_existing_metadata() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let workspace = tempfile::tempdir()?;
+    let metadata = workspace.path().join(".git");
+    std::fs::create_dir(&metadata)?;
+    std::fs::write(metadata.join("HEAD"), b"ref: refs/heads/main")?;
+    let policy = json!({
+        "extends":":workspace", "workspace":workspace.path(),
+        "workspace_options":{"exclude_tmpdir_env_var":true,"exclude_slash_tmp":true}
+    });
+    let output = console(policy)?
+        .current_dir(workspace.path())
+        .arg(r"type .git\HEAD")
+        .output()?;
+    assert_eq!(
+        (output.status.code(), output.stdout, output.stderr),
+        (Some(0), b"ref: refs/heads/main".to_vec(), vec![]),
+    );
+    Ok(())
+}
+
+#[test]
 fn short_directory_name_grants_the_same_write_as_its_long_name() -> Result<()> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStrExt;

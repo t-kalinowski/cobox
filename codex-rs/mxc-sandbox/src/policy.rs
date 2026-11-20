@@ -182,7 +182,7 @@ pub(super) fn build_request(
         .map_err(|error| PolicyError::PolicyResolution(error.to_string()))?;
     // A symbolic root deny is the default, not a recursive native mask that
     // should erase narrower grants. Only materialize grants and carveouts.
-    let deny = collect_paths(
+    let mut deny = collect_paths(
         resolve_windows_deny_read_paths(&policy, &absolute_cwd)
             .map_err(PolicyError::PolicyResolution)?
             .into_iter()
@@ -199,13 +199,22 @@ pub(super) fn build_request(
             .chain(protected)
             .collect::<Vec<_>>()
     }))?;
-    // Write restrictions must not grant otherwise forbidden reads.
-    read.extend(
-        carveouts
-            .iter()
-            .filter(|(_, path)| fs.can_read_local_path_with_cwd(path.as_path(), cwd))
-            .map(|(key, path)| (key.clone(), path.clone())),
-    );
+    for (key, path) in &carveouts {
+        if !fs.can_read_local_path_with_cwd(path, cwd) {
+            continue;
+        }
+        // A native read-only grant applies to an existing object. Protect an
+        // absent name from creation under the writable parent for this launch.
+        // Inspect the entry itself so a dangling reparse point is not mistaken
+        // for a missing name.
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => read.insert(key.clone(), path.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                deny.insert(key.clone(), path.clone())
+            }
+            Err(error) => return Err(error.into()),
+        };
+    }
     if policy.include_platform_defaults() {
         read.extend(collect_paths(platform_read_roots.iter().cloned())?);
     }
