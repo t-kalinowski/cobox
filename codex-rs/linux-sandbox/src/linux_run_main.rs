@@ -13,7 +13,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -28,6 +27,11 @@ use crate::bwrap::create_bwrap_command_args;
 use crate::launcher::exec_bwrap;
 use crate::launcher::initialize_bwrap_launcher;
 use crate::launcher::preferred_bwrap_supports_argv0;
+use crate::mount_registry::cleanup_synthetic_mount_targets;
+use crate::mount_registry::recover_stale_mount_targets;
+use crate::mount_registry::register_synthetic_mount_targets;
+use crate::mount_registry::synthetic_mount_marker_dir;
+use crate::mount_registry::with_synthetic_mount_registry_lock;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use crate::seccomp::apply_permission_profile_to_current_thread;
@@ -48,16 +52,7 @@ static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 const FORWARDED_SIGNALS: &[libc::c_int] =
     &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
-const SYNTHETIC_MOUNT_MARKER_SYNTHETIC: &[u8] = b"synthetic\n";
-const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
 const PROTECTED_CREATE_MARKER: &[u8] = b"protected-create\n";
-
-#[derive(Debug)]
-struct SyntheticMountTargetRegistration {
-    target: crate::bwrap::SyntheticMountTarget,
-    marker_file: PathBuf,
-    marker_dir: PathBuf,
-}
 
 #[derive(Debug)]
 struct ProtectedCreateTargetRegistration {
@@ -144,6 +139,10 @@ pub struct LinuxSandboxCommand {
     #[arg(long = "target-setup-fd", hide = true)]
     pub target_setup_fd: Option<libc::c_int>,
 
+    /// Keep the synthetic mount owner lease in the trusted namespace init.
+    #[arg(long = "mount-cleanup-lease-fd", hide = true)]
+    pub mount_cleanup_lease_fd: Option<libc::c_int>,
+
     /// Inherited fallback mounts that must be authenticated before sandboxed code runs.
     #[arg(long = "verify-fd-mount", hide = true)]
     pub verify_fd_mounts: Vec<String>,
@@ -189,11 +188,27 @@ pub(crate) fn run_main_with_target_setup(
         verify_fd_mounts,
         stdin_fd,
         target_setup_fd,
+        mount_cleanup_lease_fd,
         no_proc,
         inherit_pid_namespace,
         command,
     } = LinuxSandboxCommand::parse();
     let allow_network_for_proxy = managed_network.is_some();
+    // The guard remains in native init, including when the target-setup hook
+    // takes over its lifetime. Workload exec closes its inherited copy.
+    let _mount_cleanup_lease = mount_cleanup_lease_fd.map(|fd| {
+        assert!(
+            apply_seccomp_then_exec && fd > libc::STDERR_FILENO,
+            "mount cleanup lease requires the inner sandbox stage"
+        );
+        let lease = unsafe { File::from_raw_fd(fd) };
+        assert!(
+            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } == 0,
+            "protect mount cleanup lease: {}",
+            std::io::Error::last_os_error()
+        );
+        lease
+    });
 
     if let Some(fd) = target_setup_fd {
         assert!(
@@ -489,6 +504,7 @@ fn run_bwrap_with_proc_fallback(
         options.mount_proc = false;
     }
 
+    recover_stale_mount_targets();
     let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
@@ -634,13 +650,17 @@ fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
 
 fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
     let crate::bwrap::BwrapArgs {
-        args,
-        preserved_files,
+        mut args,
+        mut preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
     } = bwrap_args;
     let setup_signal_mask = ForwardedSignalMask::block();
-    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
+    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets)
+        .unwrap_or_else(|err| exit_with_bwrap_build_error(err.into()));
+    synthetic_mount_registrations
+        .preserve_lease(&mut args, &mut preserved_files)
+        .unwrap_or_else(|err| exit_with_bwrap_build_error(err.into()));
     let protected_create_registrations =
         register_protected_create_targets(&protected_create_targets);
     let exec_start_pipe = create_exec_start_pipe(!protected_create_targets.is_empty());
@@ -677,7 +697,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let protected_create_monitor_violation = protected_create_monitor
         .map(ProtectedCreateMonitor::stop)
         .unwrap_or(false);
-    cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
+    cleanup_synthetic_mount_targets(synthetic_mount_registrations);
     let protected_create_violation = protected_create_monitor_violation
         || cleanup_protected_create_targets(&protected_create_registrations);
     signal_forwarders.restore();
@@ -1011,55 +1031,6 @@ fn wait_for_bwrap_child(pid: libc::pid_t) -> libc::c_int {
     }
 }
 
-fn register_synthetic_mount_targets(
-    targets: &[crate::bwrap::SyntheticMountTarget],
-) -> Vec<SyntheticMountTargetRegistration> {
-    with_synthetic_mount_registry_lock(|| {
-        targets
-            .iter()
-            .map(|target| {
-                let marker_dir = synthetic_mount_marker_dir(target.path());
-                fs::create_dir_all(&marker_dir).unwrap_or_else(|err| {
-                    panic!(
-                        "failed to create synthetic bubblewrap mount marker directory {}: {err}",
-                        marker_dir.display()
-                    )
-                });
-                let target = if target.preserves_pre_existing_path()
-                    && synthetic_mount_marker_dir_has_active_synthetic_owner(&marker_dir)
-                {
-                    match target.kind() {
-                        crate::bwrap::SyntheticMountTargetKind::EmptyFile => {
-                            crate::bwrap::SyntheticMountTarget::missing(target.path())
-                        }
-                        crate::bwrap::SyntheticMountTargetKind::EmptyDirectory => {
-                            crate::bwrap::SyntheticMountTarget::missing_empty_directory(
-                                target.path(),
-                            )
-                        }
-                    }
-                } else {
-                    target.clone()
-                };
-                let marker_file = marker_dir.join(std::process::id().to_string());
-                fs::write(&marker_file, synthetic_mount_marker_contents(&target)).unwrap_or_else(
-                    |err| {
-                        panic!(
-                            "failed to register synthetic bubblewrap mount target {}: {err}",
-                            target.path().display()
-                        )
-                    },
-                );
-                SyntheticMountTargetRegistration {
-                    target,
-                    marker_file,
-                    marker_dir,
-                }
-            })
-            .collect()
-    })
-}
-
 fn register_protected_create_targets(
     targets: &[crate::bwrap::ProtectedCreateTarget],
 ) -> Vec<ProtectedCreateTargetRegistration> {
@@ -1089,108 +1060,6 @@ fn register_protected_create_targets(
             })
             .collect()
     })
-}
-
-fn synthetic_mount_marker_contents(target: &crate::bwrap::SyntheticMountTarget) -> &'static [u8] {
-    if target.preserves_pre_existing_path() {
-        SYNTHETIC_MOUNT_MARKER_EXISTING
-    } else {
-        SYNTHETIC_MOUNT_MARKER_SYNTHETIC
-    }
-}
-
-fn synthetic_mount_marker_dir_has_active_synthetic_owner(marker_dir: &Path) -> bool {
-    synthetic_mount_marker_dir_has_active_process_matching(marker_dir, |path| {
-        match fs::read(path) {
-            Ok(contents) => contents == SYNTHETIC_MOUNT_MARKER_SYNTHETIC,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-            Err(err) => panic!(
-                "failed to read synthetic bubblewrap mount marker {}: {err}",
-                path.display()
-            ),
-        }
-    })
-}
-
-fn synthetic_mount_marker_dir_has_active_process(marker_dir: &Path) -> bool {
-    synthetic_mount_marker_dir_has_active_process_matching(marker_dir, |_| true)
-}
-
-fn synthetic_mount_marker_dir_has_active_process_matching(
-    marker_dir: &Path,
-    matches_marker: impl Fn(&Path) -> bool,
-) -> bool {
-    let entries = match fs::read_dir(marker_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(err) => panic!(
-            "failed to read synthetic bubblewrap mount marker directory {}: {err}",
-            marker_dir.display()
-        ),
-    };
-    for entry in entries {
-        let entry = entry.unwrap_or_else(|err| {
-            panic!(
-                "failed to read synthetic bubblewrap mount marker in {}: {err}",
-                marker_dir.display()
-            )
-        });
-        let path = entry.path();
-        let Some(pid) = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.parse::<libc::pid_t>().ok())
-        else {
-            continue;
-        };
-        if !process_is_active(pid) {
-            match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => panic!(
-                    "failed to remove stale synthetic bubblewrap mount marker {}: {err}",
-                    path.display()
-                ),
-            }
-            continue;
-        }
-        let matches_marker = matches_marker(&path);
-        if matches_marker {
-            return true;
-        }
-    }
-    false
-}
-
-fn cleanup_synthetic_mount_targets(targets: &[SyntheticMountTargetRegistration]) {
-    with_synthetic_mount_registry_lock(|| {
-        for target in targets.iter().rev() {
-            match fs::remove_file(&target.marker_file) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => panic!(
-                    "failed to unregister synthetic bubblewrap mount target {}: {err}",
-                    target.target.path().display()
-                ),
-            }
-        }
-
-        for target in targets.iter().rev() {
-            if synthetic_mount_marker_dir_has_active_process(&target.marker_dir) {
-                continue;
-            }
-            remove_synthetic_mount_target(&target.target);
-            match fs::remove_dir(&target.marker_dir) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
-                Err(err) => panic!(
-                    "failed to remove synthetic bubblewrap mount marker directory {}: {err}",
-                    target.marker_dir.display()
-                ),
-            }
-        }
-    });
 }
 
 fn cleanup_protected_create_targets(targets: &[ProtectedCreateTargetRegistration]) -> bool {
@@ -1316,129 +1185,6 @@ fn make_directory_tree_writable(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn remove_synthetic_mount_target(target: &crate::bwrap::SyntheticMountTarget) {
-    let path = target.path();
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
-        Err(err) => panic!(
-            "failed to inspect synthetic bubblewrap mount target {}: {err}",
-            path.display()
-        ),
-    };
-    if !target.should_remove_after_bwrap(&metadata) {
-        return;
-    }
-    match target.kind() {
-        crate::bwrap::SyntheticMountTargetKind::EmptyFile => match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => panic!(
-                "failed to remove synthetic bubblewrap mount target {}: {err}",
-                path.display()
-            ),
-        },
-        crate::bwrap::SyntheticMountTargetKind::EmptyDirectory => match fs::remove_dir(path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
-            Err(err) => panic!(
-                "failed to remove synthetic bubblewrap mount target {}: {err}",
-                path.display()
-            ),
-        },
-    }
-}
-
-fn process_is_active(pid: libc::pid_t) -> bool {
-    let result = unsafe { libc::kill(pid, 0) };
-    if result == 0 {
-        return true;
-    }
-    let err = std::io::Error::last_os_error();
-    !matches!(err.raw_os_error(), Some(libc::ESRCH))
-}
-
-fn with_synthetic_mount_registry_lock<T>(f: impl FnOnce() -> T) -> T {
-    let registry_root = synthetic_mount_registry_root();
-    fs::create_dir_all(&registry_root).unwrap_or_else(|err| {
-        panic!(
-            "failed to create synthetic bubblewrap mount registry {}: {err}",
-            registry_root.display()
-        )
-    });
-    let lock_path = registry_root.join("lock");
-    let lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to open synthetic bubblewrap mount registry lock {}: {err}",
-                lock_path.display()
-            )
-        });
-    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } < 0 {
-        let err = std::io::Error::last_os_error();
-        panic!(
-            "failed to lock synthetic bubblewrap mount registry {}: {err}",
-            lock_path.display()
-        );
-    }
-    let result = f();
-    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) } < 0 {
-        let err = std::io::Error::last_os_error();
-        panic!(
-            "failed to unlock synthetic bubblewrap mount registry {}: {err}",
-            lock_path.display()
-        );
-    }
-    result
-}
-
-fn synthetic_mount_marker_dir(path: &Path) -> PathBuf {
-    synthetic_mount_registry_root().join(format!("{:016x}", hash_path(path)))
-}
-
-pub(crate) fn synthetic_mount_registry_root() -> PathBuf {
-    static REGISTRY_ROOT: OnceLock<PathBuf> = OnceLock::new();
-
-    REGISTRY_ROOT
-        .get_or_init(|| {
-            let effective_uid = unsafe { libc::geteuid() };
-            let temp_dir = std::env::temp_dir();
-            let temp_dir = temp_dir.canonicalize().unwrap_or_else(|err| {
-                panic!(
-                    "failed to resolve synthetic mount registry temp directory {}: {err}",
-                    temp_dir.display()
-                )
-            });
-            let registry_root = temp_dir.join(format!(
-                "codex-bwrap-synthetic-mount-targets-{effective_uid}"
-            ));
-            // A registry symlink can redirect bookkeeping into a writable root
-            // that does not overlap TMPDIR, bypassing its read-only mount.
-            assert!(
-                !registry_root.is_symlink(),
-                "synthetic mount registry must not be a symlink: {}",
-                registry_root.display()
-            );
-            registry_root
-        })
-        .clone()
-}
-
-fn hash_path(path: &Path) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in path.as_os_str().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 fn exit_with_wait_status(status: libc::c_int) -> ! {
     if libc::WIFEXITED(status) {
         std::process::exit(libc::WEXITSTATUS(status));
@@ -1481,13 +1227,17 @@ fn exit_with_wait_status_or_policy_violation(
 fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
     let crate::bwrap::BwrapArgs {
-        args,
-        preserved_files,
+        mut args,
+        mut preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
     } = bwrap_args;
     let setup_signal_mask = ForwardedSignalMask::block();
-    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
+    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets)
+        .unwrap_or_else(|err| exit_with_bwrap_build_error(err.into()));
+    synthetic_mount_registrations
+        .preserve_lease(&mut args, &mut preserved_files)
+        .unwrap_or_else(|err| exit_with_bwrap_build_error(err.into()));
     let protected_create_registrations =
         register_protected_create_targets(&protected_create_targets);
 
@@ -1538,7 +1288,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
     let status = wait_for_bwrap_child(pid);
     let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
-    cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
+    cleanup_synthetic_mount_targets(synthetic_mount_registrations);
     cleanup_protected_create_targets(&protected_create_registrations);
     signal_forwarders.restore();
     cleanup_signal_mask.restore();

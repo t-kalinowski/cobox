@@ -81,6 +81,7 @@ rust_test(
         "tests/policy/policy_tests.rs",
         "tests/policy/profiles_tests.rs",
         "tests/policy/reference_tests.rs",
+        "tests/policy/stale_mount_tests.rs",
         "tests/transport/transport_tests.rs",
     ],
     crate_root = "tests/bootstrap_contract.rs",
