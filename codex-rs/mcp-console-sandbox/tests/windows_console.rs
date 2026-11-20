@@ -3,9 +3,11 @@
 #[path = "windows_mxc_support/mod.rs"]
 mod mxc_support;
 
+use anyhow::Context;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::process::Command;
@@ -177,16 +179,18 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let temporary = root.path().join("caller-temp");
     std::fs::create_dir(&temporary)?;
-    let configured = json!({
-        "TMPDIR": temporary,
-        "Temp": temporary,
-        "tMp": temporary,
-        "LOCALAPPDATA": "target-local-data",
-        "SystemDrive": "target-system-drive",
-        "CONSOLE_UNICODE": "日本語🧊".repeat(5000),
-    });
+    let temporary = temporary.to_str().context("Unicode temp path")?;
+    let unicode = "日本語🧊".repeat(5000);
+    let configured = BTreeMap::from([
+        ("TMPDIR", temporary),
+        ("Temp", temporary),
+        ("tMp", temporary),
+        ("LOCALAPPDATA", "target-local-data"),
+        ("SystemDrive", "target-system-drive"),
+        ("CONSOLE_UNICODE", unicode.as_str()),
+    ]);
     for (inherit, expected) in [
-        (false, json!({})),
+        (false, BTreeMap::new()),
         (false, configured.clone()),
         (true, configured),
     ] {
@@ -216,9 +220,11 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
             "inherit_environment={inherit}"
         );
         let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        let environment = context["environment"].as_object().unwrap();
-        for (name, value) in expected.as_object().unwrap() {
-            assert_eq!(environment.get(name), Some(value), "{name}");
+        let environment = context["environment"]
+            .as_object()
+            .context("fixture environment")?;
+        for (&name, &value) in &expected {
+            assert_eq!(environment[name].as_str(), Some(value), "{name}");
         }
         assert!(environment.keys().all(|name| {
             let name = name.to_ascii_uppercase();
@@ -227,10 +233,28 @@ fn target_environment_is_applied_after_mxc_setup() -> anyhow::Result<()> {
                 && !name.starts_with("MCP_CONSOLE_SANDBOX_TARGET_")
         }));
         if !inherit {
-            assert_eq!(environment, expected.as_object().unwrap());
+            assert_eq!(
+                context["environment"],
+                directly_launched_environment(&expected)?
+            );
         }
     }
     Ok(())
+}
+
+// Compare the complete map with what this Windows installation gives the same
+// executable when passed an explicit environment block through CreateProcess.
+fn directly_launched_environment(
+    configured: &BTreeMap<&str, &str>,
+) -> anyhow::Result<serde_json::Value> {
+    let output = Command::new(cargo_bin("mcp-console-sandbox-fixture")?)
+        .arg("context")
+        .env_clear()
+        .envs(configured)
+        .output()?;
+    assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
+    let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    Ok(context["environment"].clone())
 }
 
 #[test]
@@ -259,7 +283,10 @@ fn cleared_target_environment_ignores_non_unicode_host_variables() -> anyhow::Re
             .output()?;
         assert_eq!((output.status.code(), output.stderr), (Some(0), vec![]));
         let context: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        assert_eq!(context["environment"], json!({}));
+        assert_eq!(
+            context["environment"],
+            directly_launched_environment(&BTreeMap::new())?
+        );
     }
     Ok(())
 }
@@ -305,7 +332,8 @@ fn workspace_profile_protects_metadata_without_creating_directories() -> anyhow:
                 String::from_utf8(output.stdout)?,
                 output.stderr
             ),
-            (Some(0), "write denied\n".to_owned(), vec![])
+            (Some(0), "write denied\n".to_owned(), vec![]),
+            "{name}, existing={existing}"
         );
         if existing {
             assert_eq!(std::fs::read_to_string(target)?, "readable");
@@ -343,7 +371,7 @@ fn workspace_profile_allows_directory_and_descendant_write_overrides() -> anyhow
                 .env("CONSOLE_POLICY", config.to_string())
                 .args(["--config-env", "CONSOLE_POLICY", "--"])
                 .arg(cargo_bin("mcp-console-sandbox-fixture")?)
-                .arg("probe-write")
+                .arg(if allowed { "write" } else { "probe-write" })
                 .arg(target)
                 .output()?;
             assert_eq!(
@@ -354,18 +382,13 @@ fn workspace_profile_allows_directory_and_descendant_write_overrides() -> anyhow
                 ),
                 (
                     Some(0),
-                    if allowed {
-                        "write allowed\n"
-                    } else {
-                        "write denied\n"
-                    }
-                    .to_owned(),
+                    if allowed { "" } else { "write denied\n" }.to_owned(),
                     vec![]
                 )
             );
             assert_eq!(
                 std::fs::read_to_string(target)?,
-                if allowed { "escaped" } else { "readable" }
+                if allowed { "written" } else { "readable" }
             );
         }
     }

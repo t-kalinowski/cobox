@@ -133,6 +133,22 @@ pub(super) fn build_request(
         return Err(PolicyError::RelativeCommandCwd);
     }
     let policy = materialize_temporary_paths(permissions.file_system_sandbox_policy(), &env)?;
+    // The permission matcher and native API must see the same path spelling,
+    // including when a read-only child of a writable directory is absent.
+    #[cfg(windows)]
+    let (policy, expanded_cwd) = {
+        let mut policy = policy;
+        for entry in &mut policy.entries {
+            if let FileSystemPath::Path { path } = &mut entry.path {
+                let native =
+                    crate::windows::expand_short_names(path.to_abs_path()?.into_path_buf())?;
+                *path = PathUri::from_host_native_path(native)?;
+            }
+        }
+        (policy, crate::windows::expand_short_names(cwd.to_owned())?)
+    };
+    #[cfg(windows)]
+    let cwd = &expanded_cwd;
     let full_disk_write = policy.has_full_disk_write_access();
     let volumes = volume_roots
         .iter()
@@ -422,7 +438,11 @@ fn expand_volume_roots(
 fn collect_paths(paths: impl IntoIterator<Item = PathBuf>) -> Result<NativePaths, PolicyError> {
     paths
         .into_iter()
-        .map(|path| Ok((PathUri::from_host_native_path(&path)?, path)))
+        .map(|path| {
+            #[cfg(windows)]
+            let path = crate::windows::expand_short_names(path)?;
+            Ok((PathUri::from_host_native_path(&path)?, path))
+        })
         .collect()
 }
 

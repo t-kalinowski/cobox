@@ -31,6 +31,51 @@ fn console(policy: Value) -> Result<Command> {
 }
 
 #[test]
+fn short_directory_name_grants_the_same_write_as_its_long_name() -> Result<()> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::PathBuf;
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let directory = tempfile::tempdir()?;
+    let writable = directory.path().join("directory with a long name");
+    std::fs::create_dir(&writable)?;
+    let long = writable
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let mut short = vec![0; 32768];
+    let length = unsafe { GetShortPathNameW(long.as_ptr(), short.as_mut_ptr(), short.len() as u32) }
+        as usize;
+    anyhow::ensure!(
+        length != 0 && length < short.len(),
+        "query short directory name: {}",
+        std::io::Error::last_os_error()
+    );
+    let short = PathBuf::from(OsString::from_wide(&short[..length]));
+    if short.file_name() == writable.file_name() {
+        eprintln!("SKIP: filesystem does not assign 8.3 directory names");
+        return Ok(());
+    }
+    let policy = json!({"filesystem":{"kind":"restricted","entries":[
+        {"path":{"type":"special","value":{"kind":"root"}},"access":"read"},
+        {"path":{"type":"path","path":short},"access":"write"}
+    ]},"network":"restricted"});
+    let output = console(policy)?
+        .current_dir(&writable)
+        .arg("echo allowed>result.txt")
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(std::fs::read(writable.join("result.txt"))?, b"allowed\r\n");
+    Ok(())
+}
+
+#[test]
 fn writable_roots_cover_complete_subtrees_across_launches() -> Result<()> {
     if !mxc_support::available()? {
         return Ok(());

@@ -23,7 +23,8 @@ jobs:
   windows:
     name: Windows contracts (MXC ${{ inputs.windows_mxc_runner != '' && 'required' || 'optional' }})
     runs-on: ${{ inputs.windows_mxc_runner != '' && fromJSON(inputs.windows_mxc_runner) || 'windows-2025' }}
-    timeout-minutes: 45
+    # Required hosts build the full Cargo suite and a separate native Bazel graph.
+    timeout-minutes: 120
     env:
       MCP_CONSOLE_SANDBOX_REQUIRE_MXC: ${{ inputs.windows_mxc_runner != '' && '1' || '0' }}
     defaults:
@@ -59,25 +60,29 @@ jobs:
         run: cargo build --locked --release -p mcp-console-sandbox --bin mcp-console-sandbox
       - name: Exercise release artifacts
         run: just test --locked --release -p mcp-console-sandbox --retries 0 --success-output final
+      - name: Lint native executable
+        run: cargo clippy --locked -p mcp-console-sandbox --all-targets -- -D warnings
       - uses: ./.github/actions/setup-bazel-ci
         if: inputs.windows_mxc_runner != ''
         with:
           target: ${{ runner.os }}
+      - uses: ./.github/actions/setup-msvc-env
+        if: inputs.windows_mxc_runner != ''
+        with:
+          target: ${{ runner.arch == 'ARM64' && 'aarch64-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
       - name: Run required Windows Bazel contracts
         if: inputs.windows_mxc_runner != ''
         run: |
           bazel test --test_output=all `
             --config=ci-windows-msvc `
             --host_platform=//:local_windows_msvc `
-            --platforms=//:windows_x86_64_msvc `
+            --platforms=//:local_windows_msvc `
             --extra_execution_platforms=//:local_windows_msvc `
             //codex-rs/mcp-console-sandbox:windows-cli-test `
             //codex-rs/mcp-console-sandbox:windows-console-test `
             //codex-rs/mcp-console-sandbox:windows-lifecycle-test `
             //codex-rs/mcp-console-sandbox:windows-mxc-test `
             //codex-rs/mcp-console-sandbox:windows-mxc-native-test
-      - name: Lint native executable
-        run: cargo clippy --locked -p mcp-console-sandbox --all-targets -- -D warnings
 
   linux-release:
     name: Linux release (${{ matrix.target }})
@@ -147,7 +152,8 @@ jobs:
     name: macOS contracts
     # Hosted ARM jobs have repeatedly expired before acquiring a runner.
     runs-on: macos-15-intel
-    timeout-minutes: 45
+    # The cold Bazel bootstrap alone takes about 20 minutes on the Intel runner.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: codex-rs
@@ -176,7 +182,7 @@ jobs:
       - name: Test Bazel executable and argument comments
         run: |
           bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test
-          just argument-comment-lint -p mcp-console-sandbox
+          bazel build --config=argument-comment-lint //codex-rs/mcp-console-sandbox:all
       - name: Build standalone release executable
         run: cargo build --locked -p mcp-console-sandbox --bin mcp-console-sandbox --release
       - name: Run all contracts against release executable
@@ -249,7 +255,7 @@ jobs:
       - name: Test Bazel executable and argument comments
         run: |
           bazel test //codex-rs/mcp-console-sandbox:bootstrap-contract-test
-          just argument-comment-lint -p mcp-console-sandbox
+          bazel build --config=argument-comment-lint //codex-rs/mcp-console-sandbox:all
       - name: Build standalone release executable and bubblewrap
         run: |
           cargo build --locked --release \
