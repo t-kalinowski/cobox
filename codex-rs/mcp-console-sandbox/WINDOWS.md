@@ -32,6 +32,8 @@ Every launch requires MXC support for its requested filesystem policy. Capabilit
 
 Filesystem access uses native MXC permissions. The policy expands generated DOS short names in filesystem grants so the same directory can be named through its 8.3 or long spelling. Read-deny entries require native deny-path support. Working directories resolve through directory handles, including Windows 8.3 aliases, without requiring parent enumeration.
 
+When a writable directory contains a read-only path, the runner grants read access if the entry exists. If the entry is absent at setup, the runner denies that name for the duration of the launch. A later launch evaluates the path again. This follows the native missing-path semantics described in [PROTOCOL.md](PROTOCOL.md) and leaves the workspace untouched.
+
 Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional. Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight. The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
 
 Proxy destination lookups use Windows system DNS. Downloads require no administrator approval, AppContainer profile provisioning, or custom firewall rules; the proxy does not open a separate DNS transport. Destination and resolved-address checks remain in the existing proxy connector.
