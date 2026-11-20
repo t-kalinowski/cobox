@@ -59,8 +59,15 @@ fn spawn_and_wait(arguments: Vec<String>, descriptor: OwnedFd) -> io::Result<i32
     for name in setup.excluded_environment {
         command.env_remove(name);
     }
+    let installation = codex_linux_sandbox::missing_paths::prepare()?;
     unsafe {
-        command.pre_exec(move || setup.signals.restore());
+        command.pre_exec(move || {
+            setup.signals.restore()?;
+            if let Some(installation) = &installation {
+                installation.install()?;
+            }
+            Ok(())
+        });
     }
     // The control loop reaps this child and all other namespace children.
     let child = command.spawn()?;

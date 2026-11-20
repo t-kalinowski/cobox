@@ -16,7 +16,7 @@ Bubblewrap needs mounted procfs, permission for the selected helper's namespace 
 | Stopped namespace init without pidfd signalling                     | Retirement can exceed its deadline                                                                      |
 | Required namespace or enforcement operations unavailable            | Launch fails                                                                                            |
 
-The executable prerequisite tests restrict actual runner/helper syscalls and inject missing wait status or a stopped namespace init. Independent observers in lifetime tests can require pidfds, child lists, and `NSpid` even though production supervision does not.
+The executable prerequisite tests restrict actual runner/helper syscalls and inject missing wait status or a stopped namespace init. Independent observers in lifetime tests can require pidfds, child lists, and `NSpid` even though production supervision does not. Filesystem regressions also use nested disposable user and mount namespaces to construct bind aliases, foreign-owned fixtures, and fresh device filesystems.
 
 This command probes namespace permissions:
 
@@ -25,6 +25,18 @@ unshare --user --map-root-user --mount --net --pid --fork true
 ```
 
 Ubuntu AppArmor can block setup even with `kernel.unprivileged_userns_clone=1` and nonzero `user.max_user_namespaces`. Errors such as `setting up uid map: Permission denied` or `loopback: Failed RTM_NEWADDR: Operation not permitted` can reflect that restriction. Linux CI enables namespaces and removes this restriction on its runner; containers also need permission for native namespace operations.
+
+## Missing read-only paths
+
+An absent read-only entry beneath a writable root is protected without creating a host file or directory. This includes missing workspace metadata. The first missing component stays absent inside and outside the sandbox; attempts to create or replace it fail. Existing read-only entries and deny rules retain their native mounts. Missing deny rules can still require host mount targets.
+
+The namespace init owns a seccomp notification broker for policies containing these absent entries. It copies syscall arguments, pins filesystem references, checks the protected names, and performs permitted mutations. It does not inspect a mutable pathname and then allow the workload to execute that syscall. Normal reads, writes through authorized descriptors, file locking, and Git discovery retain native filesystem behavior. Killing the broker retires the workload, and absent read-only entries require no cleanup after termination.
+
+This enforcement requires namespace-local procfs, `openat2`, seccomp notifications with atomic descriptor injection, and permission to inspect the target's procfs entries. Descriptor operations such as `ftruncate` also require `pidfd_getfd`. Missing-path protection is unavailable on kernel-managed devpts entries, where opening a terminal can create a node without a pathname operation. Unsupported enforcement fails without launching an unrestricted workload. Inherited host procfs remains supported only when the policy needs no missing-path broker.
+
+The policy captures absence before target execution. If the host creates a protected entry during execution, the next brokered filesystem mutation stops the sandbox with a restart diagnostic. This prevents a newly introduced symlink from redirecting access outside the protected name. This also applies to an initially absent native cleanup registry: another sandbox that needs mount cleanup and shares the temporary directory can create that registry and require the earlier sandbox to restart. Existing registries retain native read-only masks. Moving or removing a protected entry's ancestor from inside the sandbox is denied. Host-supplied writable descriptors and host changes after an operation has acquired its references remain part of the trusted caller boundary; the broker does not revoke existing file authority.
+
+Some operations are deliberately unsupported while this broker is active: mutations through procfs, sysfs, or magic-link paths such as `/dev/fd`; `openat2` resolve flags and read-only `openat2` access through those special paths; symlink extended attributes; and ioctls outside the supported terminal and descriptor requests. Pathname and abstract Unix sockets and ordinary IP binding retain the selected network policy. Pathname sockets keep their original address and host filesystem identity; sandbox directory-entry mutations are serialized with their binding. Namespace changes, later seccomp or Landlock installation, BPF operations, alternate syscall ABIs, and unreviewed new kernel syscall numbers are denied. The workload cannot inspect the broker memory or import its descriptors. These restrictions apply only to policies containing missing read-only entries.
 
 ## Procfs review
 

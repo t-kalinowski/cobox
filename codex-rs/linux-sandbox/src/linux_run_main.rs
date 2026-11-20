@@ -148,6 +148,10 @@ pub struct LinuxSandboxCommand {
     #[arg(long = "verify-fd-mount", hide = true)]
     pub verify_fd_mounts: Vec<String>,
 
+    /// Absent read-only paths enforced by the namespace's syscall mediator.
+    #[arg(long = "missing-read-only-path", hide = true)]
+    pub missing_read_only_paths: Vec<PathBuf>,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -187,6 +191,7 @@ pub(crate) fn run_main_with_target_setup(
         managed_network,
         proxy_route_spec,
         verify_fd_mounts,
+        missing_read_only_paths,
         stdin_fd,
         target_setup_fd,
         no_proc,
@@ -219,6 +224,9 @@ pub(crate) fn run_main_with_target_setup(
     }
     if !apply_seccomp_then_exec && !verify_fd_mounts.is_empty() {
         panic!("--verify-fd-mount is only supported in the inner sandbox stage");
+    }
+    if !apply_seccomp_then_exec && !missing_read_only_paths.is_empty() {
+        panic!("--missing-read-only-path is only supported in the inner sandbox stage");
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectivePermissions {
@@ -278,11 +286,14 @@ pub(crate) fn run_main_with_target_setup(
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
 
+        crate::missing_paths::set_policy_paths(missing_read_only_paths);
         if let Some(fd) = target_setup_fd {
             let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
             setup.unwrap_or_else(|| panic!("missing native hook"))(command, descriptor);
         }
 
+        let installation = crate::missing_paths::prepare()
+            .unwrap_or_else(|err| panic!("failed to prepare missing-path enforcement: {err}"));
         let signal_mask = ForwardedSignalMask::block();
         let command_pid = unsafe { libc::fork() };
         if command_pid < 0 {
@@ -293,8 +304,14 @@ pub(crate) fn run_main_with_target_setup(
         if command_pid == 0 {
             reset_forwarded_signal_handlers_to_default();
             signal_mask.restore();
+            if let Some(installation) = &installation {
+                installation.install().unwrap_or_else(|err| {
+                    panic!("failed to enforce missing read-only paths: {err}")
+                });
+            }
             exec_or_panic(command);
         }
+        drop(installation);
 
         // Only the command owns its input after fork. Retaining a reader here
         // would hide command-side stdin closure from the caller's writer.
@@ -522,19 +539,49 @@ fn build_bwrap_argv(
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
-    let bwrap_args = create_bwrap_command_args(
+    let mut bwrap_args = create_bwrap_command_args(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
         command_cwd,
         options,
     )?;
+    if !bwrap_args.missing_read_only_paths.is_empty() {
+        let command_index = bwrap_args
+            .args
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap_or_else(|| panic!("bubblewrap command separator"))
+            + 1;
+        let option_index = bwrap_args.args[command_index..]
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap_or_else(|| panic!("inner sandbox command separator"))
+            + command_index;
+        let mut arguments = Vec::with_capacity(2 * bwrap_args.missing_read_only_paths.len());
+        for path in &bwrap_args.missing_read_only_paths {
+            arguments.push("--missing-read-only-path".to_string());
+            arguments.push(
+                path.to_str()
+                    .ok_or_else(|| {
+                        codex_protocol::error::CodexErr::Fatal(
+                            "missing read-only path must be valid UTF-8".to_string(),
+                        )
+                    })?
+                    .to_string(),
+            );
+        }
+        bwrap_args
+            .args
+            .splice(option_index..option_index, arguments);
+    }
 
     let mut argv = vec!["bwrap".to_string()];
     argv.extend(bwrap_args.args);
     Ok(crate::bwrap::BwrapArgs {
         args: argv,
         preserved_files: bwrap_args.preserved_files,
+        missing_read_only_paths: bwrap_args.missing_read_only_paths,
         synthetic_mount_targets: bwrap_args.synthetic_mount_targets,
         protected_create_targets: bwrap_args.protected_create_targets,
     })
@@ -636,6 +683,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let crate::bwrap::BwrapArgs {
         args,
         preserved_files,
+        missing_read_only_paths: _,
         synthetic_mount_targets,
         protected_create_targets,
     } = bwrap_args;
@@ -1014,6 +1062,9 @@ fn wait_for_bwrap_child(pid: libc::pid_t) -> libc::c_int {
 fn register_synthetic_mount_targets(
     targets: &[crate::bwrap::SyntheticMountTarget],
 ) -> Vec<SyntheticMountTargetRegistration> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
     with_synthetic_mount_registry_lock(|| {
         targets
             .iter()
@@ -1063,6 +1114,9 @@ fn register_synthetic_mount_targets(
 fn register_protected_create_targets(
     targets: &[crate::bwrap::ProtectedCreateTarget],
 ) -> Vec<ProtectedCreateTargetRegistration> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
     with_synthetic_mount_registry_lock(|| {
         targets
             .iter()
@@ -1163,6 +1217,9 @@ fn synthetic_mount_marker_dir_has_active_process_matching(
 }
 
 fn cleanup_synthetic_mount_targets(targets: &[SyntheticMountTargetRegistration]) {
+    if targets.is_empty() {
+        return;
+    }
     with_synthetic_mount_registry_lock(|| {
         for target in targets.iter().rev() {
             match fs::remove_file(&target.marker_file) {
@@ -1194,6 +1251,9 @@ fn cleanup_synthetic_mount_targets(targets: &[SyntheticMountTargetRegistration])
 }
 
 fn cleanup_protected_create_targets(targets: &[ProtectedCreateTargetRegistration]) -> bool {
+    if targets.is_empty() {
+        return false;
+    }
     with_synthetic_mount_registry_lock(|| {
         for target in targets.iter().rev() {
             match fs::remove_file(&target.marker_file) {
@@ -1483,6 +1543,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
     let crate::bwrap::BwrapArgs {
         args,
         preserved_files,
+        missing_read_only_paths: _,
         synthetic_mount_targets,
         protected_create_targets,
     } = bwrap_args;
