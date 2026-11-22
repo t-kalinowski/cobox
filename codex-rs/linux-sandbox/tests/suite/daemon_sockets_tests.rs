@@ -310,11 +310,26 @@ if sys.argv[6] == 'host-proc' and not os.path.isdir('/run/WSL'):
         else:
             raise AssertionError('host process link accessible: ' + name)
 "#;
-    let profile = PermissionProfile::workspace_write_with(
-        &[AbsolutePathBuf::from_absolute_path("/tmp").unwrap()],
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(workspace.path())
+                    .unwrap()
+                    .into(),
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path("/tmp").unwrap().into(),
+                FileSystemAccessMode::Write,
+            ),
+        ]),
         NetworkSandboxPolicy::Enabled,
-        /*exclude_tmpdir_env_var*/ true,
-        /*exclude_slash_tmp*/ false,
     );
     let mut env = create_env_from_core_vars();
     env.insert(

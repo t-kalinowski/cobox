@@ -96,10 +96,9 @@ fn replaceable_foreign_parent_cannot_remove_metadata_protection() {
         "-c",
         r#"
 set -eu
-mv foreign previous
-mkdir -p foreign/.git
-printf compromised > foreign/.git/config
-printf 'metadata write escaped\n'
+if mv foreign previous 2>/dev/null; then echo 'protected ancestor moved'; exit 1; fi
+if mkdir foreign/.git 2>/dev/null; then echo 'metadata created'; exit 1; fi
+printf 'metadata protected\n'
 "#,
     ]);
     request["cwd"] = json!(workspace.path());
@@ -116,21 +115,14 @@ printf 'metadata write escaped\n'
     command
         .arg("--bounding-set=-dac_override,-dac_read_search,-chown,-fowner")
         .arg(staged_runner.get_program())
-        // Use the staged bubblewrap so the startup diagnostic is deterministic.
+        // Exercise the ordinary bundled helper with the reduced capabilities.
         .env("PATH", staging.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let output = run_command(command, frame(&request), &[]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(output.stdout, b"");
-    assert_eq!(
-        output.stderr,
-        format!(
-            "bwrap: Can't mkdir {}: Permission denied\n",
-            protected.display()
-        )
-        .as_bytes()
-    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"metadata protected\n");
+    assert_eq!(output.stderr, b"");
     assert!(!workspace.path().join("previous").exists());
     assert!(!protected.exists());
 }

@@ -40,7 +40,7 @@ impl Process {
         Self { pid, exit }
     }
 
-    fn kill(&self) {
+    pub(super) fn kill(&self) {
         #[cfg(target_os = "linux")]
         unsafe {
             libc::syscall(
@@ -54,6 +54,42 @@ impl Process {
         #[cfg(target_os = "macos")]
         unsafe {
             libc::kill(self.pid, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn stop(&self) {
+        assert_eq!(
+            unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    self.exit.as_raw_fd(),
+                    libc::SIGSTOP,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            },
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let stopped = std::fs::read_dir(format!("/proc/{}/task", self.pid))
+                .unwrap()
+                .all(|task| {
+                    std::fs::read_to_string(task.unwrap().path().join("status"))
+                        .unwrap()
+                        .lines()
+                        .any(|line| line.starts_with("State:\tT"))
+                });
+            if stopped {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "process {} did not stop",
+                self.pid
+            );
+            std::thread::yield_now();
         }
     }
 }
