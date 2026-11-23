@@ -34,6 +34,8 @@ pub use bundled_bwrap::find_bundled_bwrap_for_exe;
 pub use bwrap::GLOB_SCAN_PROGRAM;
 #[cfg(target_os = "linux")]
 pub use bwrap::expand_unreadable_globs_in_environment;
+#[cfg(target_os = "linux")]
+pub use seccomp::deny_local_binding_on_current_thread;
 
 /// Exit status returned when bundled bubblewrap fails digest verification.
 #[cfg(target_os = "linux")]

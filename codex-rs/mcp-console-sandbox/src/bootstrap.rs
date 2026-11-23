@@ -48,6 +48,8 @@ pub struct Bootstrap {
     pub workspace: Option<AbsolutePathBuf>,
     pub workspace_options: Option<crate::profiles::WorkspaceOptions>,
     pub proxy: Option<RemoteNetworkProxyConfig>,
+    #[serde(default)]
+    pub limits: crate::limits::Limits,
     pub macos_seatbelt_profile_extension: Option<String>,
     #[serde(default)]
     pub lifecycle: Lifecycle,
@@ -65,6 +67,8 @@ struct EnvironmentConfiguration {
     workspace: Option<AbsolutePathBuf>,
     workspace_options: Option<crate::profiles::WorkspaceOptions>,
     proxy: Option<RemoteNetworkProxyConfig>,
+    #[serde(default)]
+    limits: crate::limits::Limits,
     macos_seatbelt_profile_extension: Option<String>,
     #[serde(default)]
     lifecycle: Lifecycle,
@@ -181,6 +185,7 @@ pub fn take_input() -> Result<Input> {
             workspace: config.workspace,
             workspace_options: config.workspace_options,
             proxy: config.proxy,
+            limits: config.limits,
             macos_seatbelt_profile_extension: config.macos_seatbelt_profile_extension,
             lifecycle: config.lifecycle,
             linux_backend: config.linux_backend,
@@ -265,6 +270,7 @@ fn parse_json<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<T> {
 
 fn validate(request: &mut Bootstrap) -> Result<()> {
     request.lifecycle.validate()?;
+    request.limits.validate()?;
     ensure!(
         cfg!(target_os = "linux") || request.linux_backend.is_none(),
         "linux_backend is supported only on Linux"

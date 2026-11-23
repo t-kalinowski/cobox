@@ -300,6 +300,7 @@ async fn sandbox_request_preserves_prepared_managed_network_policy() {
         .into_owned();
     params.managed_network = Some(ManagedNetworkSandboxContext {
         loopback_ports: vec![43123],
+        proxy_only_endpoints: None,
         allow_local_binding: false,
         allow_unix_sockets: vec![allowed_socket.clone()],
         dangerously_allow_all_unix_sockets: false,

@@ -1,3 +1,10 @@
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[path = "fixtures/filesystem_limits.rs"]
+mod filesystem_limits;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "fixtures/local_binding_limits.rs"]
+mod local_binding_limits;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
@@ -35,6 +42,17 @@ fn main() -> anyhow::Result<()> {
     }
     let operation = args.next().context("fixture operation")?;
     match operation.as_str() {
+        "probe-limits" => filesystem_limits::run(args)?,
+        "probe-local-binding-limit" => local_binding_limits::run(args)?,
+        "probe-denied-connect" => {
+            let address = args.next().context("denied address")?.parse()?;
+            println!("started");
+            anyhow::ensure!(
+                TcpStream::connect_timeout(&address, std::time::Duration::from_secs(3)).is_err(),
+                "direct connection bypassed the network policy"
+            );
+            println!("denied");
+        }
         "probe-write" => match std::fs::write(args.next().context("probe path")?, b"escaped") {
             Ok(()) => println!("write allowed"),
             Err(error)
@@ -258,6 +276,36 @@ fn main() -> anyhow::Result<()> {
         }
         "connect" => {
             TcpStream::connect(args.next().context("address")?)?;
+        }
+        #[cfg(target_os = "macos")]
+        "proxy-listener-transport" => {
+            use std::net::Ipv4Addr;
+            use std::net::Ipv6Addr;
+            use std::net::SocketAddr;
+            use std::net::TcpListener;
+            use std::net::UdpSocket;
+
+            let endpoint: SocketAddr = std::env::var("HTTP_PROXY")?
+                .trim_start_matches("http://")
+                .parse()?;
+            let other_family = if endpoint.is_ipv4() {
+                SocketAddr::from((Ipv6Addr::LOCALHOST, endpoint.port()))
+            } else {
+                SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port()))
+            };
+            TcpListener::bind((endpoint.ip(), 0)).context("permitted local listener")?;
+            let datagram = UdpSocket::bind((endpoint.ip(), 0))?;
+            for result in [
+                datagram.connect(endpoint),
+                TcpStream::connect_timeout(&other_family, std::time::Duration::from_secs(1))
+                    .map(drop),
+            ] {
+                anyhow::ensure!(
+                    matches!(result, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+                    "proxy network policy must select its TCP listener's address family"
+                );
+            }
+            println!("bound\nproxy TCP endpoint only");
         }
         "proxy-get" => {
             let url = args.next().context("URL")?;

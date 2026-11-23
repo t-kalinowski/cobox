@@ -488,6 +488,10 @@ pub struct ManagedNetworkSandboxContext {
     /// Loopback proxy ports that sandboxed commands may connect to.
     #[serde(default)]
     pub loopback_ports: Vec<u16>,
+    /// Exact TCP listeners the native sandbox may allow for a proxy with
+    /// mandatory destination limits, including the listener's address family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_only_endpoints: Option<Vec<SocketAddr>>,
     /// Whether the command may bind local sockets and exchange loopback traffic.
     #[serde(default)]
     pub allow_local_binding: bool,
@@ -937,6 +941,7 @@ impl NetworkProxy {
         &self,
         local_binding_policy: crate::LocalBindingPolicy,
     ) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
+        self.state.ensure_remote_export_supported()?;
         let (mut config, brokerage_created_default_allowlist, _) =
             self.state.current_cfg_with_brokerage_provenance().await?;
         // Proxy enablement and credential brokerage remain controller-owned.
@@ -1149,6 +1154,13 @@ impl NetworkProxy {
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
+        let proxy_only = self.state.has_mandatory_domain_limits();
+        if proxy_only {
+            // Local servers may still bind, but clients must bring even local
+            // destinations through the proxy for the launcher's domain check.
+            set_env_keys(&mut env, NO_PROXY_ENV_KEYS, "");
+            env.remove("YARN_NO_PROXY");
+        }
         let credential_environment_id = environment_id.or_else(|| {
             self.execution_scope
                 .as_ref()
@@ -1167,15 +1179,16 @@ impl NetworkProxy {
         let expose_socks_port = self.socks_enabled;
         #[cfg(target_os = "windows")]
         let expose_socks_port = expose_socks_port || shared_socks_addr.is_some();
-        let mut loopback_ports = [
+        let listeners = [
             Some(addrs.http_addr),
             expose_socks_port.then_some(addrs.socks_addr),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|addr| addr.ip().is_loopback())
-        .map(|addr| addr.port())
-        .collect::<Vec<_>>();
+        ];
+        let mut loopback_ports = listeners
+            .into_iter()
+            .flatten()
+            .filter(|addr| addr.ip().is_loopback())
+            .map(|addr| addr.port())
+            .collect::<Vec<_>>();
         loopback_ports.sort_unstable();
         loopback_ports.dedup();
         #[cfg(target_os = "windows")]
@@ -1195,6 +1208,7 @@ impl NetworkProxy {
             env,
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
+                proxy_only_endpoints: proxy_only.then(|| listeners.into_iter().flatten().collect()),
                 allow_local_binding: runtime_settings.allow_local_binding,
                 allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
                 dangerously_allow_all_unix_sockets: runtime_settings
@@ -1565,10 +1579,11 @@ impl NetworkProxy {
             new_state.config.enable_socks5_udp == current_cfg.enable_socks5_udp,
             "cannot update network.enable_socks5_udp on a running proxy"
         );
-        let config = self
+        let mut config = self
             .state
             .local_binding_policy
             .resolved_config(&new_state.config);
+        self.state.apply_launch_limits(&mut config);
         let settings = NetworkProxyRuntimeSettings::from_config(&config)?;
         self.state.replace_config_state(new_state).await?;
         let mut guard = self
@@ -2274,6 +2289,7 @@ mod tests {
                 prepared.sandbox_context,
                 ManagedNetworkSandboxContext {
                     loopback_ports: vec![43128, 48081],
+                    proxy_only_endpoints: None,
                     allow_local_binding: true,
                     allow_unix_sockets: if cfg!(target_os = "windows") {
                         Vec::new()

@@ -22,6 +22,8 @@ pub struct TargetSetup {
     pub environment: HashMap<String, String>,
     pub proxy_environment: Vec<String>,
     pub excluded_environment: Vec<String>,
+    #[cfg(target_os = "linux")]
+    pub deny_local_binding: bool,
     pub command: Vec<String>,
     pub seatbelt: Option<Seatbelt>,
 }

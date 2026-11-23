@@ -45,6 +45,81 @@ Neither caller transport accepts later control messages or emits acknowledgments
 
 ## Complete JSON reference
 
+### Immutable limits
+
+Both transports accept an optional `limits` object. It only removes access from
+the ordinary policy; it never grants access. An absent object or `{}` leaves the
+existing behavior unchanged. The launcher supplies these limits as trusted input;
+the runner does not discover admin files or authenticate the caller.
+
+Example configuration fragment:
+
+```jsonc
+{
+  "limits": {
+    "filesystem": {"deny": ["/home/user/client-data", "/home/user/.ssh"]},
+    "network": {
+      "domains": {"allow": ["*.posit.co"], "deny": ["pastebin.com"]},
+      "allow_local_binding": false
+    }
+  }
+}
+```
+
+Filesystem entries must be absolute native literal paths. Relative paths, `~`,
+wildcard syntax, and unknown fields are rejected. Console owns path expansion.
+The runner resolves existing aliases, including symlinks with missing path tails,
+and applies the denies after profiles and private-storage grants. Narrower
+read/write entries are removed. Broad grants remain usable outside denied trees;
+an unrestricted filesystem becomes a root-write policy with denied holes.
+Logical and resolved denied names are retained, and denies are projected through
+retained grant aliases so a later bind cannot reopen a masked physical subtree.
+Native writable-symlink restrictions still fail closed when such a mask cannot be
+installed safely. Redundant nested denies are
+collapsed to avoid Linux nested-mask setup failures. A required private-storage
+tree overlapping a deny is a setup error, with no fallback or target launch.
+
+Network allow lists intersect by matching each requested hostname against both
+the ordinary list and the limit. This preserves ordinary wildcard semantics
+without trying to flatten arbitrary glob intersections. An absent limit allow
+list adds no cap; `allow: []` permits no destinations. Both deny lists always win.
+`allow_local_binding: false` removes local binding; `true` does not turn it on.
+A restricted network without a proxy stays restricted. Enabled networking with
+domain limits receives an enforced managed proxy; it cannot disable filtering.
+On Linux, a binding-only limit preserves ordinary outbound networking and denies
+`bind` and `listen` directly after native helper setup, including implicit binding
+through `listen`. It also denies the `io_uring` syscalls that could bypass those
+checks. Ordinary outbound connections may still receive an ephemeral local port.
+Existing proxy routing is retained when a binding limit is applied.
+On macOS, a binding-only limit preserves ordinary outbound networking. Final Seatbelt rules prohibit binding and accepting connections after any application extension. With domain limits, the target can connect only to the managed proxy's TCP listeners. Each rule selects the listener's IPv4 or IPv6 loopback address and port. Ordinary local binding can remain enabled independently of outbound routing.
+The immutable caps survive any ordinary proxy policy update. Domain limits
+disable upstream proxy hops, which otherwise have an exemption from ordinary
+destination checks; they do not silently trust an arbitrary relay endpoint.
+
+Unsupported combinations fail before the target starts. Active limits cannot
+use `external-sandbox`. Filesystem denies cannot be combined with readable
+`:minimal` grants, whose platform defaults are generated later. Domain limits reject
+host Unix-socket proxy grants.
+On Windows, selective domain limits are unsupported with enabled networking or
+a managed proxy. The native host-loopback grant permits other host listeners.
+An empty `domains.allow` list selects the native restricted network and starts
+no proxy. It closes public, private, and host-loopback connections.
+An immutable `allow_local_binding: false` is unsupported on Windows because MXC
+has no policy operation for prohibiting socket binding inside the sandbox.
+A disabled network can still carry dormant domain limits without enabling a proxy.
+These are enforcement limitations, not conflicting ordinary/admin entries.
+
+On macOS, final literal read/write denies and ancestor unlink protection follow
+all permitted filesystem extensions and private-storage additions. Native
+Linux/macOS/Windows alias and missing-path behavior otherwise remains as described
+below. Limits protect sandboxed access to these paths, not content already copied
+elsewhere or authority held by a separate unsandboxed process.
+
+The runner clamps overlapping permissions. It does not reject a launch merely
+because an ordinary grant exceeds a limit. Invalid input, unsupported enforcement,
+or native setup failures remain prelaunch errors. They retain the existing stderr
+and exit-status protocol; no reserved exit code or automatic policy retry is added.
+
 This section documents the production types in [bootstrap.rs](src/bootstrap.rs), [config.rs](src/config.rs), and their conversion in [profiles.rs](src/profiles.rs) and [codex.rs](src/codex.rs). Filesystem objects expose upstream `RawFileSystemSandboxPolicy`, `RawFileSystemSandboxEntry`, `RawFileSystemPath`, and `FileSystemSpecialPath`; network exposes `NetworkSandboxPolicy` from [permissions.rs](../protocol/src/permissions.rs). The runner converts filesystem input to `FileSystemSandboxPolicy` and then the canonical `PermissionProfile`. Proxy input is exactly upstream [`RemoteNetworkProxyConfig`](../network-proxy/src/remote_config.rs), with the permission maps from [network-proxy/config.rs](../network-proxy/src/config.rs). Transport, lifecycle, `linux_backend`, and the Seatbelt extension are runner-owned fields.
 
 The environment transport executes on Linux, macOS, and Windows; the descriptor transport is Unix-only. Other platforms return an unsupported-platform error. JSON field names and enum strings are case-sensitive. JSON integers must fit the stated Rust integer type; floating-point spellings such as `2.0` are not integers here. Required fields reject both omission and `null`. Optional defaults apply only as stated below: a type's Rust `Default` implementation does not make a JSON field optional.
@@ -63,6 +138,7 @@ The environment transport executes on Linux, macOS, and Windows; the descriptor 
 | `environment`                      | Object mapping strings to strings | Descriptor: required complete target environment. Environment mode: optional overrides, default `{}`. Neither accepts `null` | Names must be nonempty, NUL-free, and contain no `=`; values must be NUL-free. Both are UTF-8. Descriptor mode does not inherit ordinary launch variables. Environment mode merges overrides after optional inheritance. Private-storage exports and managed-proxy variables take precedence; transport variables are removed last.                  |
 | `inherit_environment`              | Boolean                           | Environment mode only, default `true`; no `null`; rejected in descriptor mode                                                | `false` starts the target environment empty before applying `environment`. Does not change the trusted environment used to launch the runner or its helpers.                                                                                                                                                                                         |
 | `proxy`                            | Object below                      | Optional; omission or `null` means no proxy                                                                                  | A supplied object must include all seven required fields below. Unix requires `enabled: true`; Windows treats `enabled: false` as no proxy. An enabled managed proxy takes precedence over ordinary direct network access.                                                                                                                           |
+| `limits`                           | Object above                      | Optional, default `{}`; `null` rejected                                                                                      | Immutable filesystem and network ceilings applied after ordinary policy resolution. Unknown nested fields are rejected. |
 | `lifecycle`                        | Object below                      | Optional, default `{}`; `null` rejected                                                                                      | Supervision, signals, caller-death observation, private storage and retirement deadline.                                                                                                                                                                                                                                                             |
 | `linux_backend`                    | String                            | Optional; omitted or `null` uses upstream's ordinary bubblewrap path when native execution is selected                       | Linux only. `"bubblewrap"` explicitly selects that same path. No aliases. Any non-null value is rejected on macOS and Windows.                                                                                                                                                                                                                       |
 | `macos_seatbelt_profile_extension` | String                            | Optional; omitted or `null` adds no SBPL                                                                                     | macOS only, and requires native enforcement. Appended trusted Seatbelt rules may grant permissions as well as deny them, including changing filesystem/network restrictions. Empty string is accepted. Invalid SBPL or embedded NUL fails before target execution. Non-null values are rejected on Linux and for external execution without a proxy. |
@@ -201,7 +277,7 @@ Crashes, SIGKILL, abrupt caller loss during startup, and malicious interference 
 
 ### Unknown and duplicate fields
 
-Top-level objects, `workspace_options`, `lifecycle`, and `private_tmp` reject unknown fields and duplicate recognized fields. Upstream filesystem policy/entry structs, path/special tagged objects, and `proxy` accept and ignore unknown fields. They reject duplicate recognized struct fields and duplicate discriminators; fields belonging to other union variants are unknown for the selected variant. There is no catch-all for unrecognized enum values except the explicit special-path `unknown` representation above.
+Top-level objects, `workspace_options`, `lifecycle`, `private_tmp`, and every `limits` object reject unknown fields and duplicate recognized fields. Upstream filesystem policy/entry structs, path/special tagged objects, and `proxy` accept and ignore unknown fields. They reject duplicate recognized struct fields and duplicate discriminators; fields belonging to other union variants are unknown for the selected variant. There is no catch-all for unrecognized enum values except the explicit special-path `unknown` representation above.
 
 The `environment`, `domains`, and `unixSockets` maps accept arbitrary string keys subject to their value/path validation. Repeated identical JSON map keys keep the last value, including in domain maps; this is separate from deny-over-allow precedence between distinct matching patterns. Do not use duplicate keys to combine permissions. Different spellings that normalize to the same host can both contribute patterns, with a matching deny taking precedence.
 
@@ -306,7 +382,7 @@ Native platform or target initialization may add environment values: some macOS 
 | `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `YARN_HTTP_PROXY`, `YARN_HTTPS_PROXY`, `npm_config_http_proxy`, `npm_config_https_proxy`, `npm_config_proxy`, `NPM_CONFIG_HTTP_PROXY`, `NPM_CONFIG_HTTPS_PROXY`, `NPM_CONFIG_PROXY` | Managed HTTP endpoint.                                                                                                           |
 | `BUNDLE_HTTP_PROXY`, `BUNDLE_HTTPS_PROXY`, `PIP_PROXY`, `DOCKER_HTTP_PROXY`, `DOCKER_HTTPS_PROXY`, `WS_PROXY`, `WSS_PROXY`, `ws_proxy`, `wss_proxy`                                                                                           | Managed HTTP endpoint.                                                                                                           |
 | `ALL_PROXY`, `all_proxy`, `FTP_PROXY`, `ftp_proxy`                                                                                                                                                                                            | Managed `socks5h` endpoint when SOCKS is enabled; otherwise HTTP.                                                                |
-| `NO_PROXY`, `no_proxy`, `npm_config_noproxy`, `NPM_CONFIG_NOPROXY`, `YARN_NO_PROXY`, `BUNDLE_NO_PROXY`                                                                                                                                        | Empty when local binding is disabled; otherwise `localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`.               |
+| `NO_PROXY`, `no_proxy`, `npm_config_noproxy`, `NPM_CONFIG_NOPROXY`, `BUNDLE_NO_PROXY`                                                                                                                                        | Empty with mandatory domain limits or disabled local binding. Otherwise `localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`.               |
 | `CODEX_NETWORK_PROXY_ACTIVE`, `CODEX_NETWORK_ALLOW_LOCAL_BINDING`                                                                                                                                                                             | `1` for proxy active; `1` or `0` for the supplied local-binding policy.                                                          |
 | `ELECTRON_GET_USE_PROXY`, `NODE_USE_ENV_PROXY`                                                                                                                                                                                                | `true` and `1`, respectively.                                                                                                    |
 | `GIT_SSH_COMMAND` on macOS with SOCKS enabled                                                                                                                                                                                                 | `CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x <SOCKS address> %h %p'`. An existing custom command is preserved. |

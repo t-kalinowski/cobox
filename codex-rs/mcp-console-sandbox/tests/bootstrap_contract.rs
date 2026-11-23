@@ -7,6 +7,8 @@ mod cancellation;
 mod configuration;
 #[path = "lifecycle/lifecycle_tests.rs"]
 mod lifecycle;
+#[path = "policy/limits_tests.rs"]
+mod limits;
 #[cfg(target_os = "linux")]
 #[path = "lifecycle/native_entry_tests.rs"]
 mod native_entry;

@@ -36,6 +36,14 @@ When a writable directory contains a read-only path, the runner grants read acce
 
 Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional. Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight. The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
 
+Immutable filesystem limits apply after workspace, temporary-directory and private-storage grants. Narrower grants cannot reopen a denied tree.
+
+Windows rejects selective domain limits on enabled or managed-proxy networks before launching the command. The native host-loopback grant needed by the proxy permits connections to unrelated host listeners. A restricted network without a proxy can carry dormant domain limits.
+
+An empty `domains.allow` list selects the native restricted network even when the caller enables networking or requests a managed proxy. The runner starts no proxy and closes public, private, and host-loopback connections.
+
+Windows rejects a mandatory `allow_local_binding: false` before starting the command. MXC controls inbound and outbound traffic. It has no policy operation for prohibiting socket binding inside the sandbox.
+
 Proxy destination lookups use Windows system DNS. Downloads require no administrator approval, AppContainer profile provisioning, or custom firewall rules; the proxy does not open a separate DNS transport. Destination and resolved-address checks remain in the existing proxy connector.
 
 ## Lifetime and storage

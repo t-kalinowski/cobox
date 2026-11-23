@@ -4,6 +4,19 @@ The patch extracts a standalone sandbox from `rust-v0.163.0`, commit `83086188ae
 
 Upstream supplies filesystem/network enforcement, managed proxy routing, Seatbelt, seccomp, and bubblewrap. The runner adds the [configuration boundary](PROTOCOL.md), target-environment isolation, trusted Seatbelt extensions, and [supervised lifetime](LIFECYCLE.md). Application policy belongs to MCP Console. Write entries cover complete subtrees; metadata exclusions must be explicit policy entries. The patch has no `codex-core` dependency or changes to protocol policy types, native policy files, or vendored bubblewrap.
 
+The optional immutable `limits` payload is applied in `limits.rs` after profile
+and runner-owned filesystem grants. It clamps access rather than rejecting
+ordinary overlaps. Linux's native target gate applies a final seccomp bind/listen
+restriction only for a mandatory false local-binding cap, after proxy helper
+setup. On macOS the runner appends network limits to the Seatbelt profile after application extensions. Domain limits use the proxy endpoints prepared for this launch. A binding-only limit preserves direct outbound networking.
+`network-proxy/src/limits.rs` retains independent immutable
+allow/deny matchers, and the remote-launch constructor accepts those caps without
+changing `RemoteNetworkProxyConfig`. Native platform combinations that cannot
+enforce a ceiling fail before launch; see [the protocol](PROTOCOL.md#immutable-limits).
+The added native contracts must run on Linux, macOS and an MXC-capable Windows
+host before publishing an updated consumer pin; Linux-only results do not establish the
+macOS or Windows enforcement contract.
+
 ## Native integration
 
 Paths below are relative to `codex-rs/`. Review the changed APIs and ordinary upstream callers together.

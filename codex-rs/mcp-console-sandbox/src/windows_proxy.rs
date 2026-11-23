@@ -37,19 +37,47 @@ pub(crate) fn validate(config: &RemoteNetworkProxyConfig) -> Result<()> {
                 .is_none_or(|sockets| sockets.entries.is_empty()),
         "Unix sockets are not supported on Windows"
     );
+    ensure!(
+        config.allow_local_binding,
+        "MXC cannot enforce allow_local_binding=false: native host-loopback access is bidirectional"
+    );
     Ok(())
 }
 
+pub(crate) fn validated_state(
+    config: RemoteNetworkProxyConfig,
+    limits: codex_network_proxy::NetworkProxyLimits,
+) -> Result<NetworkProxyState> {
+    validate(&config)?;
+    NetworkProxyState::from_remote_launch_config_with_limits(
+        RemoteNetworkProxyLaunchConfig::new(config),
+        codex_network_proxy::Platform::native(),
+        limits,
+    )
+}
+
+#[cfg(test)]
 pub(crate) async fn start(
     config: RemoteNetworkProxyConfig,
     job: &JobObject,
     environment: &mut HashMap<String, String>,
 ) -> Result<Prepared> {
-    validate(&config)?;
-    let mut state = NetworkProxyState::from_remote_launch_config(
-        RemoteNetworkProxyLaunchConfig::new(config),
-        codex_network_proxy::Platform::native(),
-    )?;
+    start_with_limits(
+        config,
+        codex_network_proxy::NetworkProxyLimits::default(),
+        job,
+        environment,
+    )
+    .await
+}
+
+pub(crate) async fn start_with_limits(
+    config: RemoteNetworkProxyConfig,
+    limits: codex_network_proxy::NetworkProxyLimits,
+    job: &JobObject,
+    environment: &mut HashMap<String, String>,
+) -> Result<Prepared> {
+    let mut state = validated_state(config, limits)?;
     let handle = unsafe { BorrowedHandle::borrow_raw(job.as_raw_handle()) };
     state.set_windows_client_job(handle.try_clone_to_owned()?);
     let proxy = NetworkProxy::builder()
