@@ -300,6 +300,66 @@ fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result
 }
 
 #[test]
+fn mandatory_domain_limits_route_enabled_network_through_dedicated_proxy() -> Result<()> {
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let origin = std::thread::spawn(move || -> Result<()> {
+        let (mut connection, _) = listener.accept()?;
+        connection.set_read_timeout(Some(std::time::Duration::from_secs(/*secs*/ 5)))?;
+        anyhow::ensure!(
+            connection.read(&mut [0; 4096])? > 0,
+            "expected HTTP request"
+        );
+        connection
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")?;
+        Ok(())
+    });
+    let policy = json!({
+        "extends": ":read-only", "network": "enabled",
+        "limits": {"network": {"domains": {"allow": ["127.0.0.1"]}}}
+    });
+    let output = console(policy.clone())?
+        .arg(format!("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy localhost --proxy %HTTP_PROXY% http://{address}/"))
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"OK");
+    origin.join().expect("origin thread")?;
+
+    let denied = console(policy.clone())?
+        .arg("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy localhost --proxy %HTTP_PROXY% http://denied.invalid/")
+        .output()?;
+    assert_eq!(denied.status.code(), Some(22), "{denied:?}");
+    assert!(String::from_utf8(denied.stderr)?.contains("403"));
+
+    let other = TcpListener::bind("127.0.0.1:0")?;
+    let other_address = other.local_addr()?.to_string();
+    for (configuration, expected) in [
+        (
+            json!({"extends":":read-only","network":"enabled"}),
+            "connected",
+        ),
+        (policy, "blocked"),
+    ] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env("CONSOLE_POLICY", configuration.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .args(["connect", &other_address])
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(String::from_utf8(output.stdout)?.trim(), expected);
+    }
+    Ok(())
+}
+
+#[test]
 fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> {
     let root = tempfile::tempdir()?;
     for (key, value, diagnostic) in [
