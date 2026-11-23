@@ -300,6 +300,37 @@ fn public_mxc_proxy_projects_environment_and_enforces_allow_and_deny() -> Result
 }
 
 #[test]
+fn empty_domain_allowlist_closes_host_egress() -> Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?.to_string();
+    let ordinary = json!({"extends":":read-only","network":"enabled"});
+    let mut capped = ordinary.clone();
+    capped["limits"] = json!({"network":{"domains":{"allow":[]}}});
+    let mut capped_proxy = capped.clone();
+    capped_proxy["proxy"] = proxy(
+        /*allow_local_binding*/ true, /*allow_destination*/ true,
+    );
+    for (config, expected) in [
+        (ordinary, "connected"),
+        (capped, "blocked"),
+        (capped_proxy, "blocked"),
+    ] {
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .env("CONSOLE_POLICY", config.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .args(["connect", &address])
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(String::from_utf8(output.stdout)?.trim(), expected);
+    }
+    Ok(())
+}
+
+#[test]
 fn unsupported_proxy_modes_fail_before_launch_or_state_creation() -> Result<()> {
     let root = tempfile::tempdir()?;
     for (key, value, diagnostic) in [
