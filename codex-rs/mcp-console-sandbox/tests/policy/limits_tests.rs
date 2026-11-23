@@ -85,18 +85,33 @@ fn mandatory_denies_cover_a_subtree_of_a_writable_alias() {
         ],
     );
     value["network"] = json!("enabled");
-    value["filesystem"]["entries"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"path":{"type":"path","path":alias},"access":"write"}));
     value["limits"] = json!({"filesystem":{"deny":[real.join("private")]}});
-    let output = run(frame(&value), &[]);
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"started\nclamped\n");
-    assert_eq!(
-        std::fs::read_to_string(real.join("public")).unwrap(),
-        "allowed"
-    );
+    for grant in [&real, &alias] {
+        let mut value = value.clone();
+        value["filesystem"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":{"type":"path","path":grant},"access":"write"}));
+        let output = run(frame(&value), &[]);
+        // Seatbelt rejects a writable root that contains a user-controlled
+        // symlink. Access through the alias under a physical grant is supported.
+        if cfg!(target_os = "macos") && grant == &alias {
+            assert_eq!(output.status.code(), Some(1));
+            assert!(output.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("symlinked writable roots are not supported"),
+                "{output:?}"
+            );
+        } else {
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(output.stdout, b"started\nclamped\n");
+            assert_eq!(
+                std::fs::read_to_string(real.join("public")).unwrap(),
+                "allowed"
+            );
+        }
+    }
 }
 
 #[test]
