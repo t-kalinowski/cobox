@@ -707,6 +707,12 @@ impl NetworkProxyState {
         Ok(())
     }
 
+    pub(crate) fn has_mandatory_domain_limits(&self) -> bool {
+        self.launch_limits
+            .as_ref()
+            .is_some_and(|limits| limits.has_domain_limits())
+    }
+
     fn local_binding_within_limits(&self) -> bool {
         self.launch_limits
             .as_ref()
@@ -1001,11 +1007,7 @@ impl NetworkProxyState {
     pub async fn allow_upstream_proxy(&self) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(guard.config.allow_upstream_proxy
-            && self
-                .launch_limits
-                .as_ref()
-                .is_none_or(|limits| !limits.has_domain_limits()))
+        Ok(guard.config.allow_upstream_proxy && !self.has_mandatory_domain_limits())
     }
 
     pub async fn allow_local_binding(&self) -> Result<bool> {

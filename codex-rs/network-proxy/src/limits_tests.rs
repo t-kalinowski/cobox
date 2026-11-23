@@ -56,6 +56,30 @@ async fn launch_limits_intersect_glob_matches_without_granting_access() -> Resul
 }
 
 #[tokio::test]
+async fn launch_limits_capture_the_dedicated_proxy_endpoints() -> Result<()> {
+    let state = limited_state(
+        &["*"],
+        &[],
+        NetworkProxyLimits {
+            allowed_domains: Some(vec!["*.example.com".to_string()]),
+            ..Default::default()
+        },
+    )?;
+    let proxy = NetworkProxy::builder()
+        .state(Arc::new(state))
+        .managed_proxy_routing(crate::ManagedProxyRouting::DedicatedListeners)
+        .build()
+        .await?;
+    let prepared =
+        proxy.prepare_for_optional_environment(Default::default(), /*environment_id*/ None)?;
+    assert_eq!(
+        prepared.sandbox_context.proxy_only_endpoints,
+        Some(vec![proxy.http_addr(), proxy.socks_addr()])
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn launch_limits_distinguish_omitted_and_empty_allowlists() -> Result<()> {
     let unrestricted = limited_state(&["*"], &[], NetworkProxyLimits::default())?;
     assert_eq!(

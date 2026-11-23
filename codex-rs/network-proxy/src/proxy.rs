@@ -488,6 +488,10 @@ pub struct ManagedNetworkSandboxContext {
     /// Loopback proxy ports that sandboxed commands may connect to.
     #[serde(default)]
     pub loopback_ports: Vec<u16>,
+    /// Exact TCP listeners the native sandbox may allow for a proxy with
+    /// mandatory destination limits, including the listener's address family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_only_endpoints: Option<Vec<SocketAddr>>,
     /// Whether the command may bind local sockets and exchange loopback traffic.
     #[serde(default)]
     pub allow_local_binding: bool,
@@ -1168,15 +1172,16 @@ impl NetworkProxy {
         let expose_socks_port = self.socks_enabled;
         #[cfg(target_os = "windows")]
         let expose_socks_port = expose_socks_port || shared_socks_addr.is_some();
-        let mut loopback_ports = [
+        let listeners = [
             Some(addrs.http_addr),
             expose_socks_port.then_some(addrs.socks_addr),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|addr| addr.ip().is_loopback())
-        .map(|addr| addr.port())
-        .collect::<Vec<_>>();
+        ];
+        let mut loopback_ports = listeners
+            .into_iter()
+            .flatten()
+            .filter(|addr| addr.ip().is_loopback())
+            .map(|addr| addr.port())
+            .collect::<Vec<_>>();
         loopback_ports.sort_unstable();
         loopback_ports.dedup();
         #[cfg(target_os = "windows")]
@@ -1196,6 +1201,10 @@ impl NetworkProxy {
             env,
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
+                proxy_only_endpoints: self
+                    .state
+                    .has_mandatory_domain_limits()
+                    .then(|| listeners.into_iter().flatten().collect()),
                 allow_local_binding: runtime_settings.allow_local_binding,
                 allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
                 dangerously_allow_all_unix_sockets: runtime_settings
