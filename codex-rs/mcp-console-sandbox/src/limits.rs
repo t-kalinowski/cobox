@@ -333,6 +333,7 @@ fn contains(parent: &AbsolutePathBuf, path: &AbsolutePathBuf) -> bool {
 #[cfg(windows)]
 fn contains(parent: &AbsolutePathBuf, path: &AbsolutePathBuf) -> bool {
     use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::TRUE;
     use windows_sys::Win32::Globalization::CSTR_EQUAL;
     use windows_sys::Win32::Globalization::CompareStringOrdinal;
 
@@ -347,7 +348,7 @@ fn contains(parent: &AbsolutePathBuf, path: &AbsolutePathBuf) -> bool {
                 parent.len() as i32,
                 path.as_ptr(),
                 parent.len() as i32,
-                1,
+                TRUE,
             )
         } == CSTR_EQUAL
         && (path.len() == parent.len()
@@ -364,7 +365,7 @@ fn overlaps(left: &AbsolutePathBuf, right: &AbsolutePathBuf) -> bool {
 }
 
 fn path_aliases(path: &AbsolutePathBuf) -> Result<Vec<AbsolutePathBuf>> {
-    let resolved = resolve_existing_prefix(path, 0)?;
+    let resolved = resolve_existing_prefix(path, /*links*/ 0)?;
     Ok(if &resolved == path {
         vec![path.clone()]
     } else {
