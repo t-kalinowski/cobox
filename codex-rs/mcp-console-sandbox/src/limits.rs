@@ -66,6 +66,31 @@ impl Limits {
         self.network.domains.allow.is_some() || !self.network.domains.deny.is_empty()
     }
 
+    #[cfg(windows)]
+    pub fn close_windows_egress_if_denied(
+        &self,
+        network: NetworkSandboxPolicy,
+        proxy: &mut Option<RemoteNetworkProxyConfig>,
+    ) -> Result<NetworkSandboxPolicy> {
+        if !self
+            .network
+            .domains
+            .allow
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+        {
+            return Ok(network);
+        }
+        if let Some(config) = proxy.take() {
+            // An empty ceiling removes the endpoint but still validates the
+            // caller's ordinary proxy configuration before running anything.
+            crate::windows_proxy::validated_state(config, self.network_proxy_limits())?;
+        }
+        // The existing restricted native policy closes host loopback and
+        // grants neither public nor private network capabilities.
+        Ok(NetworkSandboxPolicy::Restricted)
+    }
+
     #[cfg(target_os = "linux")]
     pub fn denies_local_binding(&self) -> bool {
         self.network.allow_local_binding == Some(false)

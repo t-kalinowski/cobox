@@ -60,6 +60,9 @@ pub(crate) fn run() -> Result<i32> {
         "cleanup_timeout_ms is not configurable on Windows"
     );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
+    let network = request
+        .limits
+        .close_windows_egress_if_denied(network, &mut request.proxy)?;
     request
         .limits
         .prepare_network(&filesystem, network, &mut request.proxy)?;
@@ -72,10 +75,6 @@ pub(crate) fn run() -> Result<i32> {
     );
     if let Some(proxy) = &request.proxy {
         crate::windows_proxy::validate(proxy)?;
-        ensure!(
-            proxy.allow_local_binding,
-            "MXC cannot enforce allow_local_binding=false: native host-loopback access is bidirectional"
-        );
     }
     ensure!(
         codex_sandboxing::windows_mxc_available(),

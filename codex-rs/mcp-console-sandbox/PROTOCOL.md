@@ -102,6 +102,8 @@ use `external-sandbox`. Filesystem denies cannot be combined with readable
 host Unix-socket proxy grants.
 On Windows, selective domain limits are unsupported with enabled networking or
 a managed proxy. The native host-loopback grant permits other host listeners.
+An empty `domains.allow` list selects the native restricted network and starts
+no proxy. It closes public, private, and host-loopback connections.
 An immutable `allow_local_binding: false` is unsupported on Windows because MXC
 has no policy operation for prohibiting socket binding inside the sandbox.
 A disabled network can still carry dormant domain limits without enabling a proxy.
