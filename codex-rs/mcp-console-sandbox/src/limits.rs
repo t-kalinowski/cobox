@@ -98,7 +98,7 @@ impl Limits {
         }
         ensure!(
             !cfg!(windows) || self.network.allow_local_binding != Some(false),
-            "limits.allow_local_binding=false is unsupported by the Windows MXC backend: bind prohibition is not verified"
+            "limits.allow_local_binding=false is unsupported by the Windows MXC backend: MXC controls traffic and cannot prohibit socket binding"
         );
         // Unix applies a binding-only limit in the native target policy.
         if proxy.is_none() && network.is_enabled() && self.has_domain_limits() {
@@ -127,10 +127,6 @@ impl Limits {
                             .as_ref()
                             .is_none_or(|sockets| sockets.entries.is_empty()),
                     "domain limits cannot be enforced with host Unix-socket proxy access"
-                );
-                ensure!(
-                    !cfg!(windows),
-                    "domain limits are unsupported by the Windows MXC backend: host-loopback access is bidirectional"
                 );
             }
         }

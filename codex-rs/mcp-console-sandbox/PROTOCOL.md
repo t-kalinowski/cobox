@@ -100,10 +100,10 @@ Unsupported combinations fail before the target starts. Active limits cannot
 use `external-sandbox`. Filesystem denies cannot be combined with readable
 `:minimal` grants, whose platform defaults are generated later. Domain limits reject
 host Unix-socket proxy grants.
-Windows MXC cannot currently enforce domain caps: its proxy requires bidirectional
-host-loopback access. An immutable `allow_local_binding: false` is unsupported on
-Windows even without a proxy: native traffic denial has not been verified to
-prohibit binding itself.
+On Windows, domain limits restrict native TCP egress to the dedicated proxy
+listener endpoints. Host-loopback ingress retains its ordinary policy.
+An immutable `allow_local_binding: false` is unsupported on Windows because MXC
+has no policy operation for prohibiting socket binding inside the sandbox.
 A disabled network can still carry dormant domain limits without enabling a proxy.
 These are enforcement limitations, not conflicting ordinary/admin entries.
 

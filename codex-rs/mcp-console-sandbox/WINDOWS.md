@@ -36,15 +36,11 @@ When a writable directory contains a read-only path, the runner grants read acce
 
 Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback access is bidirectional. Explicit false, active SOCKS5 UDP, and Unix-socket grants fail preflight. The proxy validates allow/deny policy and admits clients by membership in the retained workload Job.
 
-Immutable filesystem limits are applied after workspace, temporary-directory and
-private-storage grants. Narrower grants cannot reopen a denied tree. Mandatory
-domain limits combined with a proxy or enabled network are currently unsupported:
-MXC's bidirectional host-loopback access could provide a route around the proxy.
-Such requests fail preflight. An immutable `allow_local_binding: false` always
-fails preflight, including with restricted networking and no proxy: the backend's
-traffic restrictions have not been verified to prohibit `bind` itself.
-Domain limits on already-disabled networking remain
-dormant and do not enable network access.
+Immutable filesystem limits apply after workspace, temporary-directory and private-storage grants. Narrower grants cannot reopen a denied tree.
+
+With mandatory domain limits, the native PSEC egress rules allow TCP only to the address and port of each dedicated proxy listener. The proxy applies the ordinary destination policy and the launcher's domain limits to each request. A restricted network without a proxy stays restricted. Local servers retain the ordinary host-loopback ingress permission when a proxy is enabled.
+
+Windows rejects a mandatory `allow_local_binding: false` before starting the command. MXC controls inbound and outbound traffic. It has no policy operation for prohibiting socket binding inside the sandbox.
 
 Proxy destination lookups use Windows system DNS. Downloads require no administrator approval, AppContainer profile provisioning, or custom firewall rules; the proxy does not open a separate DNS transport. Destination and resolved-address checks remain in the existing proxy connector.
 

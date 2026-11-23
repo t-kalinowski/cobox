@@ -34,6 +34,15 @@ fn validate_managed_network(network: &ManagedNetworkSandboxContext) -> Result<()
         !network.loopback_ports.contains(&0),
         "MXC proxy ports must be nonzero"
     );
+    if let Some(endpoints) = &network.proxy_only_endpoints {
+        ensure!(
+            !endpoints.is_empty()
+                && endpoints
+                    .iter()
+                    .all(|addr| addr.ip().is_loopback() && addr.port() != 0),
+            "MXC domain limits require concrete loopback proxy endpoints"
+        );
+    }
     ensure!(
         network.allow_local_binding,
         CLIENT_ONLY_LOOPBACK_UNSUPPORTED

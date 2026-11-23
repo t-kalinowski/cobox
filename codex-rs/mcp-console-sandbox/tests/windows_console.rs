@@ -41,10 +41,6 @@ fn unsupported_policy_fails_preflight_without_mxc() -> anyhow::Result<()> {
             "duplicate Windows environment variable",
         ),
         (
-            json!({"limits":{"network":{"domains":{"allow":["*.example.com"]}}}}),
-            "domain limits are unsupported",
-        ),
-        (
             json!({"limits":{"network":{"allow_local_binding":false}}}),
             "allow_local_binding=false",
         ),
