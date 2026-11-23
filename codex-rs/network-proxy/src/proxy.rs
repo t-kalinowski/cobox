@@ -2285,6 +2285,7 @@ mod tests {
                 prepared.sandbox_context,
                 ManagedNetworkSandboxContext {
                     loopback_ports: vec![43128, 48081],
+                    proxy_only_endpoints: None,
                     allow_local_binding: true,
                     allow_unix_sockets: if cfg!(target_os = "windows") {
                         Vec::new()
