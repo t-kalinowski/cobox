@@ -43,7 +43,7 @@ impl Prepared {
 }
 
 pub async fn prepare(
-    request: Bootstrap,
+    mut request: Bootstrap,
     signals: SignalState,
     storage: Option<&Storage>,
     setup_fd: RawFd,
@@ -53,6 +53,12 @@ pub async fn prepare(
         "macos_seatbelt_profile_extension is supported only on macOS"
     );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
+    request.limits.prepare_network(
+        &filesystem,
+        network,
+        &mut request.proxy,
+        request.macos_seatbelt_profile_extension.as_deref(),
+    )?;
     let mut environment = request.environment;
     if let Some(storage) = storage {
         #[cfg(target_os = "macos")]
@@ -82,6 +88,14 @@ pub async fn prepare(
             );
         }
     }
+    let denied_paths = request.limits.apply_filesystem(
+        &mut filesystem,
+        &request.cwd,
+        request.workspace.as_ref().unwrap_or(&request.cwd),
+        storage.map(|storage| storage.root.as_path()),
+    )?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = denied_paths;
     let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network);
     let manager = SandboxManager::default();
     // Managed launches require native init for target setup and retirement,
@@ -106,10 +120,13 @@ pub async fn prepare(
     let proxy = if let Some(config) = request.proxy {
         Some(
             NetworkProxy::builder()
-                .state(Arc::new(NetworkProxyState::from_remote_launch_config(
-                    RemoteNetworkProxyLaunchConfig::new(config),
-                    codex_network_proxy::Platform::native(),
-                )?))
+                .state(Arc::new(
+                    NetworkProxyState::from_remote_launch_config_with_limits(
+                        RemoteNetworkProxyLaunchConfig::new(config),
+                        codex_network_proxy::Platform::native(),
+                        request.limits.network_proxy_limits(),
+                    )?,
+                ))
                 .build()
                 .await?,
         )
@@ -138,6 +155,8 @@ pub async fn prepare(
         environment,
         proxy_environment: proxy_environment.keys().cloned().collect(),
         excluded_environment: request.excluded_environment,
+        #[cfg(target_os = "linux")]
+        deny_local_binding: request.limits.denies_local_binding(),
         command: request.command,
         seatbelt: None,
     };
@@ -196,6 +215,24 @@ pub async fn prepare(
                 .parameters
                 .push(("RUNNER_PRIVATE_ROOT".to_owned(), storage.root.clone()));
             profile.policy.push_str("\n(allow file-write* (subpath (param \"RUNNER_PRIVATE_DATA\")))\n(deny file-write* (literal (param \"RUNNER_PRIVATE_ROOT\")))\n");
+        }
+        // Mandatory denies come after all trusted application/native additions.
+        // Use parameters so literal path bytes never become Scheme source.
+        for (index, path) in denied_paths.iter().enumerate() {
+            let key = format!("RUNNER_LIMIT_DENY_{index}");
+            profile.parameters.push((key.clone(), path.to_path_buf()));
+            profile.policy.push_str(&format!(
+                "\n(deny file-read* file-write* (subpath (param \"{key}\")))\n"
+            ));
+            for (depth, ancestor) in path.as_path().ancestors().enumerate() {
+                let key = format!("RUNNER_LIMIT_ANCESTOR_{index}_{depth}");
+                profile
+                    .parameters
+                    .push((key.clone(), ancestor.to_path_buf()));
+                profile.policy.push_str(&format!(
+                    "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))\n"
+                ));
+            }
         }
         setup.seatbelt = Some(crate::native::Seatbelt {
             policy: profile.policy,

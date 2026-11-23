@@ -6,6 +6,8 @@ mod codex;
 mod config;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod launch;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+mod limits;
 #[cfg(target_os = "linux")]
 mod linux_namespace;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

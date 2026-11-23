@@ -43,6 +43,12 @@ fn spawn_and_wait(arguments: Vec<String>, descriptor: OwnedFd) -> io::Result<i32
     if unsafe { libc::fcntl(channel.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // Native network helpers are already running. Tighten only this launch's
+    // mandatory cap, leaving ordinary managed-network behavior unchanged.
+    if setup.deny_local_binding {
+        codex_linux_sandbox::deny_local_binding_on_current_thread()
+            .map_err(std::io::Error::other)?;
+    }
     let mut command = Command::new(&arguments[0]);
     command.args(&arguments[1..]);
     // Install the target environment only after enforcement and helper setup.

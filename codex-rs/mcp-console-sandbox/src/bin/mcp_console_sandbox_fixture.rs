@@ -1,3 +1,10 @@
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[path = "fixtures/filesystem_limits.rs"]
+mod filesystem_limits;
+#[cfg(target_os = "linux")]
+#[path = "fixtures/local_binding_limits.rs"]
+mod local_binding_limits;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
@@ -35,6 +42,18 @@ fn main() -> anyhow::Result<()> {
     }
     let operation = args.next().context("fixture operation")?;
     match operation.as_str() {
+        "probe-limits" => filesystem_limits::run(args)?,
+        #[cfg(target_os = "linux")]
+        "probe-local-binding-limit" => local_binding_limits::run(args)?,
+        "probe-denied-connect" => {
+            let address = args.next().context("denied address")?.parse()?;
+            println!("started");
+            anyhow::ensure!(
+                TcpStream::connect_timeout(&address, std::time::Duration::from_secs(3)).is_err(),
+                "direct connection bypassed the network policy"
+            );
+            println!("denied");
+        }
         "probe-write" => match std::fs::write(args.next().context("probe path")?, b"escaped") {
             Ok(()) => println!("write allowed"),
             Err(error)

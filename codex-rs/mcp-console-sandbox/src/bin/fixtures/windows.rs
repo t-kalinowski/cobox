@@ -10,6 +10,7 @@ pub(super) fn run() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let operation = args.next().context("fixture operation")?;
     match operation.to_str().context("UTF-8 fixture operation")? {
+        "probe-limits" => crate::filesystem_limits::run(std::env::args().skip(2))?,
         "arguments" => {
             println!(
                 "{}",

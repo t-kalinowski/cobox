@@ -137,6 +137,26 @@ fn set_no_new_privs() -> Result<()> {
     Ok(())
 }
 
+/// Tighten a fully prepared child launch to prohibit explicit local binding.
+/// Apply after native proxy helpers have opened their listening sockets, before
+/// spawning the target. The filter is inherited by all target descendants.
+pub fn deny_local_binding_on_current_thread() -> Result<()> {
+    set_no_new_privs()?;
+    let rules = [
+        libc::SYS_bind,
+        libc::SYS_listen,
+        // Asynchronous networking must not bypass the syscall restrictions.
+        libc::SYS_io_uring_setup,
+        libc::SYS_io_uring_enter,
+        libc::SYS_io_uring_register,
+    ]
+    .into_iter()
+    .map(|syscall| (syscall, Vec::new()))
+    .collect();
+    install_syscall_deny_filter_on_current_thread(rules)?;
+    Ok(())
+}
+
 /// Installs Landlock file-system rules on the current thread allowing read
 /// access to the entire file-system while restricting write access to
 /// `/dev/null` and the provided list of `writable_roots`.
@@ -281,6 +301,12 @@ fn install_network_seccomp_filter_on_current_thread(
         }
     }
 
+    install_syscall_deny_filter_on_current_thread(rules)
+}
+
+fn install_syscall_deny_filter_on_current_thread(
+    rules: BTreeMap<i64, Vec<SeccompRule>>,
+) -> std::result::Result<(), SandboxErr> {
     let filter = SeccompFilter::new(
         rules,
         SeccompAction::Allow,                     // default – allow

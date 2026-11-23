@@ -40,15 +40,32 @@ pub(crate) fn validate(config: &RemoteNetworkProxyConfig) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) async fn start(
     config: RemoteNetworkProxyConfig,
     job: &JobObject,
     environment: &mut HashMap<String, String>,
 ) -> Result<Prepared> {
+    start_with_limits(
+        config,
+        codex_network_proxy::NetworkProxyLimits::default(),
+        job,
+        environment,
+    )
+    .await
+}
+
+pub(crate) async fn start_with_limits(
+    config: RemoteNetworkProxyConfig,
+    limits: codex_network_proxy::NetworkProxyLimits,
+    job: &JobObject,
+    environment: &mut HashMap<String, String>,
+) -> Result<Prepared> {
     validate(&config)?;
-    let mut state = NetworkProxyState::from_remote_launch_config(
+    let mut state = NetworkProxyState::from_remote_launch_config_with_limits(
         RemoteNetworkProxyLaunchConfig::new(config),
         codex_network_proxy::Platform::native(),
+        limits,
     )?;
     let handle = unsafe { BorrowedHandle::borrow_raw(job.as_raw_handle()) };
     state.set_windows_client_job(handle.try_clone_to_owned()?);

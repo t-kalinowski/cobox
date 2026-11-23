@@ -40,6 +40,18 @@ fn unsupported_policy_fails_preflight_without_mxc() -> anyhow::Result<()> {
             json!({"environment":{"CASE_VALUE":"one","case_value":"two"}}),
             "duplicate Windows environment variable",
         ),
+        (
+            json!({"limits":{"network":{"domains":{"allow":["*.example.com"]}}}}),
+            "domain limits are unsupported",
+        ),
+        (
+            json!({"limits":{"network":{"allow_local_binding":false}}}),
+            "allow_local_binding=false",
+        ),
+        (
+            json!({"network":"restricted","limits":{"network":{"allow_local_binding":false}}}),
+            "limits.allow_local_binding=false is unsupported",
+        ),
     ] {
         let mut config = json!({
             "extends":":read-only", "network":"enabled",
@@ -64,6 +76,49 @@ fn unsupported_policy_fails_preflight_without_mxc() -> anyhow::Result<()> {
         let stderr = String::from_utf8(output.stderr)?;
         assert!(stderr.contains(diagnostic), "{overrides}: {stderr}");
         assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn mandatory_denies_clamp_native_windows_grants() -> anyhow::Result<()> {
+    if !mxc_support::available()? {
+        return Ok(());
+    }
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let denied = root.join("private");
+    std::fs::create_dir_all(denied.join("nested"))?;
+    let secret = denied.join("nested/secret");
+    std::fs::write(&secret, "secret")?;
+    for unrestricted in [false, true] {
+        let filesystem = if unrestricted {
+            json!({"kind":"unrestricted"})
+        } else {
+            json!({"kind":"restricted","entries":[
+                {"path":{"type":"special","value":{"kind":"root"}},"access":"read"},
+                {"path":{"type":"path","path":root},"access":"write"},
+                {"path":{"type":"path","path":denied.join("nested")},"access":"write"},
+                {"path":{"type":"special","value":{"kind":"project_roots","subpath":"private/nested"}},"access":"write"}
+            ]})
+        };
+        let config = json!({
+            "filesystem":filesystem,"network":"restricted",
+            "limits":{"filesystem":{"deny":[denied,denied.join("nested")]}}
+        });
+        let output = Command::new(cargo_bin("mcp-console-sandbox")?)
+            .current_dir(&root)
+            .env("CONSOLE_POLICY", config.to_string())
+            .args(["--config-env", "CONSOLE_POLICY", "--"])
+            .arg(cargo_bin("mcp-console-sandbox-fixture")?)
+            .arg("probe-limits")
+            .arg(&secret)
+            .arg(denied.join("nested/new"))
+            .arg(root.join("public"))
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"started\nclamped\n");
+        assert!(!denied.join("nested/new").exists());
     }
     Ok(())
 }

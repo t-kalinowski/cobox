@@ -4,6 +4,7 @@ use crate::config::NetworkProxyConfig;
 use crate::config::ValidatedUnixSocketPath;
 use crate::credential_broker::CredentialBroker;
 use crate::domain_matcher::DomainPatternSet;
+use crate::limits::CompiledNetworkProxyLimits;
 use crate::mitm::MitmState;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHooksByHost;
@@ -266,6 +267,8 @@ impl LocalBindingPolicy {
 
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
+    // Keep host limits outside reloadable state, so policy edits cannot remove them.
+    launch_limits: Option<Arc<CompiledNetworkProxyLimits>>,
     #[cfg(windows)]
     pub(crate) windows_client_job: Option<Arc<std::os::windows::io::OwnedHandle>>,
     /// Belongs to this proxy; config retains omission for launches on other executors.
@@ -308,6 +311,7 @@ impl Clone for NetworkProxyState {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            launch_limits: self.launch_limits.clone(),
             #[cfg(windows)]
             windows_client_job: self.windows_client_job.clone(),
             local_binding_policy: self.local_binding_policy,
@@ -347,6 +351,21 @@ impl NetworkProxyState {
         launch: crate::RemoteNetworkProxyLaunchConfig,
         executor_os: crate::Platform,
     ) -> Result<Self> {
+        Self::from_remote_launch_config_with_limits(
+            launch,
+            executor_os,
+            crate::NetworkProxyLimits::default(),
+        )
+    }
+
+    /// Builds an executor-local proxy whose host-supplied limits survive policy
+    /// edits and approvals. Limits can only narrow the requested permissions.
+    pub fn from_remote_launch_config_with_limits(
+        launch: crate::RemoteNetworkProxyLaunchConfig,
+        executor_os: crate::Platform,
+        limits: crate::NetworkProxyLimits,
+    ) -> Result<Self> {
+        let limits = limits.compile()?;
         let crate::RemoteNetworkProxyLaunchConfig {
             proxy,
             audit_metadata,
@@ -358,9 +377,11 @@ impl NetworkProxyState {
             proxy.enabled,
             "executor-local network proxy launch requires an enabled proxy"
         );
-        let config = proxy.into_network_proxy_config();
+        let mut config = proxy.into_network_proxy_config();
+        limits.apply_to_config(&mut config);
         let state = build_config_state(config, NetworkProxyConstraints::default(), executor_os)?;
         Ok(Self {
+            launch_limits: limits.has_restrictions().then(|| Arc::new(limits)),
             environment_id: environment_id.map(Into::into),
             execution_id: execution_id.map(Into::into),
             ..Self::with_reloader_and_audit_metadata(
@@ -422,6 +443,7 @@ impl NetworkProxyState {
         Self {
             credential_broker,
             state: Arc::new(RwLock::new(state)),
+            launch_limits: None,
             #[cfg(windows)]
             windows_client_job: None,
             local_binding_policy,
@@ -654,20 +676,41 @@ impl NetworkProxyState {
         // `config.toml` (including Codex-managed writes) take effect without a restart.
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
+        let mut config = guard.config.clone();
+        self.apply_launch_limits(&mut config);
         Ok((
-            guard.config.clone(),
+            config,
             guard.brokerage_created_default_allowlist,
             guard.executor_os,
         ))
     }
 
     pub async fn current_patterns(&self) -> Result<(Vec<String>, Vec<String>)> {
-        self.reload_if_needed().await?;
-        let guard = self.state.read().await;
+        let config = self.current_cfg().await?;
         Ok((
-            guard.config.allowed_domains().unwrap_or_default(),
-            guard.config.denied_domains().unwrap_or_default(),
+            config.allowed_domains().unwrap_or_default(),
+            config.denied_domains().unwrap_or_default(),
         ))
+    }
+
+    pub(crate) fn apply_launch_limits(&self, config: &mut NetworkProxyConfig) {
+        if let Some(limits) = &self.launch_limits {
+            limits.apply_to_config(config);
+        }
+    }
+
+    pub(crate) fn ensure_remote_export_supported(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.launch_limits.is_none(),
+            "cannot export executor-local network limits in a remote launch config that does not carry them"
+        );
+        Ok(())
+    }
+
+    fn local_binding_within_limits(&self) -> bool {
+        self.launch_limits
+            .as_ref()
+            .is_none_or(|limits| limits.policy.allow_local_binding != Some(false))
     }
 
     pub async fn enabled(&self) -> Result<bool> {
@@ -770,13 +813,26 @@ impl NetworkProxyState {
                 // Keep explicit controller restrictions even if the executor launched with true.
                 allow_local_binding
                     .unwrap_or_else(|| self.local_binding_policy.resolve(&guard.config))
-                    && guard.config.allow_local_binding != Some(false),
+                    && guard.config.allow_local_binding != Some(false)
+                    && self.local_binding_within_limits(),
                 allowed_domains,
             )
         };
         let allowed_domains = allowed_domains.unwrap_or_default();
 
         let host_str = host.as_str();
+
+        // Host limits apply before DNS or approval callbacks. A blocked cap is
+        // an explicit denial, so an approval cannot turn it into an allow.
+        if let Some(limits) = &self.launch_limits
+            && (domains_match_host_or_unscoped(&limits.denied_domains, host_str)
+                || limits
+                    .allowed_domains
+                    .as_ref()
+                    .is_some_and(|allowed| !domains_match_host_or_unscoped(allowed, host_str)))
+        {
+            return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
+        }
 
         // Decision order matters:
         //  1) explicit deny always wins
@@ -945,13 +1001,17 @@ impl NetworkProxyState {
     pub async fn allow_upstream_proxy(&self) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(guard.config.allow_upstream_proxy)
+        Ok(guard.config.allow_upstream_proxy
+            && self
+                .launch_limits
+                .as_ref()
+                .is_none_or(|limits| !limits.has_domain_limits()))
     }
 
     pub async fn allow_local_binding(&self) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(self.local_binding_policy.resolve(&guard.config))
+        Ok(self.local_binding_policy.resolve(&guard.config) && self.local_binding_within_limits())
     }
 
     pub async fn network_mode(&self) -> Result<NetworkMode> {
@@ -2452,3 +2512,7 @@ mod tests {
 #[cfg(test)]
 #[path = "host_policy_tests.rs"]
 mod host_policy_tests;
+
+#[cfg(test)]
+#[path = "limits_tests.rs"]
+mod limits_tests;

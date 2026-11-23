@@ -937,6 +937,7 @@ impl NetworkProxy {
         &self,
         local_binding_policy: crate::LocalBindingPolicy,
     ) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
+        self.state.ensure_remote_export_supported()?;
         let (mut config, brokerage_created_default_allowlist, _) =
             self.state.current_cfg_with_brokerage_provenance().await?;
         // Proxy enablement and credential brokerage remain controller-owned.
@@ -1565,10 +1566,11 @@ impl NetworkProxy {
             new_state.config.enable_socks5_udp == current_cfg.enable_socks5_udp,
             "cannot update network.enable_socks5_udp on a running proxy"
         );
-        let config = self
+        let mut config = self
             .state
             .local_binding_policy
             .resolved_config(&new_state.config);
+        self.state.apply_launch_limits(&mut config);
         let settings = NetworkProxyRuntimeSettings::from_config(&config)?;
         self.state.replace_config_state(new_state).await?;
         let mut guard = self

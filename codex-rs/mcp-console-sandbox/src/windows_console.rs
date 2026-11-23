@@ -60,6 +60,12 @@ pub(crate) fn run() -> Result<i32> {
         "cleanup_timeout_ms is not configurable on Windows"
     );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
+    request.limits.prepare_network(
+        &filesystem,
+        network,
+        &mut request.proxy,
+        request.macos_seatbelt_profile_extension.as_deref(),
+    )?;
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
@@ -117,6 +123,12 @@ pub(crate) fn run() -> Result<i32> {
         })
         .transpose()?;
     crate::windows_target::materialize_tmpdir(&mut filesystem, &request.environment)?;
+    request.limits.apply_filesystem(
+        &mut filesystem,
+        &request.cwd,
+        &workspace,
+        storage.as_ref().map(|storage| storage.path()),
+    )?;
     let profile = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));
     let job = Arc::new(codex_utils_pty::JobObject::create_without_breakaway()?);
@@ -126,9 +138,15 @@ pub(crate) fn run() -> Result<i32> {
         .build()?
         .block_on(async {
             let proxy = match request.proxy {
-                Some(config) => {
-                    Some(crate::windows_proxy::start(config, &job, &mut request.environment).await?)
-                }
+                Some(config) => Some(
+                    crate::windows_proxy::start_with_limits(
+                        config,
+                        request.limits.network_proxy_limits(),
+                        &job,
+                        &mut request.environment,
+                    )
+                    .await?,
+                ),
                 None => None,
             };
             let executable = std::env::current_exe()?;

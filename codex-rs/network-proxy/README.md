@@ -11,6 +11,31 @@ the proxy preserves its existing ephemeral loopback fallback.
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
 
+## Executor-provided limits
+
+Embedding hosts can call `NetworkProxyState::from_remote_launch_config_with_limits`
+with a `NetworkProxyLimits` value. These limits restrict the ordinary proxy policy:
+
+- `allowed_domains: None` adds no restriction; `Some([])` blocks every domain.
+- With an allowlist cap, a destination must match both the ordinary allowlist and
+  the cap. Both use the existing domain pattern syntax, including `*` and `?`.
+- An immutable deny blocks the destination even if an ordinary rule or approval
+  permits it.
+- Domain limits disable upstream proxies, whose own endpoints are outside the
+  destination matcher. Configuration updates cannot re-enable them.
+- `allow_local_binding: Some(false)` preserves an effective false; true does not
+  enable binding when the ordinary policy forbids it.
+
+Limits remain attached to the proxy when its ordinary configuration changes. They
+are checked before DNS lookup and approval callbacks. Call `validate()` when the
+requested sandbox has networking disabled so invalid limits still fail at setup.
+The existing constructor behaves as before when no limits are supplied.
+
+The embedding host must route sandbox traffic through the proxy and enforce the
+resulting local-binding setting. Limits do not enable networking on their own.
+A proxy with limits cannot be exported through `remote_launch_config`: that
+carrier has no field for these limits, and exporting would lose the restriction.
+
 ## Quickstart
 
 ### 1) Configure
