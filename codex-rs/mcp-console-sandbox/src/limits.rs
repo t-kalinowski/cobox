@@ -86,7 +86,6 @@ impl Limits {
         filesystem: &FileSystemSandboxPolicy,
         network: NetworkSandboxPolicy,
         proxy: &mut Option<RemoteNetworkProxyConfig>,
-        extension: Option<&str>,
     ) -> Result<()> {
         ensure!(
             !self.is_active() || filesystem.kind != FileSystemSandboxKind::ExternalSandbox,
@@ -101,16 +100,8 @@ impl Limits {
             !cfg!(windows) || self.network.allow_local_binding != Some(false),
             "limits.allow_local_binding=false is unsupported by the Windows MXC backend: bind prohibition is not verified"
         );
-        ensure!(
-            extension.is_none_or(|extension| extension.trim().is_empty()),
-            "network limits cannot be combined with a macOS Seatbelt extension"
-        );
-        // Linux can deny binding directly after helper setup. A binding-only
-        // ceiling therefore does not need to route ordinary outbound traffic.
-        if proxy.is_none()
-            && network.is_enabled()
-            && (self.has_domain_limits() || !cfg!(target_os = "linux"))
-        {
+        // Unix applies a binding-only limit in the native target policy.
+        if proxy.is_none() && network.is_enabled() && self.has_domain_limits() {
             let mut config = NetworkProxyConfig {
                 enabled: true,
                 enable_socks5_udp: false,
@@ -141,13 +132,35 @@ impl Limits {
                     !cfg!(windows),
                     "domain limits are unsupported by the Windows MXC backend: host-loopback access is bidirectional"
                 );
-                ensure!(
-                    !cfg!(target_os = "macos") || !proxy.allow_local_binding,
-                    "domain limits require allow_local_binding=false on macOS"
-                );
             }
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn append_seatbelt_network_limits(
+        &self,
+        policy: &mut String,
+        managed_network: Option<&codex_network_proxy::ManagedNetworkSandboxContext>,
+    ) {
+        if self.network.allow_local_binding == Some(false) {
+            policy.push_str("\n(deny network-bind network-inbound)\n");
+        }
+        if self.has_domain_limits() {
+            // The ordinary profile already permits the proxy. Deny outbound
+            // everywhere else after application extensions, including when
+            // ordinary local binding permits other loopback connections.
+            let ports = managed_network.map_or(&[][..], |context| &context.loopback_ports);
+            if ports.is_empty() {
+                policy.push_str("\n(deny network-outbound)\n");
+            } else {
+                policy.push_str("\n(deny network-outbound (require-not (require-any");
+                for port in ports {
+                    policy.push_str(&format!(" (remote ip \"localhost:{port}\")"));
+                }
+                policy.push_str(")))\n");
+            }
+        }
     }
 
     /// Clamp concrete and symbolic grants, retaining broad grants with denied

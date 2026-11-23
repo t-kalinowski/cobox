@@ -163,6 +163,10 @@ fn domain_limits_keep_enabled_network_behind_the_proxy() {
         let mut value = fixture("proxy-get", &[&url]);
         value["network"] = json!("enabled");
         value["limits"] = json!({"network":{"domains":domains,"allow_local_binding":false}});
+        #[cfg(target_os = "macos")]
+        {
+            value["macos_seatbelt_profile_extension"] = json!("(allow network*)");
+        }
         let output = run(frame(&value), &[]);
         assert!(output.status.success(), "{output:?}");
         assert!(output.stdout.starts_with(b"HTTP/1.1 403"), "{output:?}");
@@ -173,6 +177,10 @@ fn domain_limits_keep_enabled_network_behind_the_proxy() {
 fn domain_limits_do_not_enable_a_restricted_network() {
     let mut value = fixture("context", &[]);
     value["limits"] = json!({"network":{"domains":{"allow":["*.example.com"]}}});
+    #[cfg(target_os = "macos")]
+    {
+        value["macos_seatbelt_profile_extension"] = json!("(allow network*)");
+    }
     let output = run(frame(&value), &[]);
     assert!(output.status.success(), "{output:?}");
     let context: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -180,9 +188,20 @@ fn domain_limits_do_not_enable_a_restricted_network() {
         context["environment"].get("HTTP_PROXY").is_none(),
         "{context}"
     );
+    #[cfg(target_os = "macos")]
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        value["command"] = fixture(
+            "probe-denied-connect",
+            &[&listener.local_addr().unwrap().to_string()],
+        )["command"]
+            .clone();
+        let output = run(frame(&value), &[]);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"started\ndenied\n");
+    }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn mandatory_local_binding_denial_preserves_outbound_connections() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -194,6 +213,10 @@ fn mandatory_local_binding_denial_preserves_outbound_connections() {
             &[if denied { "denied" } else { "allowed" }, &address],
         );
         value["network"] = json!("enabled");
+        #[cfg(target_os = "macos")]
+        {
+            value["macos_seatbelt_profile_extension"] = json!("(allow network*)");
+        }
         if let Some(limit) = limit {
             value["limits"] = json!({"network":{"allow_local_binding":limit}});
         }
@@ -210,19 +233,56 @@ fn mandatory_local_binding_denial_preserves_outbound_connections() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn domain_limits_block_direct_host_loopback_with_local_binding_allowed() {
-    let listener = TcpListener::bind("127.0.0.2:0").unwrap();
+    // On Linux a separate host address distinguishes the destination from
+    // listeners in the target's network namespace.
+    let host = if cfg!(target_os = "linux") {
+        "127.0.0.2"
+    } else {
+        "127.0.0.1"
+    };
+    let listener = TcpListener::bind((host, 0)).unwrap();
     let mut value = fixture(
         "probe-denied-connect",
         &[&listener.local_addr().unwrap().to_string()],
     );
     value["network"] = json!("enabled");
-    value["limits"] = json!({"network":{"domains":{"deny":["127.0.0.2"]}}});
+    value["limits"] = json!({"network":{"domains":{"deny":[host]}}});
+    #[cfg(target_os = "macos")]
+    {
+        value["macos_seatbelt_profile_extension"] = json!("(allow network*)");
+    }
     let output = run(frame(&value), &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"started\ndenied\n");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn domain_limits_allow_matching_proxy_requests_and_local_binding() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let response = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0; 2048];
+        assert!(stream.read(&mut buf).unwrap() > 0);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nallowed")
+            .unwrap();
+    });
+    let mut value = fixture("proxy-get", &[&format!("http://{address}/")]);
+    value["network"] = json!("enabled");
+    value["limits"] = json!({"network":{"domains":{"allow":["127.0.0.1"]}}});
+    value["macos_seatbelt_profile_extension"] = json!("(allow network*)");
+    let output = run(frame(&value), &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.ends_with(b"allowed"), "{output:?}");
+    response.join().unwrap();
+    value["command"] = fixture("bind-loopback", &[])["command"].clone();
+    let output = run(frame(&value), &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"bound\n");
 }
 
 #[cfg(target_os = "macos")]

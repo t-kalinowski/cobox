@@ -3,6 +3,7 @@ use anyhow::Result;
 use anyhow::ensure;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::net::UdpSocket;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
@@ -13,13 +14,19 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let address = args.next().context("outbound address")?.parse()?;
     println!("started");
     let bound = TcpListener::bind("127.0.0.1:0");
+    let datagram = UdpSocket::bind("127.0.0.1:0");
     if denied {
         ensure!(
             bound.err().and_then(|error| error.raw_os_error()) == Some(libc::EPERM),
             "mandatory bind denial was not enforced"
         );
+        ensure!(
+            datagram.err().and_then(|error| error.raw_os_error()) == Some(libc::EPERM),
+            "mandatory datagram bind denial was not enforced"
+        );
     } else {
         bound.context("ordinary local binding")?;
+        datagram.context("ordinary datagram binding")?;
     }
     // listen() can implicitly bind an otherwise unbound IP socket. Check that
     // route separately, while connect() must still get an ephemeral local port.

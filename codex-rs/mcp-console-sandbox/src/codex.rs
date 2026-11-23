@@ -53,12 +53,9 @@ pub async fn prepare(
         "macos_seatbelt_profile_extension is supported only on macOS"
     );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
-    request.limits.prepare_network(
-        &filesystem,
-        network,
-        &mut request.proxy,
-        request.macos_seatbelt_profile_extension.as_deref(),
-    )?;
+    request
+        .limits
+        .prepare_network(&filesystem, network, &mut request.proxy)?;
     let mut environment = request.environment;
     if let Some(storage) = storage {
         #[cfg(target_os = "macos")]
@@ -197,6 +194,9 @@ pub async fn prepare(
             profile.policy.push('\n');
             profile.policy.push_str(&extension);
         }
+        request
+            .limits
+            .append_seatbelt_network_limits(&mut profile.policy, managed_network.as_ref());
         // KERN_PROCARGS2 can expose the host's launch environment despite
         // deny-default and the ordinary same-sandbox process-info allowance.
         // Explicitly deny outside-sandbox reads while retaining peer queries.

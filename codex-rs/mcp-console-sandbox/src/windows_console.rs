@@ -60,12 +60,9 @@ pub(crate) fn run() -> Result<i32> {
         "cleanup_timeout_ms is not configurable on Windows"
     );
     let (mut filesystem, network) = crate::profiles::resolve(&request)?;
-    request.limits.prepare_network(
-        &filesystem,
-        network,
-        &mut request.proxy,
-        request.macos_seatbelt_profile_extension.as_deref(),
-    )?;
+    request
+        .limits
+        .prepare_network(&filesystem, network, &mut request.proxy)?;
     let workspace = request.workspace.as_ref().unwrap_or(&request.cwd).clone();
     let permissions = PermissionProfile::from_runtime_permissions(&filesystem, network)
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&workspace));

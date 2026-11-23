@@ -91,15 +91,15 @@ On Linux, a binding-only limit preserves ordinary outbound networking and denies
 through `listen`. It also denies the `io_uring` syscalls that could bypass those
 checks. Ordinary outbound connections may still receive an ephemeral local port.
 Existing proxy routing is retained when a binding limit is applied.
+On macOS, a binding-only limit preserves ordinary outbound networking. Final Seatbelt rules prohibit binding and accepting connections after any application extension. With domain limits, the target can connect only to the managed proxy's prepared ports. Ordinary local binding can remain enabled independently of outbound routing.
 The immutable caps survive any ordinary proxy policy update. Domain limits
 disable upstream proxy hops, which otherwise have an exemption from ordinary
 destination checks; they do not silently trust an arbitrary relay endpoint.
 
 Unsupported combinations fail before the target starts. Active limits cannot
 use `external-sandbox`. Filesystem denies cannot be combined with readable
-`:minimal` grants, whose platform defaults are generated later. Network limits
-cannot be combined with a nonempty macOS Seatbelt extension. Domain limits reject
-host Unix-socket proxy grants and require `allow_local_binding: false` on macOS.
+`:minimal` grants, whose platform defaults are generated later. Domain limits reject
+host Unix-socket proxy grants.
 Windows MXC cannot currently enforce domain caps: its proxy requires bidirectional
 host-loopback access. An immutable `allow_local_binding: false` is unsupported on
 Windows even without a proxy: native traffic denial has not been verified to

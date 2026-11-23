@@ -1,7 +1,7 @@
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[path = "fixtures/filesystem_limits.rs"]
 mod filesystem_limits;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "fixtures/local_binding_limits.rs"]
 mod local_binding_limits;
 
@@ -43,7 +43,6 @@ fn main() -> anyhow::Result<()> {
     let operation = args.next().context("fixture operation")?;
     match operation.as_str() {
         "probe-limits" => filesystem_limits::run(args)?,
-        #[cfg(target_os = "linux")]
         "probe-local-binding-limit" => local_binding_limits::run(args)?,
         "probe-denied-connect" => {
             let address = args.next().context("denied address")?.parse()?;
@@ -277,6 +276,11 @@ fn main() -> anyhow::Result<()> {
         }
         "connect" => {
             TcpStream::connect(args.next().context("address")?)?;
+        }
+        #[cfg(target_os = "macos")]
+        "bind-loopback" => {
+            std::net::TcpListener::bind("127.0.0.1:0")?;
+            println!("bound");
         }
         "proxy-get" => {
             let url = args.next().context("URL")?;

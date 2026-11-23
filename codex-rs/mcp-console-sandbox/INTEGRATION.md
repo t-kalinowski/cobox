@@ -8,7 +8,8 @@ The optional immutable `limits` payload is applied in `limits.rs` after profile
 and runner-owned filesystem grants. It clamps access rather than rejecting
 ordinary overlaps. Linux's native target gate applies a final seccomp bind/listen
 restriction only for a mandatory false local-binding cap, after proxy helper
-setup; ordinary launches do not change. `network-proxy/src/limits.rs` retains independent immutable
+setup. On macOS the runner appends network limits to the Seatbelt profile after application extensions. Domain limits use the proxy endpoints prepared for this launch. A binding-only limit preserves direct outbound networking.
+`network-proxy/src/limits.rs` retains independent immutable
 allow/deny matchers, and the remote-launch constructor accepts those caps without
 changing `RemoteNetworkProxyConfig`. Native platform combinations that cannot
 enforce a ceiling fail before launch; see [the protocol](PROTOCOL.md#immutable-limits).
