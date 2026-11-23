@@ -259,7 +259,12 @@ impl Limits {
                 } if !cfg!(unix) || !Path::new("/tmp").is_dir() => continue,
                 FileSystemPath::GlobPattern { .. }
                 | FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. },
+                    // The native backend expands Root to every Windows volume.
+                    // Resolving it against cwd would select only the current drive.
+                    value:
+                        FileSystemSpecialPath::Root
+                        | FileSystemSpecialPath::Minimal
+                        | FileSystemSpecialPath::Unknown { .. },
                 } => {
                     entries.push(entry);
                     continue;
@@ -287,14 +292,7 @@ impl Limits {
                     grant_aliases.push((path.clone(), resolved.clone()));
                 }
                 let mut concrete = entry.clone();
-                if !matches!(
-                    &entry.path,
-                    FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root
-                    }
-                ) {
-                    concrete.path = path.into();
-                }
+                concrete.path = path.into();
                 concrete.access = access;
                 entries.push(concrete);
             }
