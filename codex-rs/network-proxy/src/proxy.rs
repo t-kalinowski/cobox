@@ -1154,6 +1154,13 @@ impl NetworkProxy {
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
+        let proxy_only = self.state.has_mandatory_domain_limits();
+        if proxy_only {
+            // Local servers may still bind, but clients must bring even local
+            // destinations through the proxy for the launcher's domain check.
+            set_env_keys(&mut env, NO_PROXY_ENV_KEYS, "");
+            env.remove("YARN_NO_PROXY");
+        }
         let credential_environment_id = environment_id.or_else(|| {
             self.execution_scope
                 .as_ref()
@@ -1201,10 +1208,7 @@ impl NetworkProxy {
             env,
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
-                proxy_only_endpoints: self
-                    .state
-                    .has_mandatory_domain_limits()
-                    .then(|| listeners.into_iter().flatten().collect()),
+                proxy_only_endpoints: proxy_only.then(|| listeners.into_iter().flatten().collect()),
                 allow_local_binding: runtime_settings.allow_local_binding,
                 allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
                 dangerously_allow_all_unix_sockets: runtime_settings

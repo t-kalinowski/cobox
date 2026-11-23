@@ -70,12 +70,19 @@ async fn launch_limits_capture_the_dedicated_proxy_endpoints() -> Result<()> {
         .managed_proxy_routing(crate::ManagedProxyRouting::DedicatedListeners)
         .build()
         .await?;
-    let prepared =
-        proxy.prepare_for_optional_environment(Default::default(), /*environment_id*/ None)?;
+    let prepared = proxy.prepare_for_optional_environment(
+        HashMap::from([("YARN_NO_PROXY".to_string(), "*".to_string())]),
+        /*environment_id*/ None,
+    )?;
     assert_eq!(
         prepared.sandbox_context.proxy_only_endpoints,
         Some(vec![proxy.http_addr(), proxy.socks_addr()])
     );
+    assert!(prepared.sandbox_context.allow_local_binding);
+    for name in crate::NO_PROXY_ENV_KEYS {
+        assert_eq!(prepared.env[*name], "", "{name}");
+    }
+    assert!(!prepared.env.contains_key("YARN_NO_PROXY"));
     Ok(())
 }
 

@@ -326,14 +326,16 @@ fn mandatory_domain_limits_route_enabled_network_through_dedicated_proxy() -> Re
         "limits": {"network": {"domains": {"allow": ["127.0.0.1"]}}}
     });
     let output = console(policy.clone())?
-        .arg(format!("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy localhost --proxy %HTTP_PROXY% http://{address}/"))
+        .arg(format!(
+            "curl.exe --disable --silent --show-error --fail --max-time 5 http://{address}/"
+        ))
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(output.stdout, b"OK");
     origin.join().expect("origin thread")?;
 
     let denied = console(policy.clone())?
-        .arg("curl.exe --disable --silent --show-error --fail --max-time 5 --noproxy localhost --proxy %HTTP_PROXY% http://denied.invalid/")
+        .arg("curl.exe --disable --silent --show-error --fail --max-time 5 http://denied.invalid/")
         .output()?;
     assert_eq!(denied.status.code(), Some(22), "{denied:?}");
     assert!(String::from_utf8(denied.stderr)?.contains("403"));
