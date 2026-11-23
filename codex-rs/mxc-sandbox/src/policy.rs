@@ -31,8 +31,6 @@ use wxc_common::models::NetworkEgressPolicy;
 use wxc_common::models::NetworkIngressPolicy;
 use wxc_common::models::NetworkPeer;
 use wxc_common::models::NetworkPolicy;
-use wxc_common::models::NetworkPort;
-use wxc_common::models::NetworkProtocol;
 use wxc_common::models::NetworkRule;
 use wxc_common::models::UiPolicy;
 
@@ -268,30 +266,7 @@ pub(super) fn build_request(
         default: egress_default,
         ..Default::default()
     };
-    if let Some(endpoints) = command
-        .managed_network
-        .as_ref()
-        .and_then(|context| context.proxy_only_endpoints.as_deref())
-    {
-        // The listener binds before policy creation and stays owned by the runner
-        // until workload retirement. No other local port needs an egress grant.
-        egress
-            .allow
-            .extend(endpoints.iter().map(|endpoint| NetworkRule {
-                to: vec![NetworkPeer {
-                    cidr: NetworkCidr {
-                        address: endpoint.ip(),
-                        prefix_length: if endpoint.is_ipv4() { 32 } else { 128 },
-                    },
-                    except: Vec::new(),
-                }],
-                ports: vec![NetworkPort {
-                    protocol: NetworkProtocol::Tcp,
-                    port: Some(endpoint.port()),
-                    end_port: None,
-                }],
-            }));
-    } else if proxied {
+    if proxied {
         // PSEC host loopback is bidirectional. This shape is supported only
         // when the caller already allows local clients and servers. Keep
         // private-network ingress denied and allow no direct DNS bypass.

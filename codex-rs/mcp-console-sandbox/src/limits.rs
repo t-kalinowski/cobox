@@ -100,6 +100,12 @@ impl Limits {
             !cfg!(windows) || self.network.allow_local_binding != Some(false),
             "limits.allow_local_binding=false is unsupported by the Windows MXC backend: MXC controls traffic and cannot prohibit socket binding"
         );
+        ensure!(
+            !cfg!(windows)
+                || !self.has_domain_limits()
+                || (proxy.is_none() && !network.is_enabled()),
+            "selective domain limits are unsupported by Windows MXC with an enabled network or managed proxy"
+        );
         // Unix applies a binding-only limit in the native target policy.
         if proxy.is_none() && network.is_enabled() && self.has_domain_limits() {
             let mut config = NetworkProxyConfig {

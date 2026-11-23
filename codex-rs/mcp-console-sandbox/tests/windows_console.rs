@@ -45,6 +45,10 @@ fn unsupported_policy_fails_preflight_without_mxc() -> anyhow::Result<()> {
             "allow_local_binding=false",
         ),
         (
+            json!({"limits":{"network":{"domains":{"allow":["example.com"]}}}}),
+            "selective domain limits are unsupported by Windows MXC",
+        ),
+        (
             json!({"network":"restricted","limits":{"network":{"allow_local_binding":false}}}),
             "limits.allow_local_binding=false is unsupported",
         ),

@@ -38,7 +38,7 @@ Managed TCP proxies require `allowLocalBinding: true`, because MXC host-loopback
 
 Immutable filesystem limits apply after workspace, temporary-directory and private-storage grants. Narrower grants cannot reopen a denied tree.
 
-With mandatory domain limits, the native PSEC egress rules allow TCP only to the address and port of each dedicated proxy listener. The proxy applies the ordinary destination policy and the launcher's domain limits to each request. A restricted network without a proxy stays restricted. Local servers retain the ordinary host-loopback ingress permission when a proxy is enabled.
+Windows rejects selective domain limits on enabled or managed-proxy networks before launching the command. The native host-loopback grant needed by the proxy permits connections to unrelated host listeners. A restricted network without a proxy can carry dormant domain limits.
 
 Windows rejects a mandatory `allow_local_binding: false` before starting the command. MXC controls inbound and outbound traffic. It has no policy operation for prohibiting socket binding inside the sandbox.
 
