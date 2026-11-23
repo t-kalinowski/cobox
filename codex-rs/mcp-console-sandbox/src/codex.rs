@@ -196,7 +196,7 @@ pub async fn prepare(
         }
         request
             .limits
-            .append_seatbelt_network_limits(&mut profile.policy, managed_network.as_ref());
+            .append_seatbelt_network_limits(&mut profile.policy, managed_network.as_ref())?;
         // KERN_PROCARGS2 can expose the host's launch environment despite
         // deny-default and the ordinary same-sandbox process-info allowance.
         // Explicitly deny outside-sandbox reads while retaining peer queries.

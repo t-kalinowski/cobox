@@ -138,7 +138,11 @@ impl Limits {
         &self,
         policy: &mut String,
         managed_network: Option<&codex_network_proxy::ManagedNetworkSandboxContext>,
-    ) {
+    ) -> Result<()> {
+        use std::net::IpAddr;
+        use std::net::Ipv4Addr;
+        use std::net::Ipv6Addr;
+
         if self.network.allow_local_binding == Some(false) {
             policy.push_str("\n(deny network-bind network-inbound)\n");
         }
@@ -146,17 +150,34 @@ impl Limits {
             // The ordinary profile already permits the proxy. Deny outbound
             // everywhere else after application extensions, including when
             // ordinary local binding permits other loopback connections.
-            let ports = managed_network.map_or(&[][..], |context| &context.loopback_ports);
-            if ports.is_empty() {
+            let endpoints = match managed_network {
+                Some(context) => context
+                    .proxy_only_endpoints
+                    .as_deref()
+                    .context("domain limits require prepared proxy listener addresses")?,
+                None => &[],
+            };
+            if endpoints.is_empty() {
                 policy.push_str("\n(deny network-outbound)\n");
             } else {
                 policy.push_str("\n(deny network-outbound (require-not (require-any");
-                for port in ports {
-                    policy.push_str(&format!(" (remote ip \"localhost:{port}\")"));
+                for endpoint in endpoints {
+                    // Seatbelt accepts only "*" and "localhost" here. Select
+                    // the TCP family so the rule matches the owned listener.
+                    let family = match endpoint.ip() {
+                        IpAddr::V4(Ipv4Addr::LOCALHOST) => "tcp4",
+                        IpAddr::V6(Ipv6Addr::LOCALHOST) => "tcp6",
+                        _ => anyhow::bail!("Seatbelt cannot represent proxy listener {endpoint}"),
+                    };
+                    policy.push_str(&format!(
+                        " (remote {family} \"localhost:{}\")",
+                        endpoint.port()
+                    ));
                 }
                 policy.push_str(")))\n");
             }
         }
+        Ok(())
     }
 
     /// Clamp concrete and symbolic grants, retaining broad grants with denied

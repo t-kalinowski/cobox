@@ -279,10 +279,10 @@ fn domain_limits_allow_matching_proxy_requests_and_local_binding() {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.ends_with(b"allowed"), "{output:?}");
     response.join().unwrap();
-    value["command"] = fixture("bind-loopback", &[])["command"].clone();
+    value["command"] = fixture("proxy-listener-transport", &[])["command"].clone();
     let output = run(frame(&value), &[]);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"bound\n");
+    assert_eq!(output.stdout, b"bound\nproxy TCP endpoint only\n");
 }
 
 #[cfg(target_os = "macos")]
