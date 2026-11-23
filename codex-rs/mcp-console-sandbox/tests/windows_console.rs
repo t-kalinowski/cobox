@@ -91,6 +91,13 @@ fn mandatory_denies_clamp_native_windows_grants() -> anyhow::Result<()> {
     std::fs::create_dir_all(denied.join("nested"))?;
     let secret = denied.join("nested/secret");
     std::fs::write(&secret, "secret")?;
+    let junction = Command::new("cmd.exe")
+        .current_dir(directory.path())
+        .args(["/d", "/c", "mklink", "/J", "private-link", "private"])
+        .output()?;
+    anyhow::ensure!(junction.status.success(), "create junction: {junction:?}");
+    let alias = root.join("private-link");
+    assert_eq!(std::fs::read(alias.join("nested/secret"))?, b"secret");
     for unrestricted in [false, true] {
         let filesystem = if unrestricted {
             json!({"kind":"unrestricted"})
@@ -99,12 +106,13 @@ fn mandatory_denies_clamp_native_windows_grants() -> anyhow::Result<()> {
                 {"path":{"type":"special","value":{"kind":"root"}},"access":"read"},
                 {"path":{"type":"path","path":root},"access":"write"},
                 {"path":{"type":"path","path":denied.join("nested")},"access":"write"},
+                {"path":{"type":"path","path":alias.join("nested")},"access":"write"},
                 {"path":{"type":"special","value":{"kind":"project_roots","subpath":"private/nested"}},"access":"write"}
             ]})
         };
         let config = json!({
             "filesystem":filesystem,"network":"restricted",
-            "limits":{"filesystem":{"deny":[denied,denied.join("nested")]}}
+            "limits":{"filesystem":{"deny":[root.join("PRIVATE-LINK")]}}
         });
         let output = Command::new(cargo_bin("mcp-console-sandbox")?)
             .current_dir(&root)
@@ -113,11 +121,12 @@ fn mandatory_denies_clamp_native_windows_grants() -> anyhow::Result<()> {
             .arg(cargo_bin("mcp-console-sandbox-fixture")?)
             .arg("probe-limits")
             .arg(&secret)
-            .arg(denied.join("nested/new"))
+            .arg(alias.join("nested/new"))
             .arg(root.join("public"))
             .output()?;
         assert!(output.status.success(), "{output:?}");
         assert_eq!(output.stdout, b"started\nclamped\n");
+        assert_eq!(std::fs::read_to_string(root.join("public"))?, "allowed");
         assert!(!denied.join("nested/new").exists());
     }
     Ok(())
